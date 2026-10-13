@@ -52,6 +52,22 @@ not have to know your shower temperature at all.
 | + **flow filled in yourself** (e.g. 7.2 L/min — fill a 10 L bucket and time it) | calculated | from your value |
 | **Set it myself** | your fixed value | estimated |
 
+### Measuring your shower-head flow (one minute, one bucket)
+
+1. Turn the shower on the way you normally shower — same temperature, same tap position.
+2. Hold a bucket under the shower head and time how many seconds it takes to collect **10 litres**.
+3. Flow in L/min = **600 ÷ seconds**.
+
+| Seconds for 10 L | Flow |
+| --- | --- |
+| 50 s | 12 L/min (rain shower) |
+| 75 s | 8 L/min (normal) |
+| 100 s | 6 L/min (water-saving) |
+
+No bucket with litre marks? Catch the water for exactly 10 seconds, measure it with a measuring jug and multiply
+by 6. Measure twice and use the average. Then enter it under *Settings → Devices & services → Hot Water Shower
+Time → Configure → Shower-head flow: Fill in myself*.
+
 With a known flow you get an extra `sensor.<name>_shower_temperature` ("you shower at ≈ 39.4 °C"). Expect about
 ±1–2 °C at first; it sharpens as the model learns. A water meter in L/min or a cumulative meter in litres or m³
 both work; the median over many showers keeps a toilet flush during a shower from disturbing it.
@@ -121,6 +137,10 @@ mode: single
 ```
 
 ## Nederlands
+
+Debiet van je douchekop meten: zet de douche aan zoals je normaal doucht, houd een emmer eronder en kijk hoeveel
+seconden het duurt tot er 10 liter in zit. Debiet = 600 ÷ seconden (75 s = 8 L/min). Geen maatemmer? Vang 10
+seconden op, meet met een maatbeker en doe × 6.
 
 Hoe lang kan ik nog douchen? Deze integratie rekent de temperatuursensoren van je boiler om naar minuten
 douchen en leert elke nacht van jullie eigen douches: het debiet, hoe de boiler gelaagd is, de
