@@ -102,7 +102,7 @@ class MinutesSensor(ShowerTimeEntity, SensorEntity):
 
 
 class ShowersSensor(ShowerTimeEntity, SensorEntity):
-    _attr_state_class = SensorStateClass.MEASUREMENT
+    # no state class: the shower minutes already have statistics; this is the same in whole showers
     _attr_icon = "mdi:shower"
 
     def __init__(self, manager) -> None:
@@ -125,9 +125,9 @@ class LitresSensor(ShowerTimeEntity, SensorEntity):
         super().__init__(manager, "hot_water")
 
     @property
-    def native_value(self):
+    def native_value(self):                    # in steps of 10 L: finer than the estimate is not meaningful
         e = self.manager.current
-        return round(e.liters) if e else None
+        return int(round(e.liters, -1)) if e else None
 
 
 class FillSensor(ShowerTimeEntity, SensorEntity):
@@ -236,7 +236,7 @@ class _LogSensor(ShowerTimeEntity, SensorEntity):
 
 
 class ShowersTodaySensor(_LogSensor):
-    _attr_state_class = SensorStateClass.MEASUREMENT
+    # no state class: the long run is in "Showers total"
     _attr_icon = "mdi:counter"
 
     def __init__(self, manager) -> None:
@@ -250,7 +250,6 @@ class ShowersTodaySensor(_LogSensor):
 class ShowerTimeTodaySensor(_LogSensor):
     _attr_device_class = SensorDeviceClass.DURATION
     _attr_native_unit_of_measurement = UnitOfTime.MINUTES
-    _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_icon = "mdi:timer-outline"
 
     def __init__(self, manager) -> None:
@@ -264,7 +263,6 @@ class ShowerTimeTodaySensor(_LogSensor):
 class ShowerTimeWeekSensor(_LogSensor):
     _attr_device_class = SensorDeviceClass.DURATION
     _attr_native_unit_of_measurement = UnitOfTime.MINUTES
-    _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_icon = "mdi:calendar-week"
 
     def __init__(self, manager) -> None:

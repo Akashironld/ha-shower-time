@@ -162,6 +162,9 @@ COIL_BOTTOM_ABOVE_COLD = 15.0
 BATH_SIGNAL_MINUTES = 10      # a bathroom signal this long before or during the use counts
 HUMIDITY_RISE = 3.0           # %RH above the lowest value of the last 15 minutes
 POWER_RISE = 1.0              # W above the usual (median) power of the last day, and at least 30 % more
+FALL_START = 0.3              # K/min the tank must fall between two readings to start a use ...
+FALL_START_BATH = 0.15        # ... or this much when the bathroom signal is on (a full, hot tank responds slowly)
+FALL_CONTINUE = 0.1           # K/min that keeps a running use going (the end of a shower falls more slowly)
 
 
 @dataclass
@@ -236,13 +239,14 @@ class BathSignal:
         self.kind = kind                         # humidity, power or on_off
         self.values: list[tuple[float, float]] = []
         self.active_at: float | None = None
+        self.rose_at: float | None = None        # when it last became active: the likely start of a shower
 
     def feed(self, t: float, value) -> None:
         if value is None:
             return
         if self.kind == "on_off":
             if value:
-                self.active_at = t
+                self._on(t)
             return
         v = float(value)
         if not self.values or self.values[-1][1] != v:
@@ -255,12 +259,17 @@ class BathSignal:
             older = [x[1] for x in self.values if x[0] < t - 15]
             window = [x[1] for x in self.values if x[0] >= t - 15] + older[-1:]
             if v - min(window) >= HUMIDITY_RISE:
-                self.active_at = t
+                self._on(t)
         else:
             if len(self.values) >= 10:
                 usual = statistics.median(x[1] for x in self.values)
                 if v >= usual + max(POWER_RISE, 0.3 * usual):
-                    self.active_at = t
+                    self._on(t)
+
+    def _on(self, t: float) -> None:
+        if not self.active(t):
+            self.rose_at = t
+        self.active_at = t
 
     def active(self, t: float) -> bool:
         return self.active_at is not None and t - self.active_at <= BATH_SIGNAL_MINUTES

@@ -7,8 +7,16 @@
 - Learning uses **only real showers** for the shower length and the flow: washing up is taken off as the little heat
   it took, and heat that left without water (a heat pump starting a reheat, heat taken out through the coil) no
   longer counts as showering
+- **More accurate shower length**: a running shower is held on to with a lower threshold than one is started with
+  (the end of a shower lowers the tank more slowly), and with a bathroom signal a shower starts when the bathroom
+  signal came on and the start threshold is lower (a full, hot tank responds slowly). A real 8–9 minute shower was
+  logged as 6 minutes before, 9 now
 - Large, frequently changing attributes (shower log, forecast, since-reheat overview…) are no longer written to the
   database; the card reads them live as before
+- Fewer long-term statistics: *Showers left*, *Showers today*, *Shower time today* and *Shower time this week* no
+  longer keep statistics (averages of daily counters say nothing; the totals cover the long run). Home Assistant
+  shows a one-time notice for each with a button to remove their old statistics. *Hot water* changes in steps of
+  10 L, which saves about three quarters of its database writes
 
 ## v0.10.0
 

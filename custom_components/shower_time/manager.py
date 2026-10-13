@@ -302,7 +302,10 @@ class ShowerTimeManager:
                 changed = True
                 if prev is not None:
                     minutes = max((now - prev[1]).total_seconds() / 60, 0.5)
-                    if (prev[0] - val) / minutes >= 0.3:
+                    # a lower threshold keeps a running use going, and the bathroom signal lowers the start one
+                    threshold = (insights.FALL_CONTINUE if self.showering else
+                                 insights.FALL_START_BATH if self.bath_active() else insights.FALL_START)
+                    if (prev[0] - val) / minutes >= threshold:
                         falling = True
                         fall_from = prev[1] if fall_from is None else min(fall_from, prev[1])
                 self._prev[ent] = (val, now)
@@ -312,6 +315,11 @@ class ShowerTimeManager:
         if falling and not self.reheating:
             if not self.showering:
                 self.ledger.session_start = fall_from or now        # the use began after the previous reading
+                rose = self.bath_signal.rose_at if self.bath_signal and self.bath_active() else None
+                if rose is not None and fall_from is not None:
+                    rose_at = datetime.fromtimestamp(rose * 60, timezone.utc)
+                    if fall_from <= rose_at <= now:                 # the bathroom says when it really began
+                        self.ledger.session_start = rose_at
                 self.use = insights.UseSession(
                     start=self.ledger.session_start.timestamp() / 60,
                     start_avg=self.estimate.average if self.estimate else None,   # still the previous estimate
