@@ -1,5 +1,5 @@
 /* Hot Water Shower Time card — served by the shower_time integration. */
-const CARD_VERSION = "0.4.1";
+const CARD_VERSION = "0.5.0";
 
 const T = {
   en: { title: "Shower time", min: "min", shower: "of showering", empty: "empty", full: "full",
@@ -174,7 +174,7 @@ class ShowerTimeCard extends HTMLElement {
         <div class="chips">
           <div class="chip"><ha-icon icon="mdi:shower"></ha-icon><b>${fmt(a.showers)} × ${fmt(typical)} ${this._t("min")}</b><span>${this._t("showers")}</span></div>
           <div class="chip"><ha-icon icon="mdi:water"></ha-icon><b>≈ ${fmt(a.litres)} L</b><span>${this._t("water")} ${a.shower_temperature_mode === "reference" ? "≈" : ""}${fmt(a.shower_temperature, a.shower_temperature_mode === "sensed" ? 1 : 0)}°</span></div>
-          <div class="chip"><ha-icon icon="mdi:snowflake-thermometer"></ha-icon><b>${fmt(a.cold_water)}°</b><span>${this._t("cold")}</span></div>
+          <div class="chip"><ha-icon icon="mdi:snowflake-thermometer"></ha-icon><b>≈ ${fmt(a.cold_water)}°</b><span>${this._t("cold")}</span></div>
         </div>
         ${this._config.show_history ? `
           <div class="hist"><div class="hl">${this._t("last24")}</div>${this._sparkline(300, 44, color)}</div>` : ""}

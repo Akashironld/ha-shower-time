@@ -247,6 +247,27 @@ def test_smart_controller_varying_targets_and_top_ups():
     assert 5.0 <= out[1] <= 7.0, out
 
 
+def test_cold_water_from_outdoor_average():
+    """cold = a + b * 3-week outdoor average is learned from (average, measured) pairs; the table is smooth."""
+    rnd = random.Random(3)
+    pairs = []
+    for _ in range(60):
+        x = rnd.uniform(3, 22)
+        pairs.append([x, 8.0 + 0.6 * x + rnd.uniform(-0.7, 0.7)])
+    prior = {"a": {"v": 9.0, "n": 10}, "b": {"v": 0.6, "n": 10}}
+    cm = model.fit_cold_model(prior, pairs)
+    assert abs(cm["b"]["v"] - 0.6) < 0.08 and abs(cm["a"]["v"] - 8.2) < 0.9, cm
+    # a narrow range (one season) only moves the offset
+    narrow = [[x, y] for x, y in pairs if 15 <= x <= 17]
+    cm2 = model.fit_cold_model(prior, narrow)
+    assert cm2["b"]["v"] == 0.6, cm2
+    p = model.new_params("generic")
+    assert abs(model.cold_for(p, 10, 286, 17.2) - (9.0 + 0.6 * 17.2)) < 0.01
+    # no jump at a month boundary
+    d1, d2 = model.cold_for(p, 10, 304), model.cold_for(p, 11, 305)
+    assert abs(d1 - d2) < 0.3, (d1, d2)
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

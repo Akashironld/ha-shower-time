@@ -46,6 +46,8 @@ PROFILES: dict[str, dict] = {
         "duration": {"v": 8.0, "n": 10},
         "veff_factor": {"v": 1.0, "n": 3},
         "cold": dict(COLD_GENERIC),
+        # cold = a + b * 3-week outdoor average, for a correctly reading outdoor sensor (NL/BE network)
+        "cold_model": {"a": {"v": 9.0, "n": 10}, "b": {"v": 0.6, "n": 10}},
     },
     # Learned from 13 months of minute data of a Weheat heat pump with the Weheat 200 L tank
     # (449 reheat cycles, 471 showers): see README.
@@ -58,6 +60,8 @@ PROFILES: dict[str, dict] = {
         "veff_factor": {"v": 1.39, "n": 49},
         "cold": {"01": 10.0, "02": 10.6, "03": 12.1, "04": 13.6, "05": 16.1, "06": 17.2,
                  "07": 21.0, "08": 20.3, "09": 19.3, "10": 19.7, "11": 14.8, "12": 11.6},
+        # fitted on 13 months against the Weheat outdoor sensor (which reads ~3 °C warm): rmse 0.65 °C
+        "cold_model": {"a": {"v": 7.24, "n": 40}, "b": {"v": 0.604, "n": 40}},
     },
 }
 
@@ -75,8 +79,8 @@ def new_params(profile: str) -> dict:
 def ensure_params(p: dict) -> dict:
     """Add fields introduced in later versions to stored parameters."""
     p.setdefault("head_flow", {"v": 8.0, "n": 0})     # measured shower-head flow (water meter), L/min
-    # cold water = a + b * outdoor running average (°C); starts from a typical Dutch/Belgian network
-    p.setdefault("cold_model", {"a": {"v": 7.5, "n": 6}, "b": {"v": 0.7, "n": 6}})
+    # cold water = a + b * outdoor running average (°C); default from the profile the model started with
+    p.setdefault("cold_model", copy.deepcopy(PROFILES.get(p.get("profile"), PROFILES["generic"])["cold_model"]))
     p.setdefault("cold_samples", [])                  # [outdoor running average, measured cold] pairs
     return p
 
