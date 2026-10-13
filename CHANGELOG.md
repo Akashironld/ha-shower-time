@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.9.6
+
+- Dashboard card: **every part can be hidden** — `show_tank`, `show_temps`, `show_split`, `show_tiles`,
+  `show_history`, `show_footer` — and **`compact: true`** shows only the tank and the minutes, e.g. for a wall
+  tablet. A part you switch on or off yourself always wins over `compact`. All toggles are in the visual editor
+  (English and Dutch labels); existing cards look exactly the same
+
 ## v0.9.5
 
 - Dashboard card: **card-mod styling now sticks** — the card keeps its `ha-card` in place and only refreshes what is

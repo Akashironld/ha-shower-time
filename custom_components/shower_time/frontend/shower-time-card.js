@@ -1,6 +1,6 @@
 /* Hot Water Shower Time card - served by the shower_time integration. */
 (() => {   // own scope: safe if the file is loaded twice as a classic script (legacy frontend + a manual resource)
-const CARD_VERSION = "0.9.5";
+const CARD_VERSION = "0.9.6";
 
 // Plain ES2017 on purpose (no ?. / ??): wall tablets often run an older browser that gets Home Assistant's
 // legacy frontend. "a ?? b" is written as nn(a, b).
@@ -14,7 +14,10 @@ const T = {
         cooled: "cooled", last24: "Last 24 hours", max: "max", ago24: "-24 h", now: "now", yesterday: "yesterday",
         nohist: "no history yet \u2014 fills in by itself", unavailable: "Not available", cold: "cold water", cop: "COP",
         pick: "Pick the 'Shower time' sensor of the Hot Water Shower Time integration.",
-        sensed: "sensed", you: "you shower at" },
+        sensed: "sensed", you: "you shower at",
+        e_entity: "Sensor", e_title: "Title", e_compact: "Compact (e.g. a wall tablet)", e_tank: "Tank",
+        e_temps: "Temperatures", e_split: "Since reheat", e_tiles: "Today / last shower / standing loss",
+        e_history: "Last 24 hours", e_footer: "Footer (flow, cold water, COP)" },
   nl: { title: "Douchetijd", min: "min", showers: "douches", shower1: "douche", water: "warm water",
         reheating: "WORDT OPGEWARMD", inuse: "DOUCHT NU", low: "BIJNA OP", fullat: "vol", selflearning: "zelflerend",
         learning: "leert", updated: "bijgewerkt", today: "Vandaag", lastshower: "Laatste douche", cooling: "Afkoeling",
@@ -22,8 +25,22 @@ const T = {
         cooled: "afgekoeld", last24: "Laatste 24 uur", max: "max", ago24: "-24 u", now: "nu", yesterday: "gisteren",
         nohist: "nog geen historie \u2014 vult zich vanzelf", unavailable: "Niet beschikbaar", cold: "koud water", cop: "COP",
         pick: "Kies de sensor 'Douchetijd' van de integratie Hot Water Shower Time.",
-        sensed: "gemeten", you: "jullie douchen op" },
+        sensed: "gemeten", you: "jullie douchen op",
+        e_entity: "Sensor", e_title: "Titel", e_compact: "Compact (bijv. een wandtablet)", e_tank: "Vat",
+        e_temps: "Temperaturen", e_split: "Sinds opwarmen", e_tiles: "Vandaag / laatste douche / afkoeling",
+        e_history: "Laatste 24 uur", e_footer: "Onderregel (debiet, koud water, COP)" },
 };
+
+// Parts of the card that can be hidden with show_<part>: false. "compact: true" hides all but the tank and the
+// minutes; a show_<part> set explicitly always wins (e.g. compact with show_tiles: true).
+const SECTIONS = ["tank", "temps", "split", "tiles", "history", "footer"];
+const COMPACT_HIDES = ["temps", "split", "tiles", "history", "footer"];
+const showDefault = (config, part) => !(config && config.compact && COMPACT_HIDES.indexOf(part) >= 0);
+const shows = (config, part) => {
+  const v = config ? config["show_" + part] : undefined;
+  return v === undefined || v === null ? showDefault(config, part) : !!v;
+};
+const lang2 = (hass) => ((hass && ((hass.locale && hass.locale.language) || hass.language)) || "en").slice(0, 2);
 
 const fmt = (v, d = 0) => (v === null || v === undefined || isNaN(v)) ? "\u2014" : Number(v).toFixed(d);
 
@@ -33,12 +50,12 @@ class ShowerTimeCard extends HTMLElement {
   static getStubConfig(hass) {
     const ent = Object.keys(hass.states).find((e) => e.startsWith("sensor.") &&
       hass.states[e].attributes && hass.states[e].attributes.typical_shower_minutes !== undefined);
-    return { entity: ent || "", show_tank: true, show_history: true };
+    return { entity: ent || "" };
   }
 
   setConfig(config) {
     if (!config.entity) throw new Error("entity is required (the 'Shower time' sensor)");
-    this._config = Object.assign({ show_tank: true, show_history: true }, config);
+    this._config = Object.assign({}, config);
     if (!this.shadowRoot) this.attachShadow({ mode: "open" });
     this._hist = null; this._histAt = 0;
     this._render();
@@ -52,16 +69,20 @@ class ShowerTimeCard extends HTMLElement {
     this._maybeFetchHistory();
   }
 
-  getCardSize() { return this._config && this._config.show_history ? 5 : 4; }
+  _show(part) { return shows(this._config, part); }
+
+  getCardSize() {                    // masonry views: 5 for the full card (as before), less as parts are hidden
+    return 1 + (this._show("tank") || this._show("temps") ? 1 : 0) + (this._show("split") ? 1 : 0) +
+      (this._show("tiles") ? 1 : 0) + (this._show("history") ? 1 : 0);
+  }
   getGridOptions() { return { columns: 6, min_columns: 4 }; }
 
   _t(k) {
-    const l = ((this._hass && (this._hass.locale && this._hass.locale.language || this._hass.language)) || "en").slice(0, 2);
-    return (T[l] || T.en)[k];
+    return (T[lang2(this._hass)] || T.en)[k];
   }
 
   async _maybeFetchHistory() {
-    if (!this._config || !this._config.show_history || !this._hass) return;
+    if (!this._config || !this._show("history") || !this._hass) return;
     if (Date.now() - this._histAt < 5 * 60 * 1000) return;
     this._histAt = Date.now();
     let pts = null;
@@ -247,18 +268,18 @@ class ShowerTimeCard extends HTMLElement {
           ${pill}
         </div>
         <div class="hero">
-          ${this._config.show_tank ? this._tank(a, pct) : ""}
+          ${this._show("tank") ? this._tank(a, pct) : ""}
           <div class="main">
             <div class="big"><span class="num" style="color:${color}">${fmt(m)}</span><span class="unit">${this._t("min")}</span></div>
             <div class="what">\u2248 ${fmt(a.showers)} ${showers} \u00b7 ${this._vol(a.litres)}</div>
-            <div class="temps"><span><ha-icon icon="mdi:arrow-up-thin"></ha-icon>${fmt(this._deg(a.top_temperature))}\u00b0</span>
-              ${a.bottom_temperature !== null && a.bottom_temperature !== undefined ? `<span><ha-icon icon="mdi:arrow-down-thin"></ha-icon>${fmt(this._deg(a.bottom_temperature))}\u00b0</span>` : ""}</div>
-            ${this._split(a)}
+            ${this._show("temps") ? `<div class="temps"><span><ha-icon icon="mdi:arrow-up-thin"></ha-icon>${fmt(this._deg(a.top_temperature))}\u00b0</span>
+              ${a.bottom_temperature !== null && a.bottom_temperature !== undefined ? `<span><ha-icon icon="mdi:arrow-down-thin"></ha-icon>${fmt(this._deg(a.bottom_temperature))}\u00b0</span>` : ""}</div>` : ""}
+            ${this._show("split") ? this._split(a) : ""}
           </div>
         </div>
-        ${this._tiles(a, lang)}
-        ${this._config.show_history ? `<div class="hist"><div class="hh"><span>${this._t("last24")}</span><span class="pk"></span></div>${this._sparkline(300, 52, color)}</div>` : ""}
-        <div class="foot">${this._flow(a.flow)}${sensed} \u00b7 ${this._t("cold")} \u2248 ${fmt(this._deg(a.cold_water))}\u00b0 \u00b7 ${this._t("cop")} ${fmt(a.cop, 1)}</div>`;
+        ${this._show("tiles") ? this._tiles(a, lang) : ""}
+        ${this._show("history") ? `<div class="hist"><div class="hh"><span>${this._t("last24")}</span><span class="pk"></span></div>${this._sparkline(300, 52, color)}</div>` : ""}
+        ${this._show("footer") ? `<div class="foot">${this._flow(a.flow)}${sensed} \u00b7 ${this._t("cold")} \u2248 ${fmt(this._deg(a.cold_water))}\u00b0 \u00b7 ${this._t("cop")} ${fmt(a.cop, 1)}</div>` : ""}`;
     const pk = this.shadowRoot.querySelector(".pk");
     if (pk && this._peak !== null && this._peak !== undefined) pk.textContent = `${this._t("max")} ${fmt(this._peak)} ${this._t("min")}`;
     this._bindHover();
@@ -370,26 +391,38 @@ class ShowerTimeCard extends HTMLElement {
 class ShowerTimeCardEditor extends HTMLElement {
   setConfig(config) { this._config = config; this._render(); }
   set hass(hass) { this._hass = hass; this._render(); }
+
+  // The toggles show what the card really shows. Switching "compact" resets the parts to its preset, and a part
+  // that matches the preset is left out of the YAML, so the configuration stays short.
+  _changed(value) {
+    const prev = this._config || {};
+    const v = Object.assign({}, value);
+    if (!!v.compact !== !!prev.compact) SECTIONS.forEach((p) => { delete v["show_" + p]; });
+    else SECTIONS.forEach((p) => { if (v["show_" + p] === showDefault(v, p)) delete v["show_" + p]; });
+    if (!v.compact) delete v.compact;
+    if (!v.title) delete v.title;
+    this._config = v;
+    this.dispatchEvent(new CustomEvent("config-changed", { detail: { config: v }, bubbles: true, composed: true }));
+  }
+
   _render() {
     if (!this._hass || !this._config) return;
+    const t = T[lang2(this._hass)] || T.en;
     if (!this._form) {
       this._form = document.createElement("ha-form");
-      this._form.computeLabel = (s) => ({ entity: "Sensor", title: "Title", show_tank: "Show tank",
-        show_history: "Show last 24 h" })[s.name] || s.name;
-      this._form.addEventListener("value-changed", (ev) => {
-        this._config = ev.detail.value;
-        this.dispatchEvent(new CustomEvent("config-changed", { detail: { config: this._config }, bubbles: true, composed: true }));
-      });
+      this._form.computeLabel = (s) => t["e_" + s.name.replace("show_", "")] || s.name;
+      this._form.addEventListener("value-changed", (ev) => this._changed(ev.detail.value));
       this.appendChild(this._form);
     }
+    const data = Object.assign({}, this._config, { compact: !!this._config.compact });
+    SECTIONS.forEach((p) => { data["show_" + p] = shows(this._config, p); });
     this._form.hass = this._hass;
-    this._form.data = this._config;
+    this._form.data = data;
     this._form.schema = [
       { name: "entity", required: true, selector: { entity: { filter: { integration: "shower_time", domain: "sensor" } } } },
       { name: "title", selector: { text: {} } },
-      { type: "grid", name: "", schema: [
-        { name: "show_tank", selector: { boolean: {} } },
-        { name: "show_history", selector: { boolean: {} } } ] },
+      { name: "compact", selector: { boolean: {} } },
+      { type: "grid", name: "", schema: SECTIONS.map((p) => ({ name: "show_" + p, selector: { boolean: {} } })) },
     ];
   }
 }

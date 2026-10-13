@@ -192,8 +192,28 @@ Add a card and search for **Shower time**, or use YAML:
 ```yaml
 type: custom:shower-time-card
 entity: sensor.hot_water_shower_time
-show_tank: true      # tank graphic with the hot layer
-show_history: true   # last 24 hours (hover or touch to read values)
+```
+
+Every part can be switched off, in the visual editor or in YAML:
+
+| Option | Part | Default |
+|---|---|---|
+| `title` | your own title | *Shower time* |
+| `compact` | hide everything except the tank and the minutes — handy on a wall tablet | `false` |
+| `show_tank` | tank graphic filled to the charge level | `true` |
+| `show_temps` | top and bottom temperature | `true` |
+| `show_split` | *Since reheat* bar: left / showered / cooled | `true` |
+| `show_tiles` | tiles *Today*, *Last shower*, *Standing loss* | `true` |
+| `show_history` | last 24 hours (hover or touch to read values) | `true` |
+| `show_footer` | bottom line: flow, cold water, COP | `true` |
+
+A `show_…` option you set yourself always wins, so you can start from `compact` and add a part back:
+
+```yaml
+type: custom:shower-time-card
+entity: sensor.hot_water_shower_time
+compact: true
+show_tiles: true
 ```
 
 The graph is filled from the tank sensors' history, so it is complete from the first day. Hover or touch it to read
