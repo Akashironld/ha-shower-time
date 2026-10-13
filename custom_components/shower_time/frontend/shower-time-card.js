@@ -1,18 +1,18 @@
 /* Hot Water Shower Time card — served by the shower_time integration. */
-const CARD_VERSION = "0.3.1";
+const CARD_VERSION = "0.3.2";
 
 const T = {
   en: { title: "Shower time", min: "min", shower: "of showering", empty: "empty", full: "full",
         showers: "showers", water: "hot water", cold: "cold water", reheating: "REHEATING",
         low: "ALMOST GONE", learned: "Learned", updated: "updated", learning: "learning from your showers",
-        selflearning: "self-learning", last24: "last 24 h", ago24: "-24 h", now: "now", nohist: "no history yet — fills in by itself", unavailable: "Not available",
+        selflearning: "self-learning", last24: "last 24 h", ago24: "-24 h", now: "now", yesterday: "yesterday", nohist: "no history yet — fills in by itself", unavailable: "Not available",
         pick: "Pick the 'Shower time' sensor of the Hot Water Shower Time integration.",
         sensed: "sensed", set: "set", head: "shower head", you: "you shower at",
         src: { water_meter: "water meter", manual: "set", eco: "water-saving", normal: "normal", rain: "rain shower" } },
   nl: { title: "Douchetijd", min: "min", shower: "douchen", empty: "leeg", full: "vol",
         showers: "douchebeurten", water: "warm water", cold: "koud water", reheating: "WORDT OPGEWARMD",
         low: "BIJNA OP", learned: "Geleerd", updated: "bijgewerkt", learning: "leert van jullie douches",
-        selflearning: "zelflerend", last24: "laatste 24 u", ago24: "-24 u", now: "nu", nohist: "nog geen historie — vult zich vanzelf", unavailable: "Niet beschikbaar",
+        selflearning: "zelflerend", last24: "laatste 24 u", ago24: "-24 u", now: "nu", yesterday: "gisteren", nohist: "nog geen historie — vult zich vanzelf", unavailable: "Niet beschikbaar",
         pick: "Kies de sensor 'Douchetijd' van de integratie Hot Water Shower Time.",
         sensed: "gemeten", set: "ingesteld", head: "douchekop", you: "jullie douchen op",
         src: { water_meter: "watermeter", manual: "ingevuld", eco: "waterbesparend", normal: "normaal", rain: "regendouche" } },
@@ -95,7 +95,8 @@ class ShowerTimeCard extends HTMLElement {
     const area = `${d} V ${h} H ${x(series[0][0]).toFixed(1)} Z`;
     const gap = x(series[0][0]) > 2 ? `<rect x="0" y="0" width="${x(series[0][0]).toFixed(1)}" height="${h}" fill="var(--divider-color, rgba(127,127,127,.12))" opacity=".35"/>` : "";
     const peak = series.reduce((m, p) => (p[1] > m[1] ? p : m), series[0]);
-    return `<div class="sparkwrap"><svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
+    this._spark = { t0, now, max, series, h, color };
+    return `<div class="sparkwrap hover"><div class="cursor"></div><div class="dot"></div><div class="tip"></div><svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
       <defs><linearGradient id="sg" x1="0" x2="0" y1="0" y2="1">
         <stop offset="0" stop-color="${color}" stop-opacity=".35"/><stop offset="1" stop-color="${color}" stop-opacity="0"/></linearGradient></defs>
       ${base}${gap}<path d="${area}" fill="url(#sg)"/>
@@ -144,6 +145,7 @@ class ShowerTimeCard extends HTMLElement {
     const color = m < low ? "var(--error-color, #e5484d)" : (m < 2 * typical ? "var(--warning-color, #f5a524)" : "var(--success-color, #30a46c)");
     const full = Math.max(a.full_tank_minutes || 0, m, 1);   // a tank above its usual temperature is 'full'
     const pct = Math.max(0, Math.min(100, (m / full) * 100));
+    const pctUsual = Math.round(Math.max(0, Math.min(100, (m / (a.full_tank_minutes || full)) * 100)));
     const pill = a.reheating ? `<span class="pill heat">${this._t("reheating")}</span>`
       : (m < low ? `<span class="pill low">${this._t("low")}</span>` : "");
     const title = this._config.title || this._t("title");
@@ -164,7 +166,7 @@ class ShowerTimeCard extends HTMLElement {
             <div class="big"><span class="num" style="color:${color}">${fmt(m)}</span><span class="unit">${this._t("min")}</span></div>
             <div class="what">${this._t("shower")}</div>
             <div class="bar"><div style="width:${pct}%;background:${color}"></div></div>
-            <div class="scale"><span>${this._t("empty")}</span><span>${this._t("full")} ≈ ${fmt(full)} ${this._t("min")}</span></div>
+            <div class="scale"><span>${this._t("empty")}</span><b class="pct" style="color:${color}">${pctUsual}%</b><span>${this._t("full")} ≈ ${fmt(full)} ${this._t("min")}</span></div>
           </div>
         </div>
         <div class="chips">
@@ -176,11 +178,50 @@ class ShowerTimeCard extends HTMLElement {
           <div class="hist"><div class="hl">${this._t("last24")}</div>${this._sparkline(300, 44, color)}</div>` : ""}
         <div class="foot">${this._foot(a)}</div>
       </ha-card>`;
+    this._bindHover();
     this.shadowRoot.querySelector("ha-card").onclick = () => {
       const ev = new Event("hass-more-info", { bubbles: true, composed: true });
       ev.detail = { entityId: this._config.entity };
       this.dispatchEvent(ev);
     };
+  }
+
+  _bindHover() {
+    const wrap = this.shadowRoot.querySelector(".sparkwrap.hover");
+    const d = this._spark;
+    if (!wrap || !d) return;
+    const svg = wrap.querySelector(".spark"), cur = wrap.querySelector(".cursor"),
+      dot = wrap.querySelector(".dot"), tip = wrap.querySelector(".tip");
+    const lang = this._hass.locale?.language || this._hass.language || undefined;
+    const valueAt = (t) => {                     // step series: the last point at or before t
+      let v = null;
+      for (const p of d.series) { if (p[0] <= t) v = p[1]; else break; }
+      return v;
+    };
+    const show = (ev) => {
+      const r = svg.getBoundingClientRect();
+      const fx = Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width));
+      const t = d.t0 + fx * (d.now - d.t0);
+      const v = valueAt(t);
+      if (v === null) { hide(); return; }
+      const px = fx * r.width, py = (d.h - 2 - (v / d.max) * (d.h - 6)) / d.h * r.height;
+      const when = new Date(t), today = new Date();
+      const day = when.toDateString() === today.toDateString() ? "" :
+        (new Date(today.getTime() - 86400000).toDateString() === when.toDateString() ? this._t("yesterday") + " " :
+          when.toLocaleDateString(lang, { weekday: "short" }) + " ");
+      tip.textContent = `${day}${when.toLocaleTimeString(lang, { hour: "2-digit", minute: "2-digit" })} · ${Math.round(v)} ${this._t("min")}`;
+      cur.style.left = `${px}px`; dot.style.left = `${px}px`; dot.style.top = `${py}px`;
+      dot.style.background = d.color;
+      wrap.classList.add("on");
+      const tw = tip.offsetWidth;
+      tip.style.left = `${Math.max(0, Math.min(r.width - tw, px - tw / 2))}px`;
+    };
+    const hide = () => wrap.classList.remove("on");
+    wrap.addEventListener("pointermove", show);
+    wrap.addEventListener("pointerdown", (ev) => { show(ev); try { wrap.setPointerCapture(ev.pointerId); } catch (e) {} });
+    wrap.addEventListener("pointerleave", hide);
+    wrap.addEventListener("pointerup", (ev) => { if (ev.pointerType !== "mouse") setTimeout(hide, 1500); });
+    wrap.addEventListener("click", (ev) => ev.stopPropagation());   // looking at the graph should not open the dialog
   }
 
   _foot(a) {
@@ -225,9 +266,18 @@ class ShowerTimeCard extends HTMLElement {
       .chip ha-icon { --mdc-icon-size: 16px; color: var(--secondary-text-color); grid-row: span 2; }
       .chip b { font-size: 14px; color: var(--primary-text-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       .chip span { font-size: 11px; color: var(--secondary-text-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-      .hist { margin-top: 12px; }
+      .hist { margin-top: 12px; overflow: visible; }
       .hl { font-size: 11px; color: var(--secondary-text-color); margin-bottom: 2px; }
       .sparkwrap { position: relative; }
+      .sparkwrap.hover { cursor: crosshair; touch-action: pan-y; }
+      .cursor { position: absolute; top: 0; height: 44px; width: 1px; background: var(--secondary-text-color); opacity: 0; pointer-events: none; }
+      .dot { position: absolute; width: 8px; height: 8px; margin: -4px 0 0 -4px; border-radius: 50%; opacity: 0; pointer-events: none;
+             box-shadow: 0 0 0 2px var(--card-background-color, var(--ha-card-background, #1c1c1c)); }
+      .tip { position: absolute; top: -26px; padding: 3px 8px; border-radius: 8px; font-size: 11px; font-weight: 600; white-space: nowrap;
+             background: var(--primary-text-color); color: var(--card-background-color, var(--ha-card-background, #1c1c1c));
+             opacity: 0; pointer-events: none; transition: opacity .12s; }
+      .sparkwrap.on .cursor { opacity: .5; } .sparkwrap.on .dot, .sparkwrap.on .tip { opacity: 1; }
+      .pct { font-size: 11px; font-weight: 700; }
       .spark { width: 100%; height: 44px; display: block; }
       .nohist { position: absolute; inset: 0; display: grid; place-items: center; font-size: 11px; color: var(--secondary-text-color); }
       .axis { display: flex; justify-content: space-between; font-size: 10px; color: var(--secondary-text-color); margin-top: 2px; }
