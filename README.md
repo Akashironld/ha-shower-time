@@ -8,6 +8,8 @@
 sensors of your hot water tank into minutes of showering — and gets better every night by learning from
 your own showers.
 
+<p align="center"><img src="assets/card-en.png" alt="The Shower time dashboard card" width="460"></p>
+
 - 🚿 **Shower time**, **showers left**, **hot water in litres** and **tank charge (%)**
 - ⏱️ **Live while you shower** — counts down between sensor readings and corrects itself on every reading
 - 🧠 **Learns by itself**: your shower flow, how your tank layers, when it really runs cold, standing
@@ -144,7 +146,14 @@ show_tank: true      # tank graphic with the hot layer
 show_history: true   # last 24 hours (hover or touch to read values)
 ```
 
-The graph is filled from the tank sensors' history, so it is complete from the first day.
+The graph is filled from the tank sensors' history, so it is complete from the first day. Hover or touch it to read
+the value at any moment:
+
+<p align="center"><img src="assets/card-en-hover.png" alt="Card with the graph tooltip" width="460"></p>
+
+What you see: the tank filled to its charge level, the minutes of showering left, roughly how many showers and
+litres that is, where the hot water went since the last reheat (left / showered / cooled), today's showers and
+their cost, the last shower, what standing loss costs per day, and the last 24 hours.
 
 ## Automation example
 
@@ -201,6 +210,8 @@ koudwatertemperatuur (uit de buitentemperatuur), wanneer de boiler echt leeg is 
 Met live aftellen tijdens het douchen, een douchelogboek, kosten per douche (ook bij een dynamisch tarief:
 de prijs op het moment van opwarmen telt), vulgraad, "weer vol om" en een dashboardkaart. Volledig
 Nederlandstalig in Home Assistant.
+
+<p align="center"><img src="assets/card-nl.png" alt="De kaart Douchetijd" width="420"></p>
 
 Debiet van je douchekop meten: zet de douche aan zoals je normaal doucht, houd een emmer eronder en kijk
 hoeveel seconden het duurt tot er 10 liter in zit. Debiet = 600 ÷ seconden (75 s = 8 L/min).
