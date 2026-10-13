@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.9.5
+
+- Dashboard card: **card-mod styling now sticks** — the card keeps its `ha-card` in place and only refreshes what is
+  inside, so styles added by card-mod are no longer wiped on every update (#1). Theme variables such as
+  `ha-card-background` keep working as before
+- Card code runs in its own scope and is pure ASCII, so it also loads when the file is included twice or served
+  without a character set (legacy frontend, manual resources)
+- README: styling example
+
 ## v0.9.4
 
 - Dashboard card now also works on **older browsers and wall tablets** (it showed an empty red error card there):

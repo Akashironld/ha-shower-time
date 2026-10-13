@@ -205,6 +205,22 @@ What you see: the tank filled to its charge level, the minutes of showering left
 litres that is, where the hot water went since the last reheat (left / showered / cooled), today's showers and
 their cost, the last shower, what standing loss costs per day, and the last 24 hours.
 
+**Styling:** the card is a standard `ha-card`, so your theme (`ha-card-background`, `ha-card-border-radius`,
+`ha-card-box-shadow`, …) applies, and [card-mod](https://github.com/thomasloven/lovelace-card-mod) works as on any
+other card:
+
+```yaml
+type: custom:shower-time-card
+entity: sensor.hot_water_shower_time
+card_mod:
+  style: |
+    ha-card {
+      background-color: rgba(36, 37, 41, 0.3);
+      box-shadow: none;
+      border: none;
+    }
+```
+
 ## Automation example
 
 Blink the bathroom light orange when the hot water is almost gone during a shower:

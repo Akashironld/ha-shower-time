@@ -1,5 +1,6 @@
-/* Hot Water Shower Time card — served by the shower_time integration. */
-const CARD_VERSION = "0.9.4";
+/* Hot Water Shower Time card - served by the shower_time integration. */
+(() => {   // own scope: safe if the file is loaded twice as a classic script (legacy frontend + a manual resource)
+const CARD_VERSION = "0.9.5";
 
 // Plain ES2017 on purpose (no ?. / ??): wall tablets often run an older browser that gets Home Assistant's
 // legacy frontend. "a ?? b" is written as nn(a, b).
@@ -11,7 +12,7 @@ const T = {
         learning: "learning", updated: "updated", today: "Today", lastshower: "Last shower", cooling: "Standing loss",
         perday: "per day", peryear: "/ year", none: "none yet", since: "Since reheat", left: "left", showered: "showered",
         cooled: "cooled", last24: "Last 24 hours", max: "max", ago24: "-24 h", now: "now", yesterday: "yesterday",
-        nohist: "no history yet — fills in by itself", unavailable: "Not available", cold: "cold water", cop: "COP",
+        nohist: "no history yet \u2014 fills in by itself", unavailable: "Not available", cold: "cold water", cop: "COP",
         pick: "Pick the 'Shower time' sensor of the Hot Water Shower Time integration.",
         sensed: "sensed", you: "you shower at" },
   nl: { title: "Douchetijd", min: "min", showers: "douches", shower1: "douche", water: "warm water",
@@ -19,12 +20,12 @@ const T = {
         learning: "leert", updated: "bijgewerkt", today: "Vandaag", lastshower: "Laatste douche", cooling: "Afkoeling",
         perday: "per dag", peryear: "/ jaar", none: "nog geen", since: "Sinds opwarmen", left: "over", showered: "gedoucht",
         cooled: "afgekoeld", last24: "Laatste 24 uur", max: "max", ago24: "-24 u", now: "nu", yesterday: "gisteren",
-        nohist: "nog geen historie — vult zich vanzelf", unavailable: "Niet beschikbaar", cold: "koud water", cop: "COP",
+        nohist: "nog geen historie \u2014 vult zich vanzelf", unavailable: "Niet beschikbaar", cold: "koud water", cop: "COP",
         pick: "Kies de sensor 'Douchetijd' van de integratie Hot Water Shower Time.",
         sensed: "gemeten", you: "jullie douchen op" },
 };
 
-const fmt = (v, d = 0) => (v === null || v === undefined || isNaN(v)) ? "—" : Number(v).toFixed(d);
+const fmt = (v, d = 0) => (v === null || v === undefined || isNaN(v)) ? "\u2014" : Number(v).toFixed(d);
 
 class ShowerTimeCard extends HTMLElement {
   static getConfigElement() { return document.createElement("shower-time-card-editor"); }
@@ -111,9 +112,9 @@ class ShowerTimeCard extends HTMLElement {
       <div class="axis"><span>${this._t("ago24")}</span><span>${this._t("now")}</span></div></div>`;
   }
 
-  _deg(v) {                         // the integration works in °C; show °F when Home Assistant does
+  _deg(v) {                         // the integration works in Celsius; show Fahrenheit when Home Assistant does
     if (v === null || v === undefined || isNaN(v)) return v;
-    const f = this._hass && this._hass.config && this._hass.config.unit_system && this._hass.config.unit_system.temperature === "°F";
+    const f = this._hass && this._hass.config && this._hass.config.unit_system && this._hass.config.unit_system.temperature === "\u00b0F";
     return f ? v * 9 / 5 + 32 : v;
   }
 
@@ -127,7 +128,7 @@ class ShowerTimeCard extends HTMLElement {
     return g ? `${fmt(l / 3.785)} gal` : `${fmt(l)} L`;
   }
 
-  _water(top) {                      // liquid colour from the top temperature (°C)
+  _water(top) {                      // liquid colour from the top temperature (Celsius)
     if (top === null || top === undefined) return ["#9aa7b4", "#c3ccd6"];
     if (top >= 50) return ["#ff5a36", "#ffab4d"];
     if (top >= 42) return ["#f5a524", "#ffd27a"];
@@ -150,13 +151,13 @@ class ShowerTimeCard extends HTMLElement {
       <g clip-path="url(#clip)"><g>${anim}<path d="${wave} M ${x + w} ${ly} q 8 -5 16 0 V ${y + h} H ${x + w} Z" fill="url(#liq)"/></g></g>
       <rect x="${x + 9}" y="${y + 14}" width="6" height="${h - 28}" rx="3" fill="#fff" opacity=".22"/>
       <rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${r}" fill="none" stroke="var(--divider-color, rgba(127,127,127,.35))" stroke-width="1.5"/>
-      <text x="${x + w / 2}" y="${y + h / 2 + 6}" class="tpct">${pct === null || pct === undefined ? "—" : Math.round(lvl) + "%"}</text>
+      <text x="${x + w / 2}" y="${y + h / 2 + 6}" class="tpct">${pct === null || pct === undefined ? "\u2014" : Math.round(lvl) + "%"}</text>
     </svg>`;
   }
 
   _money(v, a, lang) {
     if (v === null || v === undefined) return null;
-    return `${a.currency || "€"} ${Number(v).toLocaleString(lang, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    return `${a.currency || "\u20ac"} ${Number(v).toLocaleString(lang, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   }
 
   _split(a) {                        // since the last reheat: left / showered / cooled
@@ -178,21 +179,36 @@ class ShowerTimeCard extends HTMLElement {
   _tiles(a, lang) {
     const today = a.today_showers === undefined ? "" : `<div class="tile">
         <div class="tl"><ha-icon icon="mdi:calendar-today"></ha-icon>${this._t("today")}</div>
-        <div class="tv">${a.today_showers} × · ${a.today_minutes} ${this._t("min")}</div>
+        <div class="tv">${a.today_showers} \u00d7 \u00b7 ${a.today_minutes} ${this._t("min")}</div>
         <div class="ts">${nn(this._money(a.today_cost, a, lang), "&nbsp;")}</div></div>`;
     let last = `<div class="tv">${this._t("none")}</div><div class="ts">&nbsp;</div>`;
     if (a.last) {
       const when = new Date(a.last.start);
       const day = when.toDateString() === new Date().toDateString() ? "" : `${when.toLocaleDateString(lang, { weekday: "short" })} `;
-      last = `<div class="tv">${Math.round(a.last.minutes)} ${this._t("min")}${this._money(a.last.cost, a, lang) ? ` · ${this._money(a.last.cost, a, lang)}` : ""}</div>
+      last = `<div class="tv">${Math.round(a.last.minutes)} ${this._t("min")}${this._money(a.last.cost, a, lang) ? ` \u00b7 ${this._money(a.last.cost, a, lang)}` : ""}</div>
         <div class="ts">${day}${when.toLocaleTimeString(lang, { hour: "2-digit", minute: "2-digit" })}</div>`;
     }
     const loss = a.standing_loss_per_day;
     const cool = loss ? `<div class="tile">
         <div class="tl"><ha-icon icon="mdi:thermometer-minus"></ha-icon>${this._t("cooling")}</div>
         <div class="tv">${nn(this._money(loss.cost, a, lang), `${fmt(loss.kwh_electricity, 1)} kWh`)} <small>${this._t("perday")}</small></div>
-        <div class="ts">${loss.cost_year !== null && loss.cost_year !== undefined ? `≈ ${a.currency || "€"} ${loss.cost_year} ${this._t("peryear")}` : `${fmt(loss.kwh_heat, 1)} kWh`}</div></div>` : "";
+        <div class="ts">${loss.cost_year !== null && loss.cost_year !== undefined ? `\u2248 ${a.currency || "\u20ac"} ${loss.cost_year} ${this._t("peryear")}` : `${fmt(loss.kwh_heat, 1)} kWh`}</div></div>` : "";
     return `<div class="tiles">${today}<div class="tile"><div class="tl"><ha-icon icon="mdi:shower-head"></ha-icon>${this._t("lastshower")}</div>${last}</div>${cool}</div>`;
+  }
+
+  // The style and <ha-card> are created once and stay in place; renders only replace what is inside the card.
+  // Styling tools such as card-mod add their own element next to <ha-card>, which would be wiped otherwise.
+  _shell() {
+    if (this._card && this._card.parentNode === this.shadowRoot) return this._card;
+    this.shadowRoot.innerHTML = `${this._style()}<ha-card></ha-card>`;
+    this._card = this.shadowRoot.querySelector("ha-card");
+    this._card.addEventListener("click", () => {
+      if (!this._clickable) return;
+      const ev = new Event("hass-more-info", { bubbles: true, composed: true });
+      ev.detail = { entityId: this._config.entity };
+      this.dispatchEvent(ev);
+    });
+    return this._card;
   }
 
   _render() {
@@ -201,7 +217,8 @@ class ShowerTimeCard extends HTMLElement {
     if (!hass) return;
     const st = hass.states[this._config.entity];
     if (!st || st.state === "unavailable" || st.state === "unknown") {
-      this.shadowRoot.innerHTML = `${this._style()}<ha-card><div class="na">${st ? this._t("unavailable") : this._t("pick")}</div></ha-card>`;
+      this._clickable = false;
+      this._shell().innerHTML = `<div class="na">${st ? this._t("unavailable") : this._t("pick")}</div>`;
       return;
     }
     const a = st.attributes, m = parseFloat(st.state);
@@ -212,18 +229,18 @@ class ShowerTimeCard extends HTMLElement {
     const pct = nn(a.fill_percent, a.full_reference_minutes ? Math.round((m / a.full_reference_minutes) * 100) : null);
     const hhmm = (iso) => iso ? new Date(iso).toLocaleTimeString(lang, { hour: "2-digit", minute: "2-digit" }) : null;
     const fullAt = hhmm(a.reheat_full_at);
-    const pill = a.reheating ? `<span class="pill heat"><ha-icon icon="mdi:fire"></ha-icon>${this._t("reheating")}${fullAt ? ` · ${this._t("fullat")} ${fullAt}` : ""}</span>`
+    const pill = a.reheating ? `<span class="pill heat"><ha-icon icon="mdi:fire"></ha-icon>${this._t("reheating")}${fullAt ? ` \u00b7 ${this._t("fullat")} ${fullAt}` : ""}</span>`
       : (m < low ? `<span class="pill low"><ha-icon icon="mdi:alert"></ha-icon>${this._t("low")}</span>`
         : (a.showering ? `<span class="pill use"><ha-icon icon="mdi:shower-head"></ha-icon>${this._t("inuse")}</span>` : ""));
     const learned = a.learned_at ? new Date(a.learned_at) : null;
-    const sub = learned ? `${this._t("selflearning")} · ${this._t("updated")} ${learned.toLocaleDateString(lang, { day: "numeric", month: "short" })}`
-      : `${this._t("selflearning")} · ${this._t("learning")}`;
+    const sub = learned ? `${this._t("selflearning")} \u00b7 ${this._t("updated")} ${learned.toLocaleDateString(lang, { day: "numeric", month: "short" })}`
+      : `${this._t("selflearning")} \u00b7 ${this._t("learning")}`;
     const showers = a.showers === 1 ? this._t("shower1") : this._t("showers");
     const sensed = a.shower_temperature_mode === "sensed"
-      ? ` · ${this._t("you")} ${fmt(this._deg(a.shower_temperature), 1)}°` : "";
+      ? ` \u00b7 ${this._t("you")} ${fmt(this._deg(a.shower_temperature), 1)}\u00b0` : "";
 
-    this.shadowRoot.innerHTML = `${this._style()}
-      <ha-card>
+    this._clickable = true;
+    this._shell().innerHTML = `
         <div class="head">
           <div class="ico" style="--c:${color}"><ha-icon icon="mdi:shower-head"></ha-icon></div>
           <div class="ht"><div class="title">${this._config.title || this._t("title")}</div><div class="sub">${sub}</div></div>
@@ -233,24 +250,18 @@ class ShowerTimeCard extends HTMLElement {
           ${this._config.show_tank ? this._tank(a, pct) : ""}
           <div class="main">
             <div class="big"><span class="num" style="color:${color}">${fmt(m)}</span><span class="unit">${this._t("min")}</span></div>
-            <div class="what">≈ ${fmt(a.showers)} ${showers} · ${this._vol(a.litres)}</div>
-            <div class="temps"><span><ha-icon icon="mdi:arrow-up-thin"></ha-icon>${fmt(this._deg(a.top_temperature))}°</span>
-              ${a.bottom_temperature !== null && a.bottom_temperature !== undefined ? `<span><ha-icon icon="mdi:arrow-down-thin"></ha-icon>${fmt(this._deg(a.bottom_temperature))}°</span>` : ""}</div>
+            <div class="what">\u2248 ${fmt(a.showers)} ${showers} \u00b7 ${this._vol(a.litres)}</div>
+            <div class="temps"><span><ha-icon icon="mdi:arrow-up-thin"></ha-icon>${fmt(this._deg(a.top_temperature))}\u00b0</span>
+              ${a.bottom_temperature !== null && a.bottom_temperature !== undefined ? `<span><ha-icon icon="mdi:arrow-down-thin"></ha-icon>${fmt(this._deg(a.bottom_temperature))}\u00b0</span>` : ""}</div>
             ${this._split(a)}
           </div>
         </div>
         ${this._tiles(a, lang)}
         ${this._config.show_history ? `<div class="hist"><div class="hh"><span>${this._t("last24")}</span><span class="pk"></span></div>${this._sparkline(300, 52, color)}</div>` : ""}
-        <div class="foot">${this._flow(a.flow)}${sensed} · ${this._t("cold")} ≈ ${fmt(this._deg(a.cold_water))}° · ${this._t("cop")} ${fmt(a.cop, 1)}</div>
-      </ha-card>`;
+        <div class="foot">${this._flow(a.flow)}${sensed} \u00b7 ${this._t("cold")} \u2248 ${fmt(this._deg(a.cold_water))}\u00b0 \u00b7 ${this._t("cop")} ${fmt(a.cop, 1)}</div>`;
     const pk = this.shadowRoot.querySelector(".pk");
     if (pk && this._peak !== null && this._peak !== undefined) pk.textContent = `${this._t("max")} ${fmt(this._peak)} ${this._t("min")}`;
     this._bindHover();
-    this.shadowRoot.querySelector("ha-card").onclick = () => {
-      const ev = new Event("hass-more-info", { bubbles: true, composed: true });
-      ev.detail = { entityId: this._config.entity };
-      this.dispatchEvent(ev);
-    };
   }
 
   _bindHover() {
@@ -276,7 +287,7 @@ class ShowerTimeCard extends HTMLElement {
       const day = when.toDateString() === today.toDateString() ? "" :
         (new Date(today.getTime() - 86400000).toDateString() === when.toDateString() ? this._t("yesterday") + " " :
           when.toLocaleDateString(lang, { weekday: "short" }) + " ");
-      tip.textContent = `${day}${when.toLocaleTimeString(lang, { hour: "2-digit", minute: "2-digit" })} · ${Math.round(v)} ${this._t("min")}`;
+      tip.textContent = `${day}${when.toLocaleTimeString(lang, { hour: "2-digit", minute: "2-digit" })} \u00b7 ${Math.round(v)} ${this._t("min")}`;
       cur.style.left = `${px}px`; dot.style.left = `${px}px`; dot.style.top = `${py}px`;
       dot.style.background = d.color;
       wrap.classList.add("on");
@@ -388,7 +399,8 @@ if (!customElements.get("shower-time-card-editor")) customElements.define("showe
 window.customCards = window.customCards || [];
 if (!window.customCards.some((c) => c.type === "shower-time-card")) {
   window.customCards.push({ type: "shower-time-card", name: "Shower time", preview: true,
-    description: "How long you can still shower — self-learning hot water estimate." });
+    description: "How long you can still shower \u2014 self-learning hot water estimate." });
 }
 console.info(`%c SHOWER-TIME-CARD %c ${CARD_VERSION} `, "background:#30a46c;color:#fff;border-radius:3px 0 0 3px",
   "background:#222;color:#fff;border-radius:0 3px 3px 0");
+})();
