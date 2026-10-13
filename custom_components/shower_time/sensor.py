@@ -66,6 +66,8 @@ class MinutesSensor(ShowerTimeEntity, SensorEntity):
             "currency": m.ledger.currency or None,
             "hot_water_price_per_kwh": round(m.ledger.tank_price, 3) if m.ledger.tank_price is not None else None,
             "cop": m.ledger.cop(m),
+            "since_reheat": m.since_reheat(),
+            "standing_loss_per_day": m.standing_loss_per_day(),
             "reheat_full_at": m.ledger.eta_full.isoformat(timespec="minutes") if m.ledger.eta_full else None,
             "reheat_one_shower_at": m.ledger.eta_one.isoformat(timespec="minutes") if m.ledger.eta_one else None,
             "live_countdown": m.live_offset > 0,

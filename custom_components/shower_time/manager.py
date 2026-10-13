@@ -408,6 +408,47 @@ class ShowerTimeManager:
             return max(0.0, (self.full_ref_avg - e.empty_at) / e.per_minute)
         return self.full_ref
 
+    def since_reheat(self) -> dict | None:
+        """Where the hot water went since the last complete reheat: showered vs. lost to standing loss.
+
+        Cooling is the learned standing loss (°C/h of tank average) over the hours since the reheat, turned
+        into shower minutes, kWh and money. Showered is what is left of the drop. The three parts always add
+        up to the minutes the tank held right after the reheat."""
+        e, ref = self.current, self.ref_minutes()
+        if e is None or not ref or not self.full_ref_at:
+            return None
+        try:
+            since = dt_util.parse_datetime(self.full_ref_at)
+        except (TypeError, ValueError):
+            return None
+        if since is None:
+            return None
+        hours = max(0.0, (dt_util.now() - since).total_seconds() / 3600)
+        loss = self.params["loss"]["v"]
+        cooling = min(max(0.0, ref - e.minutes), loss * hours / e.per_minute) if e.per_minute > 0 else 0.0
+        used = max(0.0, ref - e.minutes - cooling)
+        heat = loss * hours * self.volume * model.CP
+        price = self.ledger.tank_price
+        if price is None:
+            p, _ = self.ledger.price_now(self)
+            price = p / self.ledger.cop(self) if p is not None else None
+        return {"since": self.full_ref_at, "hours": round(hours, 1), "reference_minutes": round(ref, 1),
+                "remaining_minutes": round(e.minutes, 1), "showered_minutes": round(used, 1),
+                "cooling_minutes": round(cooling, 1), "cooling_kwh_heat": round(heat, 2),
+                "cooling_cost": round(heat * price, 2) if price is not None else None}
+
+    def standing_loss_per_day(self) -> dict:
+        """What standing loss costs per day (heat, electricity, money) with the learned loss rate."""
+        heat = self.params["loss"]["v"] * 24 * self.volume * model.CP
+        elec = heat / self.ledger.cop(self)
+        price = self.ledger.tank_price
+        if price is None:
+            p, _ = self.ledger.price_now(self)
+            price = p / self.ledger.cop(self) if p is not None else None
+        return {"kwh_heat": round(heat, 2), "kwh_electricity": round(elec, 2),
+                "cost": round(heat * price, 2) if price is not None else None,
+                "cost_year": round(heat * price * 365) if price is not None else None}
+
     def fill_percent(self) -> int | None:
         e, ref = self.current, self.ref_minutes()
         if e is None or not ref or ref <= 0:
