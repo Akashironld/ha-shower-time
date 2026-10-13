@@ -315,3 +315,52 @@ def test_learning_uses_only_showers_when_told_the_kind():
     told, _ = model.learn(p, [model.Row(**vars(r)) for r in rows], volume=200, shower_temp=38, since=0,
                           energy_by_hour=None, previous_cycle=None, month_of=month_of, draw_kind=lambda d: "coil")
     assert plain.samples["duration"] == 1 and told.samples["duration"] == 0
+
+
+# --------------------------------------------------------------------------- water meter, incomplete days, measured loss
+
+def test_water_meter_total_sees_a_steady_shower_flow():
+    w = insights.WaterSignal("total")
+    w.feed(0.0, 1000.0)                           # meter at rest
+    w.feed(30.0, 1001.0)                          # someone flushed: 1 L in 30 min, not a shower
+    assert not w.flowing(30.0)
+    for i in range(1, 6):                         # 8 L/min from minute 30
+        w.feed(30.0 + i, 1001.0 + 8 * i)
+    assert w.flowing(35.0) and w.active(35.0)
+    assert w.rose_at == 30.0                      # began at the reading before the first flow
+    assert not w.active(38.5)                     # meter stopped moving: water off
+    assert w.last_flow_at == 35.0
+
+
+def test_water_meter_short_sink_fill_is_not_steady():
+    w = insights.WaterSignal("total")
+    w.feed(0.0, 500.0)
+    w.feed(1.0, 508.0)                            # one minute at 8 L/min
+    assert w.flowing(1.0) and not w.active(1.0)
+
+
+def test_water_flow_sensor_rate():
+    w = insights.WaterSignal("rate")
+    w.feed(0.0, 0.0)
+    w.feed(1.0, 7.5)
+    assert w.flowing(1.5) and not w.active(1.5)
+    w.feed(3.5, 7.4)
+    assert w.active(3.5)
+    w.feed(4.0, 0.0)                              # tap closed
+    assert not w.flowing(4.0) and not w.active(4.0)
+    w.feed(5.0, 30.0)                             # garden hose: far more than a shower
+    assert not w.flowing(5.0)
+
+
+def test_incomplete_days_are_remembered():
+    h = insights.new_habits()
+    insights.mark_incomplete(h, ["2026-10-01", "2026-10-02"])
+    insights.mark_incomplete(h, ["2026-10-02"])
+    assert h["skip"] == ["2026-10-01", "2026-10-02"]
+    assert insights.is_incomplete(h, "2026-10-02") and not insights.is_incomplete(h, "2026-10-03")
+
+
+def test_loss_from_the_measured_coefficient():
+    # 2 W/K, tank at 55 °C in a 20 °C room: 70 W out of 200 L = 0.30 K/h
+    assert abs(insights.loss_k_per_h(2.0, 55.0, 200) - 70 / (200 * 1.163)) < 1e-9
+    assert insights.loss_k_per_h(None, 55.0, 200) is None

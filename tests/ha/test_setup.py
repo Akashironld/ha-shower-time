@@ -20,9 +20,16 @@ async def test_entities_are_created(hass: HomeAssistant, entry) -> None:
     for entity_id, state in (("binary_sensor.hot_water_hot_water_in_use", "off"),
                              ("binary_sensor.hot_water_showering", "off"),
                              ("sensor.hot_water_current_shower", "0"),
-                             ("sensor.hot_water_showers_today", "0"),
-                             ("sensor.hot_water_showers_total", "0")):
+                             ("sensor.hot_water_showers_today", "0")):
         assert hass.states.get(entity_id).state == state, entity_id
+    # niche sensors exist but are switched off for a new installation
+    from homeassistant.helpers import entity_registry as er
+    reg = er.async_get(hass)
+    for entity_id in ("sensor.hot_water_showers_total", "sensor.hot_water_showers_left", "sensor.hot_water_hot_water"):
+        ent = reg.async_get(entity_id)
+        assert ent is not None and ent.disabled_by is er.RegistryEntryDisabler.INTEGRATION, entity_id
+        assert hass.states.get(entity_id) is None
+    assert hass.states.get("sensor.hot_water_shower_time").attributes["problems"] == []
     assert hass.states.get("event.hot_water_shower") is not None
     assert hass.states.get("button.hot_water_learn_now") is not None
     assert hass.states.get("sensor.hot_water_tank_charge") is not None

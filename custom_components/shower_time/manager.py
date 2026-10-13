@@ -164,6 +164,9 @@ class ShowerTimeManager:
         # what kind of hot water use: followed live, confirmed by heat or a bathroom signal (insights.UseSession)
         self.bath: str | None = cfg.get(CONF_BATH) or None
         self.bath_signal: insights.BathSignal | None = None
+        self.water_signal: insights.WaterSignal | None = None   # a water meter, followed live too
+        self._water_factor = 1.0
+        self.alive_at: str | None = None            # saved every 10 minutes: shows when Home Assistant was off
         self.use: insights.UseSession | None = None
         self.use_stats: dict[str, list[float]] = {"shower": [], "tap": []}
         self.coil_events = 0                        # heat that left without water (reheat start, coil)
@@ -186,13 +189,20 @@ class ShowerTimeManager:
             self.loss = self._loss_status()
             self.legionella_at = stored.get("legionella_at")
             self.learn_failures = stored.get("learn_failures", 0)
+            self.alive_at = stored.get("alive_at")
             self.use_stats = stored.get("use_stats") or self.use_stats
             self.ledger.load(stored.get("ledger"))
             self.full_ref_avg = stored.get("full_ref_avg")
             self.full_ref_at = stored.get("full_ref_at")
             # a reference in minutes only (before 0.5.1) depends on the model it was computed with: rebuild it
             self.full_ref = stored.get("full_ref") if self.full_ref_avg is not None else None
-        watch = [e for e in (self.top, self.bottom, self.heating, self.bath) if e]   # the water meter is only used for learning
+        watch = [e for e in (self.top, self.bottom, self.heating, self.bath, self.water) if e]
+        if self.water:
+            kind = self._water_kind()
+            if kind is not None:
+                self.water_signal = insights.WaterSignal(kind[0])
+                self._water_factor = kind[1]
+        self._note_downtime()
         if self.bath:
             self.bath_signal = insights.BathSignal(self._bath_kind())
             self.entry.async_create_background_task(self.hass, self._seed_bath(), f"{DOMAIN}_bath")
@@ -268,6 +278,7 @@ class ShowerTimeManager:
             st = self.hass.states.get(self.heating)
             self.reheating = bool(st and str(st.state).lower() in self.heating_states)
         self._feed_bath()
+        self._feed_water()
         self._detect_use()
         self._track_legionella()
         if self.top_value is None:
@@ -304,7 +315,7 @@ class ShowerTimeManager:
                     minutes = max((now - prev[1]).total_seconds() / 60, 0.5)
                     # a lower threshold keeps a running use going, and the bathroom signal lowers the start one
                     threshold = (insights.FALL_CONTINUE if self.showering else
-                                 insights.FALL_START_BATH if self.bath_active() else insights.FALL_START)
+                                 insights.FALL_START_BATH if self.signal_active() else insights.FALL_START)
                     if (prev[0] - val) / minutes >= threshold:
                         falling = True
                         fall_from = prev[1] if fall_from is None else min(fall_from, prev[1])
@@ -315,10 +326,15 @@ class ShowerTimeManager:
         if falling and not self.reheating:
             if not self.showering:
                 self.ledger.session_start = fall_from or now        # the use began after the previous reading
-                rose = self.bath_signal.rose_at if self.bath_signal and self.bath_active() else None
-                if rose is not None and fall_from is not None:
-                    rose_at = datetime.fromtimestamp(rose * 60, timezone.utc)
-                    if fall_from <= rose_at <= now:                 # the bathroom says when it really began
+                # a steady water flow says when it really began (the tank reacts later); the bathroom signal only
+                # between the two readings, since a fan or light may be on for other reasons
+                water = self.water_signal.rose_at if self.water_signal is not None and self.water_active() else None
+                bath = self.bath_signal.rose_at if self.bath_signal is not None and self.bath_active() else None
+                if water is not None and now - timedelta(minutes=15) <= datetime.fromtimestamp(water * 60, timezone.utc) <= now:
+                    self.ledger.session_start = datetime.fromtimestamp(water * 60, timezone.utc)
+                elif bath is not None and fall_from is not None:
+                    rose_at = datetime.fromtimestamp(bath * 60, timezone.utc)
+                    if fall_from <= rose_at <= now:
                         self.ledger.session_start = rose_at
                 self.use = insights.UseSession(
                     start=self.ledger.session_start.timestamp() / 60,
@@ -347,11 +363,16 @@ class ShowerTimeManager:
         self.showering = False
         use, start = self.use, self.ledger.session_start
         self.use = None
-        if start and self._last_fall_at:
-            minutes = (self._last_fall_at - start).total_seconds() / 60
+        end = self._last_fall_at
+        if self.water_signal is not None and self.water_signal.last_flow_at is not None and start and end:
+            flowed = datetime.fromtimestamp(self.water_signal.last_flow_at * 60, timezone.utc)
+            if end < flowed <= dt_util.utcnow():          # the meter saw the water running until later
+                end = flowed
+        if start and end:
+            minutes = (end - start).total_seconds() / 60
             kind = use.final(minutes, MAX_SHOWER_MINUTES) if use else "tap"
             if kind == "shower":
-                entry = self.ledger.shower_ended(self, start, self._last_fall_at, self.estimate, min_minutes=2.0)
+                entry = self.ledger.shower_ended(self, start, end, self.estimate, min_minutes=2.0)
                 if entry is not None:
                     self._remember_use("shower", use.drawn)
                     self._fire("shower_ended", {**entry, "currency": self.ledger.currency or None})
@@ -405,6 +426,30 @@ class ShowerTimeManager:
     def bath_active(self) -> bool:
         return bool(self.bath_signal and self.bath_signal.active(dt_util.utcnow().timestamp() / 60))
 
+    def water_active(self) -> bool:
+        return bool(self.water_signal and self.water_signal.active(dt_util.utcnow().timestamp() / 60))
+
+    def signal_active(self) -> bool:
+        """Something besides the tank says a shower is going on: the bathroom, or a steady flow of water."""
+        return self.bath_active() or self.water_active()
+
+    def _water_kind(self) -> tuple[str, float] | None:
+        st = self.hass.states.get(self.water)
+        unit = str((st.attributes.get("unit_of_measurement") if st else "") or "").replace(" ", "").lower()
+        rates = {"l/min": 1.0, "l/h": 1 / 60, "m³/h": 1000 / 60, "m3/h": 1000 / 60, "gal/min": 3.785}
+        totals = {"l": 1.0, "m³": 1000.0, "m3": 1000.0, "gal": 3.785}
+        if unit in rates:
+            return "rate", rates[unit]
+        if unit in totals:
+            return "total", totals[unit]
+        return None
+
+    @callback
+    def _feed_water(self) -> None:
+        if self.water_signal is not None:
+            v = _num(self.hass.states.get(self.water))
+            self.water_signal.feed(dt_util.utcnow().timestamp() / 60, None if v is None else v * self._water_factor)
+
     def confirm_k(self) -> float:
         return insights.learn_confirm_k(self.use_stats["shower"], self.use_stats["tap"])
 
@@ -421,11 +466,17 @@ class ShowerTimeManager:
     def _classify_use(self) -> None:
         if not self.showering or self.use is None or self.estimate is None:
             return
-        if self.use.update(dt_util.utcnow().timestamp() / 60, self.estimate.average, self.bath_active(),
+        if self.water_active() and self.water_signal.rose_at is not None and self.ledger.session_start is not None:
+            began = datetime.fromtimestamp(self.water_signal.rose_at * 60, timezone.utc)
+            if began < self.ledger.session_start and dt_util.utcnow() - began <= timedelta(minutes=15):
+                self.ledger.session_start = began           # the water was running before the tank showed it
+                self.use.start = self.water_signal.rose_at
+        if self.use.update(dt_util.utcnow().timestamp() / 60, self.estimate.average, self.signal_active(),
                            self.confirm_k(), top=self.top_value, bottom=self.bottom_value, cold=self.estimate.cold):
             self._fire("shower_started", {"started": dt_util.as_local(self.ledger.session_start).isoformat(timespec="seconds"),
                                           "confirmed_after_minutes": self.use.confirmed_after,
-                                          "bathroom_signal": self.use.bath_seen})
+                                          "bathroom_signal": self.use.bath_seen,
+                                          "water_meter": self.water_active()})
 
     @callback
     def _midnight(self, _now) -> None:
@@ -450,7 +501,10 @@ class ShowerTimeManager:
             by_day.setdefault(t.date(), []).append((t.hour + t.minute / 60, e["minutes"]))
         changed = False
         while day < today:
-            insights.add_day(self.habits, day.weekday(), day.isoformat(), insights.minutes_by_hour(by_day.get(day, [])))
+            if insights.is_incomplete(self.habits, day.isoformat()):
+                self.habits["last_day"] = day.isoformat()          # showers may have been missed: skip the day
+            else:
+                insights.add_day(self.habits, day.weekday(), day.isoformat(), insights.minutes_by_hour(by_day.get(day, [])))
             day += timedelta(days=1)
             changed = True
         if changed:
@@ -466,8 +520,16 @@ class ShowerTimeManager:
             minutes = max(minutes, self.ref_minutes() or 0.0)
         now = dt_util.now()
         return insights.forecast(self.habits, weekday=now.weekday(), hour=now.hour + now.minute / 60,
-                                 minutes_now=minutes, per_minute=e.per_minute, loss_k_h=self.params["loss"]["v"],
+                                 minutes_now=minutes, per_minute=e.per_minute, loss_k_h=self.loss_k_h(),
                                  typical=self.params["duration"]["v"])
+
+    def loss_k_h(self) -> float:
+        """How fast the tank cools now: from its measured heat-loss coefficient (and how hot it is), else the
+        standing loss the model learned."""
+        t, b = self.top_value, self.bottom_value
+        mean = (t + b) / 2 if t is not None and b is not None else t
+        measured = insights.loss_k_per_h(self.loss.get("ua_recent"), mean, self.volume)
+        return measured if measured is not None else self.params["loss"]["v"]
 
     def forecast_attrs(self) -> dict | None:
         """Today's forecast with clock times instead of hours (for attributes and notifications)."""
@@ -546,14 +608,49 @@ class ShowerTimeManager:
             ir.async_delete_issue(self.hass, DOMAIN, self._issue_id(key))
 
     @callback
+    def _note_downtime(self) -> None:
+        """Home Assistant was off for a while: the days in between may miss showers, so the habits skip them."""
+        if self.alive_at:
+            last = dt_util.parse_datetime(self.alive_at)
+            if last is not None and dt_util.utcnow() - last > timedelta(hours=1):
+                day, today = dt_util.as_local(last).date(), dt_util.now().date()
+                days = []
+                while day <= today:
+                    days.append(day.isoformat())
+                    day += timedelta(days=1)
+                insights.mark_incomplete(self.habits, days)
+        self.alive_at = dt_util.utcnow().isoformat()
+
+    def problems(self) -> list[dict]:
+        """What needs attention, for the card: a possible leak, raised heat loss, legionella, a silent sensor."""
+        out = []
+        if self.loss.get("leak_like"):
+            out.append({"key": "leak"})
+        elif self.loss.get("raised"):
+            out.append({"key": "heat_loss", "ratio": self.loss.get("ratio")})
+        if self.legionella_overdue():
+            days = None
+            if self.legionella_at:
+                days = (dt_util.now() - datetime.fromisoformat(self.legionella_at)).days
+            out.append({"key": "legionella", "days": days})
+        now = dt_util.utcnow()
+        if any(now - t >= timedelta(hours=2) for t in self._missing_since.values()):
+            out.append({"key": "sensor"})
+        return out
+
+    @callback
     def _check_health(self, _now=None) -> None:
         now = dt_util.utcnow()
+        self.alive_at = now.isoformat()
+        self.request_save()
         for key, ent, val in (("top", self.top, self.top_value), ("bottom", self.bottom, self.bottom_value)):
             if not ent:
                 continue
             if val is None:
                 since = self._missing_since.setdefault(key, now)
                 self._issue(f"sensor_missing:{key}", now - since >= timedelta(hours=2), {"entity": ent})
+                if now - since >= timedelta(hours=2):        # showers may be missed today
+                    insights.mark_incomplete(self.habits, [dt_util.now().date().isoformat()])
             else:
                 self._missing_since.pop(key, None)
                 self._issue(f"sensor_missing:{key}", False)
@@ -859,7 +956,7 @@ class ShowerTimeManager:
             "habits": self.habits, "loss_samples": self.loss_samples, "drip_nights": self.drip_nights,
             "use_stats": self.use_stats, "loss_backfilled": self.loss_backfilled,
             "legionella_at": self.legionella_at,
-            "learn_failures": self.learn_failures,
+            "learn_failures": self.learn_failures, "alive_at": self.alive_at,
         }
 
     async def _first_learn(self, _now) -> None:

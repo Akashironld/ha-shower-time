@@ -59,7 +59,7 @@ async def test_a_shower_is_followed_and_logged(hass: HomeAssistant, entry, freez
     assert state(hass, IN_USE) == "off" and state(hass, SHOWERING) == "off"
     assert state(hass, "sensor.hot_water_last_shower") == "10"
     assert state(hass, "sensor.hot_water_showers_today") == "1"
-    assert state(hass, "sensor.hot_water_showers_total") == "1"
+    assert entry.runtime_data.ledger.totals["showers"] == 1
     ended = hass.states.get(EVENT).attributes
     assert ended["event_type"] == "shower_ended" and ended["minutes"] == 10.0
     assert float(state(hass, "sensor.hot_water_other_hot_water_today")) == 0

@@ -1,6 +1,6 @@
 /* Hot Water Shower Time card - served by the shower_time integration. */
 (() => {   // own scope: safe if the file is loaded twice as a classic script (legacy frontend + a manual resource)
-const CARD_VERSION = "0.10.0";
+const CARD_VERSION = "0.11.0";
 
 // Plain ES2017 on purpose (no ?. / ??): wall tablets often run an older browser that gets Home Assistant's
 // legacy frontend. "a ?? b" is written as nn(a, b).
@@ -17,7 +17,10 @@ const T = {
         sensed: "sensed", you: "you shower at",
         e_entity: "Sensor", e_title: "Title", e_compact: "Compact (e.g. a wall tablet)", e_tank: "Tank",
         e_temps: "Temperatures", e_split: "Since reheat", e_tiles: "Today / last shower / standing loss",
-        e_history: "Last 24 hours", e_footer: "Footer (flow, cold water, COP)" },
+        e_history: "Last 24 hours", e_footer: "Footer (flow, cold water, COP)", e_problems: "Warnings (leak, legionella)",
+        p_leak: "Possible dripping hot tap or leak", p_heat_loss: "The tank loses more heat than it used to",
+        p_legionella: "No legionella heat-up for {days} days", p_legionella_never: "No legionella heat-up seen",
+        p_sensor: "A tank sensor is not reporting" },
   nl: { title: "Douchetijd", min: "min", showers: "douches", shower1: "douche", water: "warm water",
         reheating: "WORDT OPGEWARMD", inuse: "DOUCHT NU", hotwater: "WARM WATER", filling: "BAD / EMMER", low: "BIJNA OP", shortat: "OP OM", fullat: "vol", selflearning: "zelflerend",
         learning: "leert", updated: "bijgewerkt", today: "Vandaag", lastshower: "Laatste douche", cooling: "Afkoeling",
@@ -28,12 +31,15 @@ const T = {
         sensed: "gemeten", you: "jullie douchen op",
         e_entity: "Sensor", e_title: "Titel", e_compact: "Compact (bijv. een wandtablet)", e_tank: "Vat",
         e_temps: "Temperaturen", e_split: "Sinds opwarmen", e_tiles: "Vandaag / laatste douche / afkoeling",
-        e_history: "Laatste 24 uur", e_footer: "Onderregel (debiet, koud water, COP)" },
+        e_history: "Laatste 24 uur", e_footer: "Onderregel (debiet, koud water, COP)", e_problems: "Waarschuwingen (lek, legionella)",
+        p_leak: "Mogelijk druppelende warmwaterkraan of lek", p_heat_loss: "Het vat verliest meer warmte dan vroeger",
+        p_legionella: "Al {days} dagen geen legionella-opwarming", p_legionella_never: "Geen legionella-opwarming gezien",
+        p_sensor: "Een vatsensor geeft geen waarde" },
 };
 
 // Parts of the card that can be hidden with show_<part>: false. "compact: true" hides all but the tank and the
 // minutes; a show_<part> set explicitly always wins (e.g. compact with show_tiles: true).
-const SECTIONS = ["tank", "temps", "split", "tiles", "history", "footer"];
+const SECTIONS = ["tank", "temps", "split", "tiles", "history", "footer", "problems"];   // problems stay in compact
 const COMPACT_HIDES = ["temps", "split", "tiles", "history", "footer"];
 const showDefault = (config, part) => !(config && config.compact && COMPACT_HIDES.indexOf(part) >= 0);
 const shows = (config, part) => {
@@ -192,6 +198,19 @@ class ShowerTimeCard extends HTMLElement {
     return `<span class="pill water"><ha-icon icon="mdi:water-outline"></ha-icon>${this._t("hotwater")}</span>`;
   }
 
+  // Things that need attention (a possible leak, raised heat loss, legionella, a silent sensor), from the integration.
+  _problems(a) {
+    const list = Array.isArray(a.problems) ? a.problems : [];
+    if (!list.length) return "";
+    const text = (p) => {
+      if (p.key === "legionella") {
+        return p.days === null || p.days === undefined ? this._t("p_legionella_never") : this._t("p_legionella").replace("{days}", p.days);
+      }
+      return this._t("p_" + p.key) || p.key;
+    };
+    return `<div class="problems">${list.map((p) => `<div class="problem"><ha-icon icon="mdi:alert-outline"></ha-icon><span>${text(p)}</span></div>`).join("")}</div>`;
+  }
+
   _money(v, a, lang) {
     if (v === null || v === undefined) return null;
     return `${a.currency || "\u20ac"} ${Number(v).toLocaleString(lang, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -284,7 +303,7 @@ class ShowerTimeCard extends HTMLElement {
           <div class="ico" style="--c:${color}"><ha-icon icon="mdi:shower-head"></ha-icon></div>
           <div class="ht"><div class="title">${this._config.title || this._t("title")}</div><div class="sub">${sub}</div></div>
           ${pill}
-        </div>
+        </div>${this._show("problems") ? this._problems(a) : ""}
         <div class="hero">
           ${this._show("tank") ? this._tank(a, pct) : ""}
           <div class="main">
@@ -346,6 +365,11 @@ class ShowerTimeCard extends HTMLElement {
       ha-card { padding: 16px; cursor: pointer; overflow: hidden; }
       .na { color: var(--secondary-text-color); }
       .head { display: flex; align-items: center; gap: 12px; }
+      .problems { margin-top: 12px; display: flex; flex-direction: column; gap: 4px; }
+      .problem { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; padding: 6px 10px;
+                 border-radius: 10px; color: var(--warning-color, #f5a524); background: rgba(245,165,36,.12);
+                 background: color-mix(in srgb, var(--warning-color, #f5a524) 12%, transparent); }
+      .problem ha-icon { --mdc-icon-size: 16px; flex: none; }
       .ico { width: 38px; height: 38px; border-radius: 12px; display: grid; place-items: center; flex: none;
              background: rgba(127,127,127,.14); background: color-mix(in srgb, var(--c) 16%, transparent); color: var(--c); }
       .ico ha-icon { --mdc-icon-size: 22px; }

@@ -1,0 +1,13 @@
+# Weekly pull requests to keep the test Home Assistant (requirements_test.txt) and the CI actions up to date;
+# the CI on each pull request shows whether the integration still works with the new Home Assistant.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly

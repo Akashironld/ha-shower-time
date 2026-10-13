@@ -41,7 +41,7 @@
           "energy_sensor": "Warmte-afgifte voor warm water (niet het stroomverbruik). Daarmee leert het model hoe je boiler gelaagd is.",
           "flow_source": "Optioneel. Met het debiet berekent de integratie op welke temperatuur jullie douchen en hoeveel liter dat is. Een watermeter meet het tijdens het douchen. Weet je het niet? Kies 'Zelf invullen' en meet het in een minuut met een emmer (zie hieronder), of kies het type douchekop.",
           "head_flow": "Alleen bij 'Zelf invullen'. Zo meet je het: zet de douche aan zoals je normaal doucht (zelfde temperatuur en kraanstand), houd een emmer onder de douchekop en kijk hoeveel seconden het duurt tot er 10 liter in zit. Debiet = 600 ÷ seconden: 50 s = 12 L/min, 75 s = 8 L/min, 100 s = 6 L/min. Geen emmer met maatstreepjes? Vang 10 seconden water op, meet de liters met een maatbeker en doe × 6. Meet twee keer en neem het gemiddelde.",
-          "water_sensor": "Alleen bij 'Watermeter'. Een sensor in L/min, of een teller in liter of m³.",
+          "water_sensor": "Een teller (liter, m³) of debietsensor (L/min). Herkent een douche live aan een stabiele waterstroom en maakt de duur exact; met 'Watermeter' hierboven meet hij ook het debiet van de douchekop.",
           "outdoor_sensor": "Optioneel. Leidingwater volgt de buitentemperatuur met weken vertraging; het model gebruikt het gemiddelde van de afgelopen 3 weken om de koudwatertemperatuur te schatten. Zonder deze sensor gebruikt het een tabel per maand.",
           "electricity_sensor": "Optioneel. Samen met de warmtesensor leert de integratie hiermee de COP voor warm water.",
           "cop": "Gebruikt als de COP niet geleerd kan worden: warmtepomp ongeveer 2–3,5, elektrische boiler 1,0.",
@@ -92,7 +92,8 @@
           "price_sensor": "Optioneel, kies je eigen sensor (bijvoorbeeld van je energieleverancier of evcc). Bij een dynamisch tarief telt de prijs op het moment dat het vat opwarmt, niet als je doucht.",
           "legionella_temperature": "Het hele vat (boven en onder) moet dit halen om als legionella-opwarming te tellen.",
           "legionella_days": "Aantal dagen zonder zo'n opwarming voordat 'Legionella-opwarming te lang geleden' aangaat. Standaard 8: een wekelijks programma plus een dag.",
-          "bathroom_sensor": "Herkent een douche binnen een minuut in plaats van na een paar minuten: een vochtigheidssensor in de badkamer (stijgend), het vermogen van de badkamerventilatie (harder dan normaal), of een ventilator, lamp of bewegingssensor die aangaat. Zonder dit onderscheidt de integratie douches van de afwas aan hoeveel warmte ze kosten; dat duurt een paar minuten."
+          "bathroom_sensor": "Herkent een douche binnen een minuut in plaats van na een paar minuten: een vochtigheidssensor in de badkamer (stijgend), het vermogen van de badkamerventilatie (harder dan normaal), of een ventilator, lamp of bewegingssensor die aangaat. Zonder dit onderscheidt de integratie douches van de afwas aan hoeveel warmte ze kosten; dat duurt een paar minuten.",
+          "water_sensor": "Een teller (liter, m³) of debietsensor (L/min). Herkent een douche live aan een stabiele waterstroom en maakt de duur exact; met 'Watermeter' hierboven meet hij ook het debiet van de douchekop."
         }
       }
     },

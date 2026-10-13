@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.11.0 — Water meter live, warnings on the card
+
+- **Water meter followed live**: a steady, shower-like flow (4–16 L/min for two minutes) while heat leaves the tank
+  recognises a shower in about half the time, and the meter's start and stop make the shower length exact. Cold
+  water alone (a toilet, the washing machine) is never a shower. Works with a meter total (L, m³) or a flow
+  sensor (L/min); the water meter option is no longer only for measuring the shower-head flow
+- **Warnings on the card**: a possible dripping tap or leak, raised heat loss, a late legionella heat-up or a tank
+  sensor that is not reporting show as a line under the title, also in compact mode (`show_problems: false` hides
+  them)
+- **Enough for today** uses the tank's measured heat loss (W/K, at its current temperature) when it is known
+- **Days with Home Assistant off** (or the tank sensors silent for two hours) are left out of the shower habits
+  instead of counting as days without showers
+- **Fewer entities for a new installation**: *Showers left*, *Hot water*, *Shower temperature*, *Shower time this
+  week*, *Shower time expected today*, *Showers total* and *Shower time total* start switched off (Settings →
+  Entities to switch them on). Existing installations keep them as they are
+- The dashboard resource is left alone when it is up to date (it was rewritten on every start)
+- Development: tests that run the integration inside a real test Home Assistant, Dependabot for the test Home
+  Assistant and the CI actions, and releases published automatically from this changelog when a tag is pushed
+
 ## v0.10.1
 
 - **Fix: v0.10.0 did not load on Home Assistant before mid-2025** (it imported a constant that older versions do

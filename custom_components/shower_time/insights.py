@@ -98,6 +98,20 @@ def add_day(habits: dict, weekday: int, day: str, per_hour: list[float]) -> dict
     return h
 
 
+def mark_incomplete(habits: dict, days: list[str]) -> None:
+    """Days on which showers could have been missed (Home Assistant was off, the tank sensors were silent):
+    they are left out of the habits instead of counting as days without showers."""
+    skip = habits.setdefault("skip", [])
+    for d in days:
+        if d not in skip:
+            skip.append(d)
+    habits["skip"] = sorted(skip)[-60:]
+
+
+def is_incomplete(habits: dict, day: str) -> bool:
+    return day in habits.get("skip", [])
+
+
 def expected_by_hour(habits: dict, weekday: int) -> list[float]:
     """Expected shower minutes per hour for a weekday: its own profile, shrunk towards all days."""
     wd = habits["weekday"][str(weekday)]
@@ -275,6 +289,74 @@ class BathSignal:
         return self.active_at is not None and t - self.active_at <= BATH_SIGNAL_MINUTES
 
 
+WATER_SHOWER_FLOW = (4.0, 16.0)   # L/min a shower draws from the mains (hot and cold together)
+WATER_STEADY_MINUTES = 2.0        # that long without a break = a shower, not a sink being filled
+WATER_GAP_MINUTES = 2.0           # a meter total that has not moved for this long: the water is off
+
+
+class WaterSignal:
+    """Live water flow from a water meter: a total in litres or a flow in L/min (converted by the caller).
+    Times are minutes. It knows when a steady, shower-like flow began and when water last flowed."""
+
+    def __init__(self, kind: str) -> None:
+        self.kind = kind                          # "total" or "rate"
+        self.last: tuple[float, float] | None = None
+        self.flow_since: float | None = None      # start of the current steady flow
+        self.last_flow_at: float | None = None    # last moment a shower-like flow was seen
+        self.flow = 0.0
+
+    def feed(self, t: float, value) -> None:
+        if value is None:
+            return
+        v = float(value)
+        if self.kind == "total":
+            prev, self.last = self.last, (t, v)
+            if prev is None or t <= prev[0] or v < prev[1]:
+                return                            # first reading, or the meter was reset
+            if v == prev[1]:
+                return
+            began = prev[0] if self.last_flow_at is None or prev[0] - self.last_flow_at > WATER_GAP_MINUTES else None
+            self._flow(t, (v - prev[1]) / (t - prev[0]), began)
+        else:
+            self._flow(t, v, None)
+
+    def _flow(self, t: float, flow: float, began: float | None) -> None:
+        lo, hi = WATER_SHOWER_FLOW
+        was, self.flow = self.flow, flow
+        shower_like = lo <= flow <= hi
+        if self.kind == "rate":
+            # a flow sensor only reports changes: its value holds until the next one
+            if shower_like:
+                if self.flow_since is None:
+                    self.flow_since = t
+                self.last_flow_at = t
+            else:
+                if lo <= was <= hi:
+                    self.last_flow_at = t            # the water ran until this moment
+                self.flow_since = None
+            return
+        # a meter total moves while water runs; a pause of WATER_GAP_MINUTES means the water was off
+        if shower_like:
+            if self.flow_since is None or (self.last_flow_at is not None and t - self.last_flow_at > WATER_GAP_MINUTES):
+                self.flow_since = began if began is not None else t
+            self.last_flow_at = t
+        else:
+            self.flow_since = None                   # a trickle or a garden hose: not a shower
+
+    def flowing(self, t: float) -> bool:
+        if self.kind == "rate":
+            return WATER_SHOWER_FLOW[0] <= self.flow <= WATER_SHOWER_FLOW[1]
+        return self.last_flow_at is not None and t - self.last_flow_at <= WATER_GAP_MINUTES
+
+    def active(self, t: float) -> bool:
+        """A steady, shower-like flow is going on (or just stopped)."""
+        return self.flowing(t) and self.flow_since is not None and t - self.flow_since >= WATER_STEADY_MINUTES
+
+    @property
+    def rose_at(self) -> float | None:
+        return self.flow_since
+
+
 def draw_heat(params: dict, rows: list[model.Row], start: int, minutes: int) -> float:
     """Tank average drop (K) of a draw found in the history: start against the lowest point in the 10 minutes
     after it, as the layers settle."""
@@ -438,6 +520,13 @@ def loss_status(samples: list[dict]) -> dict:
                 and n["bottom_rate"] / n["top_rate"] >= LEAK_BOTTOM_SHARE * sb) >= 3:
         out["leak_like"] = True
     return out
+
+
+def loss_k_per_h(ua: float | None, tank_mean: float | None, volume: float) -> float | None:
+    """How fast the tank cools now (K/h) from its measured heat-loss coefficient, or None when not measured."""
+    if ua is None or tank_mean is None or volume <= 0:
+        return None
+    return max(0.0, ua * (tank_mean - ROOM_TEMP) / (volume * model.CP * 1000))
 
 
 def heat_loss_watts(ua: float | None, tank_average: float | None) -> float | None:

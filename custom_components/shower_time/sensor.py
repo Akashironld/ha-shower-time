@@ -93,7 +93,9 @@ class MinutesSensor(ShowerTimeEntity, SensorEntity):
             "live_countdown": m.live_offset > 0,
             "low_threshold": m.low_minutes,
             "current_shower": m.ledger.running(m, dt_util.utcnow()),
-            "hot_water_use": {"kind": m.use_kind(), "bathroom_signal": m.bath_active()} if m.showering else None,
+            "hot_water_use": {"kind": m.use_kind(), "bathroom_signal": m.bath_active(),
+                              "water_meter": m.water_active()} if m.showering else None,
+            "problems": m.problems(),
             "other_today": m.ledger.other_today(),
             "forecast": m.forecast_attrs(),
             "learned_at": m.last_learn,
@@ -102,6 +104,7 @@ class MinutesSensor(ShowerTimeEntity, SensorEntity):
 
 
 class ShowersSensor(ShowerTimeEntity, SensorEntity):
+    _attr_entity_registry_enabled_default = False      # niche: switch it on when you want it
     # no state class: the shower minutes already have statistics; this is the same in whole showers
     _attr_icon = "mdi:shower"
 
@@ -115,6 +118,7 @@ class ShowersSensor(ShowerTimeEntity, SensorEntity):
 
 
 class LitresSensor(ShowerTimeEntity, SensorEntity):
+    _attr_entity_registry_enabled_default = False      # niche: switch it on when you want it
     _attr_device_class = SensorDeviceClass.VOLUME_STORAGE      # a stock that goes up and down, not a meter
     _attr_native_unit_of_measurement = UnitOfVolume.LITERS
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -154,6 +158,7 @@ class FillSensor(ShowerTimeEntity, SensorEntity):
 
 class ShowerTemperatureSensor(ShowerTimeEntity, SensorEntity):
     """The temperature you shower at: set by you, or sensed from the learned heat and a known shower-head flow."""
+    _attr_entity_registry_enabled_default = False      # niche: switch it on when you want it
 
     _attr_device_class = SensorDeviceClass.TEMPERATURE
     _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
@@ -261,6 +266,7 @@ class ShowerTimeTodaySensor(_LogSensor):
 
 
 class ShowerTimeWeekSensor(_LogSensor):
+    _attr_entity_registry_enabled_default = False      # niche: switch it on when you want it
     _attr_device_class = SensorDeviceClass.DURATION
     _attr_native_unit_of_measurement = UnitOfTime.MINUTES
     _attr_icon = "mdi:calendar-week"
@@ -363,6 +369,7 @@ class CurrentShowerSensor(_LogSensor):
 
 class ExpectedTodaySensor(ShowerTimeEntity, SensorEntity):
     """Shower minutes still expected today, from the household's habits; attributes: will the water last."""
+    _attr_entity_registry_enabled_default = False      # niche: switch it on when you want it
 
     _attr_device_class = SensorDeviceClass.DURATION
     _attr_native_unit_of_measurement = UnitOfTime.MINUTES
@@ -398,6 +405,7 @@ class _TotalSensor(_LogSensor):
 
 
 class ShowersTotalSensor(_TotalSensor):
+    _attr_entity_registry_enabled_default = False      # niche: switch it on when you want it
     _attr_icon = "mdi:counter"
     key = "showers"
 
@@ -406,6 +414,7 @@ class ShowersTotalSensor(_TotalSensor):
 
 
 class ShowerTimeTotalSensor(_TotalSensor):
+    _attr_entity_registry_enabled_default = False      # niche: switch it on when you want it
     _attr_device_class = SensorDeviceClass.DURATION
     _attr_native_unit_of_measurement = UnitOfTime.MINUTES
     _attr_suggested_display_precision = 0

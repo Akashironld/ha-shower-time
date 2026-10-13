@@ -123,8 +123,10 @@ heat they take: washing up a few tenths of a degree of the tank average, a showe
 a bath or bucket filled with hot water only goes about three times faster than a shower. So a use shows as
 **HOT WATER** on the card first, and becomes **SHOWERING** once enough heat has left at a shower's pace — a few
 minutes, depending on how often your sensors report. With a **bathroom signal** (a humidity sensor, a smart plug on
-the bathroom fan, or a fan or light that switches on) it is recognised within a minute. The threshold between your
-taps and your showers is learned per household.
+the bathroom fan, or a fan or light that switches on) it is recognised within a minute; with a **water meter** a
+steady, shower-like flow confirms it after two minutes and the meter's start and stop make the length exact (cold
+water alone, like a toilet, never counts). The threshold between your taps and your showers is learned per
+household.
 
 Water drawn from the tank is replaced by cold water at the bottom, so the top stays hot while you shower. When the
 top falls while the bottom is still warm — a heat pump starting a reheat, or heat taken out through the coil — no
@@ -232,7 +234,7 @@ The setup has two screens. Only the first one needs input; the second is filled 
 | **Electricity price sensor** | Cost per shower and per day (use an all-in price) | Only kWh, no money | your supplier, Nord Pool, Tibber, evcc… |
 | **Shower-head flow** | *Water meter*, *type* or *fill in myself*: litres and the temperature you shower at | Litres at a 38 °C reference | *I don't know* |
 | **Flow, filled in yourself** | Only with *Fill in myself* (bucket method above) | — | `7.2` |
-| **Water meter or flow sensor** | Only with *Water meter*: measures the shower-head flow | — | — |
+| **Water meter or flow sensor** | A shower is recognised quickly by a steady flow of water and its length is exact; with *Water meter* above it also measures the shower-head flow | — | a meter total in L or m³ |
 | **Bathroom signal** | A shower is recognised within a minute: bathroom humidity, the power of the bathroom fan, or a fan, light or motion sensor (suggested when one has *bathroom* in its name) | Recognised by its heat after a few minutes | a smart plug on the bathroom fan: `sensor.…_power` |
 
 ### Change it later
@@ -250,6 +252,9 @@ To start learning from scratch, remove the integration and add it again.
 - The card is added from the dashboard editor: search for **Shower time**.
 
 ## Entities
+
+A few niche sensors start switched off (*Showers left*, *Hot water*, *Shower temperature*, *Shower time this week*,
+*Shower time expected today*, *Showers total*, *Shower time total*); switch them on under Settings → Entities.
 
 | Entity | |
 | --- | --- |
@@ -299,6 +304,7 @@ Every part can be switched off, in the visual editor or in YAML:
 | `show_tiles` | tiles *Today*, *Last shower*, *Standing loss* | `true` |
 | `show_history` | last 24 hours (hover or touch to read values) | `true` |
 | `show_footer` | bottom line: flow, cold water, COP | `true` |
+| `show_problems` | warnings: possible leak, raised heat loss, late legionella heat-up, silent sensor (also in compact) | `true` |
 
 A `show_…` option you set yourself always wins, so you can start from `compact` and add a part back:
 
@@ -373,7 +379,12 @@ Two sets of tests run on every push:
 - `tests/` — the tank model, the forecast, heat loss and the shower/washing-up judgement, in plain Python
   (`pip install pytest && pytest tests --ignore=tests/ha`)
 - `tests/ha/` — the integration inside a real test Home Assistant: setup, a shower followed live, washing up,
-  repairs, the setup and options screens (`pip install -r requirements_test.txt && pytest`, Python 3.14)
+  the water meter, repairs, the setup and options screens (`pip install -r requirements_test.txt && pytest`,
+  Python 3.14)
+
+Dependabot proposes updates of the test Home Assistant and the CI actions every week. To release, add a section
+`## vX.Y.Z — title` to CHANGELOG.md, set the same version in `manifest.json` and push the tag `vX.Y.Z`: the release
+is published from the changelog.
 
 ## Limitations
 
