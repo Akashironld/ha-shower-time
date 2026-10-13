@@ -26,13 +26,13 @@ def tank(hass: HomeAssistant, top: float, bottom: float) -> None:
 
 
 @pytest.fixture(autouse=True)
-def auto_enable_custom_integrations(enable_custom_integrations):
-    """Allow Home Assistant to load the integration from custom_components."""
+def auto_enable_custom_integrations(recorder_mock, enable_custom_integrations):
+    """A recorder (it has to start before Home Assistant itself) and the integration from custom_components."""
     return
 
 
 @pytest.fixture
-async def deps(recorder_mock, hass: HomeAssistant) -> HomeAssistant:
+async def deps(hass: HomeAssistant) -> HomeAssistant:
     """Recorder (real, in memory), websocket API, and stand-ins for the web server and frontend."""
     hass.http = MagicMock()
     hass.http.async_register_static_paths = AsyncMock()
