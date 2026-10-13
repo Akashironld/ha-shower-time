@@ -68,17 +68,22 @@ def _num(state) -> float | None:
         return None
 
 
-def _temp(state) -> float | None:
-    """Tank temperature, or None for missing or impossible readings.
+def _temp(state, fahrenheit: bool = False) -> float | None:
+    """Tank temperature in °C, or None for missing or impossible readings.
 
     Some heat pumps report -1 or 0 when they have no reading (Weheat does during outages);
-    treating those as real temperatures would look like a shower followed by a reheat."""
+    treating those as real temperatures would look like a shower followed by a reheat.
+    History states are read without attributes, so the unit is passed in from the live entity."""
     v = _num(state)
-    return v if v is not None and 0.5 < v < 95 else None
+    if v is None:
+        return None
+    if fahrenheit:
+        v = (v - 32) * 5 / 9
+    return v if 0.5 < v < 95 else None
 
 
 class ShowerTimeManager:
-    """One per config entry (one tank)."""
+    """One per config entry (one tank). Works in °C internally; °F sensors are converted on the way in."""
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         self.hass = hass
@@ -174,6 +179,11 @@ class ShowerTimeManager:
         self._listeners.append(cb)
         return lambda: self._listeners.remove(cb)
 
+    def _is_f(self, entity: str | None) -> bool:
+        st = self.hass.states.get(entity) if entity else None
+        unit = str((st.attributes.get("unit_of_measurement") if st else "") or "").replace(" ", "")
+        return unit in ("°F", "F", "℉")
+
     # ------------------------------------------------------------------ shower-head flow
     def head_flow(self) -> tuple[float | None, str]:
         """Known shower-head flow (L/min) and where it comes from."""
@@ -195,8 +205,8 @@ class ShowerTimeManager:
 
     @callback
     def update(self) -> None:
-        self.top_value = _temp(self.hass.states.get(self.top))
-        self.bottom_value = _temp(self.hass.states.get(self.bottom)) if self.bottom else None
+        self.top_value = _temp(self.hass.states.get(self.top), self._is_f(self.top))
+        self.bottom_value = _temp(self.hass.states.get(self.bottom), self._is_f(self.bottom)) if self.bottom else None
         if self.heating:
             st = self.hass.states.get(self.heating)
             self.reheating = bool(st and str(st.state).lower() in self.heating_states)
@@ -445,7 +455,8 @@ class ShowerTimeManager:
             if ent:
                 res = await recorder.async_add_executor_job(
                     history.state_changes_during_period, self.hass, start, now, ent, True, False, None, True)
-                series[ent] = [(st.last_changed.timestamp(), _temp(st)) for st in res.get(ent, [])]
+                f = self._is_f(ent)
+                series[ent] = [(st.last_changed.timestamp(), _temp(st, f)) for st in res.get(ent, [])]
         head = self.head_flow()[0] if self.temp_mode == "auto" else None
 
         def compute() -> list[list[float]]:
@@ -599,8 +610,9 @@ class ShowerTimeManager:
             for st in series.get(ent, []):
                 out.append((int(st.last_changed.timestamp() // 60), conv(st)))
             return out
-        top = [x for x in prep(self.top, _temp) if x[1] is not None]           # skip invalid readings: hold the last good one
-        bottom = [x for x in prep(self.bottom, _temp) if x[1] is not None] if self.bottom else []
+        ft, fb = self._is_f(self.top), self._is_f(self.bottom)
+        top = [x for x in prep(self.top, lambda st: _temp(st, ft)) if x[1] is not None]   # skip invalid readings
+        bottom = [x for x in prep(self.bottom, lambda st: _temp(st, fb)) if x[1] is not None] if self.bottom else []
         heat = prep(self.heating, lambda s: str(s.state).lower() in self.heating_states) if self.heating else []
         idx = {"t": 0, "b": 0, "h": 0}
         cur = {"t": None, "b": None, "h": False}

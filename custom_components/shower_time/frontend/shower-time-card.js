@@ -1,5 +1,5 @@
 /* Hot Water Shower Time card — served by the shower_time integration. */
-const CARD_VERSION = "0.7.0";
+const CARD_VERSION = "0.8.0";
 
 const T = {
   en: { title: "Shower time", min: "min", shower: "of showering", empty: "empty", full: "full",
@@ -104,6 +104,22 @@ class ShowerTimeCard extends HTMLElement {
       <div class="axis"><span>${this._t("ago24")}</span><span>max ${fmt(peak[1])} ${this._t("min")}</span><span>${this._t("now")}</span></div></div>`;
   }
 
+  _deg(v) {                         // the integration works in °C; show °F when Home Assistant does
+    if (v === null || v === undefined || isNaN(v)) return v;
+    const f = this._hass && this._hass.config && this._hass.config.unit_system && this._hass.config.unit_system.temperature === "°F";
+    return f ? v * 9 / 5 + 32 : v;
+  }
+
+  _flow(f) {
+    const g = this._hass && this._hass.config && this._hass.config.unit_system && this._hass.config.unit_system.volume === "gal";
+    return g ? `${fmt(f / 3.785, 1)} gal/min` : `${fmt(f, 1)} L/min`;
+  }
+
+  _vol(l) {                         // litres, or US gallons when Home Assistant uses them
+    const g = this._hass && this._hass.config && this._hass.config.unit_system && this._hass.config.unit_system.volume === "gal";
+    return g ? `${fmt(l / 3.785)} gal` : `${fmt(l)} L`;
+  }
+
   _tank(a, color) {
     const hot = Math.max(0, Math.min(1, a.hot_fraction ?? 1));
     const H = 112, top = 8, inner = H - 4;
@@ -124,9 +140,9 @@ class ShowerTimeCard extends HTMLElement {
       </g>
       <rect x="16" y="${top + 10}" width="5" height="${H - 20}" rx="2.5" fill="#fff" opacity=".18"/>
       <rect x="10" y="${top}" width="44" height="${H}" rx="16" fill="none" stroke="var(--divider-color, rgba(127,127,127,.4))" stroke-width="2"/>
-      <text x="32" y="${top + 18}" class="tt">${fmt(a.top_temperature)}°</text>
+      <text x="32" y="${top + 18}" class="tt">${fmt(this._deg(a.top_temperature))}°</text>
       ${a.bottom_temperature !== null && a.bottom_temperature !== undefined
-        ? `<text x="32" y="${top + H - 8}" class="tt">${fmt(a.bottom_temperature)}°</text>` : ""}
+        ? `<text x="32" y="${top + H - 8}" class="tt">${fmt(this._deg(a.bottom_temperature))}°</text>` : ""}
     </svg>`;
   }
 
@@ -177,8 +193,8 @@ class ShowerTimeCard extends HTMLElement {
         </div>
         <div class="chips">
           <div class="chip"><ha-icon icon="mdi:shower"></ha-icon><b>${fmt(a.showers)} × ${fmt(typical)} ${this._t("min")}</b><span>${this._t("showers")}</span></div>
-          <div class="chip"><ha-icon icon="mdi:water"></ha-icon><b>≈ ${fmt(a.litres)} L</b><span>${this._t("water")} ${a.shower_temperature_mode === "reference" ? "≈" : ""}${fmt(a.shower_temperature, a.shower_temperature_mode === "sensed" ? 1 : 0)}°</span></div>
-          <div class="chip"><ha-icon icon="mdi:snowflake-thermometer"></ha-icon><b>≈ ${fmt(a.cold_water)}°</b><span>${this._t("cold")}</span></div>
+          <div class="chip"><ha-icon icon="mdi:water"></ha-icon><b>≈ ${this._vol(a.litres)}</b><span>${this._t("water")} ${a.shower_temperature_mode === "reference" ? "≈" : ""}${fmt(this._deg(a.shower_temperature), a.shower_temperature_mode === "sensed" ? 1 : 0)}°</span></div>
+          <div class="chip"><ha-icon icon="mdi:snowflake-thermometer"></ha-icon><b>≈ ${fmt(this._deg(a.cold_water))}°</b><span>${this._t("cold")}</span></div>
         </div>
         ${this._config.show_history ? `
           <div class="hist"><div class="hl">${this._t("last24")}</div>${this._sparkline(300, 44, color)}</div>` : ""}
@@ -251,12 +267,12 @@ class ShowerTimeCard extends HTMLElement {
   _foot(a) {
     const src = (this._t("src") || {})[a.head_flow_source];
     if (a.shower_temperature_mode === "sensed") {
-      return `${this._t("you")} ≈ ${fmt(a.shower_temperature, 1)} °C (${this._t("sensed")}) · ${this._t("head")} ${fmt(a.flow, 1)} L/min${src ? ` (${src})` : ""}`;
+      return `${this._t("you")} ≈ ${fmt(this._deg(a.shower_temperature), 1)}° (${this._t("sensed")}) · ${this._t("head")} ${this._flow(a.flow)}${src ? ` (${src})` : ""}`;
     }
     if (a.shower_temperature_mode === "fixed") {
-      return `${this._t("learned")}: ≈ ${fmt(a.flow, 1)} L/min · ${fmt(a.shower_temperature)} °C (${this._t("set")}) · ${fmt(a.observations)} obs.`;
+      return `${this._t("learned")}: ≈ ${this._flow(a.flow)} · ${fmt(this._deg(a.shower_temperature))}° (${this._t("set")}) · ${fmt(a.observations)} obs.`;
     }
-    return `${this._t("learned")}: ≈ ${fmt(a.flow, 1)} L/min ${this._t("water")} ≈ 38 °C · ${fmt(a.observations)} obs.`;
+    return `${this._t("learned")}: ≈ ${this._flow(a.flow)} ${this._t("water")} ≈ ${fmt(this._deg(38))}° · ${fmt(a.observations)} obs.`;
   }
 
   _style() {
