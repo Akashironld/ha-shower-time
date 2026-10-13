@@ -1,16 +1,16 @@
 /* Hot Water Shower Time card — served by the shower_time integration. */
-const CARD_VERSION = "0.5.0";
+const CARD_VERSION = "0.6.0";
 
 const T = {
   en: { title: "Shower time", min: "min", shower: "of showering", empty: "empty", full: "full",
-        showers: "showers", water: "hot water", cold: "cold water", reheating: "REHEATING",
+        showers: "showers", water: "hot water", cold: "cold water", reheating: "REHEATING", inuse: "IN USE",
         low: "ALMOST GONE", learned: "Learned", updated: "updated", learning: "learning from your showers",
         selflearning: "self-learning", last24: "last 24 h", ago24: "-24 h", now: "now", yesterday: "yesterday", nohist: "no history yet — fills in by itself", unavailable: "Not available",
         pick: "Pick the 'Shower time' sensor of the Hot Water Shower Time integration.",
         sensed: "sensed", set: "set", head: "shower head", you: "you shower at",
         src: { water_meter: "water meter", manual: "set", eco: "water-saving", normal: "normal", rain: "rain shower" } },
   nl: { title: "Douchetijd", min: "min", shower: "douchen", empty: "leeg", full: "vol",
-        showers: "douchebeurten", water: "warm water", cold: "koud water", reheating: "WORDT OPGEWARMD",
+        showers: "douchebeurten", water: "warm water", cold: "koud water", reheating: "WORDT OPGEWARMD", inuse: "DOUCHT NU",
         low: "BIJNA OP", learned: "Geleerd", updated: "bijgewerkt", learning: "leert van jullie douches",
         selflearning: "zelflerend", last24: "laatste 24 u", ago24: "-24 u", now: "nu", yesterday: "gisteren", nohist: "nog geen historie — vult zich vanzelf", unavailable: "Niet beschikbaar",
         pick: "Kies de sensor 'Douchetijd' van de integratie Hot Water Shower Time.",
@@ -149,7 +149,8 @@ class ShowerTimeCard extends HTMLElement {
     const pct = Math.max(0, Math.min(100, pctNum));
     const pctUsual = pct;
     const pill = a.reheating ? `<span class="pill heat">${this._t("reheating")}</span>`
-      : (m < low ? `<span class="pill low">${this._t("low")}</span>` : "");
+      : (m < low ? `<span class="pill low">${this._t("low")}</span>`
+        : (a.showering ? `<span class="pill use">${this._t("inuse")}</span>` : ""));
     const title = this._config.title || this._t("title");
     const learned = a.learned_at ? new Date(a.learned_at) : null;
     const when = learned ? learned.toLocaleDateString(hass.locale?.language || undefined, { day: "numeric", month: "short" }) : null;
@@ -250,6 +251,8 @@ class ShowerTimeCard extends HTMLElement {
       .sub { font-size: 12px; color: var(--secondary-text-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       .pill { font-size: 10px; font-weight: 700; letter-spacing: .04em; padding: 4px 8px; border-radius: 999px; flex: none; }
       .pill.heat { background: color-mix(in srgb, #a855f7 18%, transparent); color: #a855f7; }
+      .pill.use { background: color-mix(in srgb, #3d8fe6 20%, transparent); color: #3d8fe6; animation: pulse 1.6s ease-in-out infinite; }
+      @keyframes pulse { 50% { opacity: .55; } }
       .pill.low { background: color-mix(in srgb, var(--error-color, #e5484d) 18%, transparent); color: var(--error-color, #e5484d); }
       .body { display: flex; align-items: center; gap: 14px; }
       .tank { width: 70px; flex: none; }

@@ -12,7 +12,7 @@ from .entity import ShowerTimeEntity
 async def async_setup_entry(hass: HomeAssistant, entry: ShowerTimeConfigEntry,
                             async_add_entities: AddEntitiesCallback) -> None:
     m = entry.runtime_data
-    ents = [LowSensor(m)]
+    ents = [LowSensor(m), ShoweringSensor(m)]
     if m.heating:
         ents.append(ReheatingSensor(m))
     async_add_entities(ents)
@@ -28,7 +28,7 @@ class LowSensor(ShowerTimeEntity, BinarySensorEntity):
 
     @property
     def is_on(self):
-        e = self.manager.estimate
+        e = self.manager.current
         return None if e is None else e.minutes < self.manager.low_minutes
 
 
@@ -46,3 +46,21 @@ class ReheatingSensor(ShowerTimeEntity, BinarySensorEntity):
     @property
     def is_on(self):
         return self.manager.reheating
+
+
+class ShoweringSensor(ShowerTimeEntity, BinarySensorEntity):
+    """Hot water is being used right now (cold water coming into the tank), not while reheating."""
+
+    _attr_device_class = BinarySensorDeviceClass.RUNNING
+    _attr_icon = "mdi:shower-head"
+
+    def __init__(self, manager) -> None:
+        super().__init__(manager, "showering")
+
+    @property
+    def available(self) -> bool:
+        return True
+
+    @property
+    def is_on(self):
+        return self.manager.showering

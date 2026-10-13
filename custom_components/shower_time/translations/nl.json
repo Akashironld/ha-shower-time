@@ -133,6 +133,9 @@
       },
       "reheating": {
         "name": "Opwarmen"
+      },
+      "showering": {
+        "name": "Douche in gebruik"
       }
     },
     "button": {

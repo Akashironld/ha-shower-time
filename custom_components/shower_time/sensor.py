@@ -30,12 +30,12 @@ class MinutesSensor(ShowerTimeEntity, SensorEntity):
 
     @property
     def native_value(self):
-        e = self.manager.estimate
+        e = self.manager.current
         return round(e.minutes) if e else None
 
     @property
     def extra_state_attributes(self):
-        m, e = self.manager, self.manager.estimate
+        m, e = self.manager, self.manager.current
         if e is None:
             return None
         p = m.params
@@ -59,6 +59,8 @@ class MinutesSensor(ShowerTimeEntity, SensorEntity):
             "shower_temperature_mode": ("fixed" if m.temp_mode == "fixed" else ("sensed" if e.shower_temp_sensed else "reference")),
             "head_flow_source": m.head_flow()[1],
             "reheating": m.reheating,
+            "showering": m.showering,
+            "live_countdown": m.live_offset > 0,
             "low_threshold": m.low_minutes,
             "learned_at": m.last_learn,
             "observations": p["flow"]["n"],
@@ -74,7 +76,7 @@ class ShowersSensor(ShowerTimeEntity, SensorEntity):
 
     @property
     def native_value(self):
-        e = self.manager.estimate
+        e = self.manager.current
         return e.showers if e else None
 
 
@@ -90,7 +92,7 @@ class LitresSensor(ShowerTimeEntity, SensorEntity):
 
     @property
     def native_value(self):
-        e = self.manager.estimate
+        e = self.manager.current
         return round(e.liters) if e else None
 
 
@@ -130,12 +132,12 @@ class ShowerTemperatureSensor(ShowerTimeEntity, SensorEntity):
 
     @property
     def available(self) -> bool:
-        e = self.manager.estimate
+        e = self.manager.current
         return e is not None and (self.manager.temp_mode == "fixed" or e.shower_temp_sensed)
 
     @property
     def native_value(self):
-        e = self.manager.estimate
+        e = self.manager.current
         return round(e.shower_temp, 1) if e else None
 
     @property

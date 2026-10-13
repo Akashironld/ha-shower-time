@@ -133,6 +133,9 @@
       },
       "reheating": {
         "name": "Reheating"
+      },
+      "showering": {
+        "name": "Hot water in use"
       }
     },
     "button": {

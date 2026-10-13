@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime, timedelta, timezone
 import logging
 import math
@@ -15,6 +15,7 @@ from homeassistant.helpers.event import (
     async_call_later,
     async_track_state_change_event,
     async_track_time_change,
+    async_track_time_interval,
 )
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
@@ -115,6 +116,12 @@ class ShowerTimeManager:
         self.full_ref_at: str | None = None
         self._ref_low: float | None = None
         self._last_minutes: float | None = None
+        # live countdown while someone showers (sensors only report every few minutes)
+        self.showering = False
+        self.live_offset = 0.0                      # minutes counted down since the last real reading
+        self._sensor_at = None                      # utc time of the last top/bottom reading
+        self._last_fall_at = None                   # utc time of the last reading that showed hot water use
+        self._prev = {}                             # entity -> (value, utc time)
         self._listeners: list[Callable[[], None]] = []
         self._unsubs: list[CALLBACK_TYPE] = []
 
@@ -136,6 +143,7 @@ class ShowerTimeManager:
         watch = [e for e in (self.top, self.bottom, self.heating) if e]   # the water meter is only used for learning
         self._unsubs.append(async_track_state_change_event(self.hass, watch, self._state_changed))
         self._unsubs.append(async_track_time_change(self.hass, self._nightly, hour=LEARN_HOUR, minute=LEARN_MINUTE, second=0))
+        self._unsubs.append(async_track_time_interval(self.hass, self._tick, timedelta(seconds=15)))
         if not self.last_learn:                 # first install: learn from what the recorder already has
             self._unsubs.append(async_call_later(self.hass, 120, self._first_learn))
         if self.outdoor:
@@ -180,6 +188,7 @@ class ShowerTimeManager:
         if self.heating:
             st = self.hass.states.get(self.heating)
             self.reheating = bool(st and str(st.state).lower() in self.heating_states)
+        self._detect_use()
         if self.top_value is None:
             self.estimate = None
         else:
@@ -191,6 +200,55 @@ class ShowerTimeManager:
             self._track_full(self.estimate.minutes)
         for cb in list(self._listeners):
             cb()
+
+    # ------------------------------------------------------------------ live countdown
+    LIVE_MAX_MINUTES = 4.0          # never count down further than this without a new reading
+    USE_TIMEOUT = timedelta(minutes=5)
+
+    @callback
+    def _detect_use(self) -> None:
+        """A new tank reading that falls fast (cold water coming in) while not reheating = hot water in use."""
+        now = dt_util.utcnow()
+        changed, falling = False, False
+        for ent, val in ((self.top, self.top_value), (self.bottom, self.bottom_value)):
+            if not ent or val is None:
+                continue
+            prev = self._prev.get(ent)
+            if prev is None or prev[0] != val:
+                changed = True
+                if prev is not None:
+                    minutes = max((now - prev[1]).total_seconds() / 60, 0.5)
+                    if (prev[0] - val) / minutes >= 0.3:
+                        falling = True
+                self._prev[ent] = (val, now)
+        if not changed:
+            return
+        self._sensor_at, self.live_offset = now, 0.0       # a real reading: start from the sensors again
+        if falling and not self.reheating:
+            self.showering, self._last_fall_at = True, now
+        elif self.showering and (self.reheating or self._last_fall_at is None or now - self._last_fall_at > self.USE_TIMEOUT):
+            self.showering = False
+
+    @callback
+    def _tick(self, _now) -> None:
+        if not self.showering or self.estimate is None:
+            return
+        now = dt_util.utcnow()
+        if self.reheating or (self._last_fall_at and now - self._last_fall_at > self.USE_TIMEOUT):
+            self.showering, self.live_offset = False, 0.0
+        elif self._sensor_at is not None:
+            self.live_offset = min(self.LIVE_MAX_MINUTES, (now - self._sensor_at).total_seconds() / 60)
+        for cb in list(self._listeners):
+            cb()
+
+    @property
+    def current(self) -> model.Estimate | None:
+        """The estimate as shown: the last real one minus the live countdown while showering."""
+        e = self.estimate
+        if e is None or self.live_offset <= 0:
+            return e
+        m = max(0.0, e.minutes - self.live_offset)
+        return replace(e, minutes=m, liters=m * e.flow, showers=int(m // self.params["duration"]["v"]))
 
     # ------------------------------------------------------------------ outdoor running average (cold water)
     def _ema_on(self, day: str) -> float | None:
@@ -292,7 +350,7 @@ class ShowerTimeManager:
         return self.full_ref
 
     def fill_percent(self) -> int | None:
-        e, ref = self.estimate, self.ref_minutes()
+        e, ref = self.current, self.ref_minutes()
         if e is None or not ref or ref <= 0:
             return None
         return int(round(max(0.0, min(100.0, 100 * e.minutes / ref))))
