@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.9.3
+
+- Public release: install with one click via the **Open in HACS** button in the README, and add the integration
+  with the **Add integration** button
+- CI: HACS validation runs without exceptions (the logo ships in the integration's own `brand` folder)
+
 ## v0.9.2 — first release
 
 How long can I still shower? A self-learning hot water model for Home Assistant, with its own dashboard card.
