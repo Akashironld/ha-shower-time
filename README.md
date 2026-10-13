@@ -1,3 +1,5 @@
+<img src="assets/icon.png" alt="Hot Water Shower Time" width="128" align="right">
+
 # Hot Water Shower Time
 
 **How long can I still shower?** A self-learning Home Assistant integration that turns the temperature sensors
