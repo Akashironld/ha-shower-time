@@ -1,0 +1,60 @@
+blueprint:
+  name: Hot water will not last today
+  description: >-
+    Warn when, judging by your usual showers, the hot water will run out later today unless the tank is reheated
+    (Hot Water Shower Time "Enough for today"). Available after a week of learning.
+  domain: automation
+  source_url: https://github.com/Akashironld/ha-shower-time/blob/main/blueprints/automation/shower_time/not_enough_today.yaml
+  author: Akashironld
+  homeassistant:
+    min_version: "2025.1.0"
+  input:
+    enough_sensor:
+      name: Enough for today sensor
+      description: The "Enough for today" binary sensor of Hot Water Shower Time.
+      selector:
+        entity:
+          filter:
+            - integration: shower_time
+              domain: binary_sensor
+    notify_device:
+      name: Phone
+      description: A phone with the Home Assistant app.
+      selector:
+        device:
+          filter:
+            - integration: mobile_app
+    extra_actions:
+      name: Your own actions (optional)
+      description: For example start a reheat of your heat pump or boiler.
+      default: []
+      selector:
+        action:
+
+mode: single
+max_exceeded: silent
+
+triggers:
+  - trigger: state
+    entity_id: !input enough_sensor
+    from: "on"
+    to: "off"
+    for:
+      minutes: 15
+
+variables:
+  enough_sensor: !input enough_sensor
+  runs_out: "{{ state_attr(enough_sensor, 'runs_out_at') }}"
+  when: "{{ as_timestamp(runs_out) | timestamp_custom('%H:%M') if runs_out else '' }}"
+  expected: "{{ state_attr(enough_sensor, 'expected_minutes') | round(0) | int(0) }}"
+
+actions:
+  - device_id: !input notify_device
+    domain: mobile_app
+    type: notify
+    title: Hot water
+    message: >-
+      Not enough hot water for today's usual showers ({{ expected }} min still expected){% if when %}: it runs out
+      around {{ when }}{% endif %}, unless the tank is reheated.
+  - choose: []
+    default: !input extra_actions

@@ -1,0 +1,311 @@
+"""Smart extras on top of the tank model: shower habits, today's forecast and heat-loss (leak) watching.
+
+Pure Python (no Home Assistant imports) so it can be unit tested on its own, like model.py.
+
+Shower habits
+    Every completed day adds the minutes showered per hour to a running profile, per weekday and for all
+    days together. The weekday profile counts for more as more of those weekdays have been seen.
+
+Today's forecast
+    The minutes still expected today (from the habits) against what the tank holds now, minus the standing
+    loss until then. Without a reheat in between: when would the hot water run out?
+
+Heat loss (insulation and leaks)
+    Each day the longest quiet stretch (no reheating, no hot water use, layers settled) while the tank is
+    evenly hot gives a clean measurement of how fast it cools. Divided by how much warmer the tank is than the
+    room, that is the tank's heat-loss coefficient (W/K): it does not depend on how hot the tank happens to be,
+    so it can be compared over months. Against the household's own baseline it shows worsening insulation; and
+    a dripping hot tap shows as the bottom cooling much faster than the top (cold water trickling in), while in
+    a healthy tank they cool together.
+"""
+from __future__ import annotations
+
+import statistics
+from dataclasses import asdict, dataclass
+from datetime import date
+
+try:
+    from . import model
+except ImportError:          # imported on its own by the tests
+    import model
+
+HOURS = 24
+HABIT_READY_DAYS = 7          # forecast only after a week of observed days
+WEEKDAY_WEIGHT = 3.0          # pseudo-days: how fast the weekday profile takes over from the all-days profile
+
+ROOM_TEMP = 20.0              # assumed temperature around the tank (°C)
+EVEN_SPREAD = 3.0             # top and bottom within this many K = evenly hot tank
+QUIET_MIN_HOURS = 3.0
+TAP_DROP = 0.3                # K fall of the bottom within TAP_MINUTES = someone used hot water
+TAP_MINUTES = 3               # a tap drops the bottom quickly; a drip lowers it slowly and steadily
+SETTLE_MINUTES = 60           # after a reheat or hot water use the layers keep moving for a while
+MIN_ABOVE_ROOM = 15.0         # the tank must be at least this much warmer than the room to measure
+LOSS_BASELINE_DAYS = 7        # measurements needed before the trend is judged
+LOSS_RECENT = 4               # the last measurements compared with the baseline
+LOSS_KEEP = 120
+LOSS_RATIO = 1.4              # coefficient this much above the baseline, in 3 of the last 4 = raised heat loss
+LEAK_BOTTOM_SHARE = 2.0       # bottom/top cooling ratio this many times the usual one = leak-like
+DRIP_START, DRIP_END = 1, 5   # night hours checked for a steady drip
+DRIP_EXCESS = 0.4             # K the bottom falls more than the top within one such hour
+DRIP_NIGHTS = 3               # nights out of the last 4 with a steady drip in most hours = leak-like
+
+# --------------------------------------------------------------------------- shower habits
+
+def new_habits() -> dict:
+    return {"days": 0, "all": [0.0] * HOURS, "weekday": {str(d): {"days": 0, "hours": [0.0] * HOURS} for d in range(7)},
+            "last_day": None}
+
+
+def minutes_by_hour(showers: list[tuple[float, float]]) -> list[float]:
+    """[(start hour as a float, e.g. 21.5, minutes), ...] for one day -> minutes per hour, spread over the
+    hours a shower actually covers (a shower from 21:50 to 22:05 counts in both)."""
+    out = [0.0] * HOURS
+    for start, minutes in showers:
+        t, left = start, minutes
+        while left > 1e-9 and t < HOURS:
+            h = int(t)
+            take = min(left, (h + 1 - t) * 60)
+            out[h] += take
+            left -= take
+            t = h + 1
+    return out
+
+
+def add_day(habits: dict, weekday: int, day: str, per_hour: list[float]) -> dict:
+    """Add one completed day. Running mean for the first weeks, then an average over roughly the last
+    6 weeks per weekday and 3 weeks for all days, so changed habits (school holidays) come through."""
+    h = habits
+    wd = h["weekday"][str(weekday)]
+    a_all = 1 / min(h["days"] + 1, 21)
+    a_wd = 1 / min(wd["days"] + 1, 6)
+    h["all"] = [round(o + a_all * (x - o), 3) for o, x in zip(h["all"], per_hour)]
+    wd["hours"] = [round(o + a_wd * (x - o), 3) for o, x in zip(wd["hours"], per_hour)]
+    h["days"] += 1
+    wd["days"] += 1
+    h["last_day"] = day
+    return h
+
+
+def expected_by_hour(habits: dict, weekday: int) -> list[float]:
+    """Expected shower minutes per hour for a weekday: its own profile, shrunk towards all days."""
+    wd = habits["weekday"][str(weekday)]
+    k = wd["days"] / (wd["days"] + WEEKDAY_WEIGHT)
+    return [k * w + (1 - k) * a for w, a in zip(wd["hours"], habits["all"])]
+
+
+def habits_ready(habits: dict) -> bool:
+    return habits["days"] >= HABIT_READY_DAYS
+
+
+# --------------------------------------------------------------------------- today's forecast
+
+@dataclass
+class Forecast:
+    expected_minutes: float          # shower minutes still expected today
+    available_minutes: float         # what the tank holds by the end of the day without a reheat
+    enough: bool
+    runs_out_at: float | None        # hour of the day (e.g. 21.4) the hot water is expected to run out
+    next_shower_at: float | None     # hours from now until the next likely shower (today or tomorrow)
+
+    def as_dict(self) -> dict:
+        return asdict(self)
+
+
+def forecast(habits: dict, *, weekday: int, hour: float, minutes_now: float, per_minute: float, loss_k_h: float,
+             typical: float) -> Forecast:
+    """``hour`` is the current local time as a float (21.5 = 21:30); ``per_minute`` the tank average drop per
+    shower minute (K/min) and ``loss_k_h`` the standing loss (K/h), both from the model."""
+    today = expected_by_hour(habits, weekday)
+    tomorrow = expected_by_hour(habits, (weekday + 1) % 7)
+    lost_per_hour = loss_k_h / per_minute if per_minute > 0 else 0.0     # shower minutes lost per hour of waiting
+    left, need, runs_out = minutes_now, 0.0, None
+    for h in range(int(hour), HOURS):
+        begin = hour if h == int(hour) else float(h)
+        frac = h + 1 - begin
+        rate = lost_per_hour + today[h]          # minutes per hour leaving the tank in this hour
+        need += today[h] * frac
+        if runs_out is None and today[h] > 0 and left - rate * frac < 0:
+            runs_out = begin + max(0.0, left) / rate       # the tank no longer covers the expected use
+        left -= rate * frac
+    available = minutes_now - lost_per_hour * (HOURS - hour)
+    nxt = None
+    threshold = max(1.0, 0.3 * typical)
+    for i, minutes in enumerate([today[h] for h in range(int(hour) + 1, HOURS)] + tomorrow):
+        if minutes >= threshold:
+            nxt = round(int(hour) + 1 + i - hour, 2)
+            break
+    return Forecast(expected_minutes=round(need, 1), available_minutes=round(max(0.0, available), 1),
+                    enough=runs_out is None, runs_out_at=round(runs_out, 2) if runs_out is not None else None,
+                    next_shower_at=nxt)
+
+
+# --------------------------------------------------------------------------- heat loss
+
+@dataclass
+class LossSample:
+    day: str                   # local date the quiet stretch ended on
+    hours: float
+    average: float             # mean tank temperature during the stretch (°C)
+    rate: float                # K/h the tank cooled
+    top_rate: float            # K/h
+    bottom_rate: float | None  # K/h
+    ua: float                  # heat-loss coefficient, W/K
+
+    def as_dict(self) -> dict:
+        return asdict(self)
+
+
+def _slope(points: list[tuple[float, float]]) -> float:
+    """Least-squares slope (per hour) of [(hours, value), ...]."""
+    n = len(points)
+    mx = sum(p[0] for p in points) / n
+    my = sum(p[1] for p in points) / n
+    den = sum((p[0] - mx) ** 2 for p in points)
+    return sum((p[0] - mx) * (p[1] - my) for p in points) / den if den else 0.0
+
+
+def quiet_stretches(rows: list[model.Row]) -> list[list[model.Row]]:
+    """Stretches of at least QUIET_MIN_HOURS without reheating or hot water use (the bottom falling TAP_DROP
+    within TAP_MINUTES), starting SETTLE_MINUTES after either of those, and only while the tank is evenly hot
+    (with a bottom sensor)."""
+    out, seg, quiet_from = [], [], None
+
+    def close():
+        if seg and (seg[-1].minute - seg[0].minute) / 60 >= QUIET_MIN_HOURS:
+            out.append(list(seg))
+    for i, r in enumerate(rows):
+        busy = r.heating
+        if not busy and r.bottom is not None:
+            for j in range(i - 1, -1, -1):
+                if r.minute - rows[j].minute > TAP_MINUTES:
+                    break
+                if rows[j].bottom is not None and rows[j].bottom - r.bottom >= TAP_DROP:
+                    busy = True
+                    break
+        if busy:
+            quiet_from = r.minute + SETTLE_MINUTES
+        uneven = r.bottom is not None and r.top - r.bottom > EVEN_SPREAD and not seg
+        if busy or (quiet_from is not None and r.minute < quiet_from) or uneven or (seg and r.minute - seg[-1].minute > 5):
+            close()
+            seg = []
+            if not (busy or uneven or (quiet_from is not None and r.minute < quiet_from)):
+                seg = [r]
+        else:
+            seg.append(r)
+    close()
+    return out
+
+
+def loss_samples(rows: list[model.Row], *, volume: float, local_of) -> list[LossSample]:
+    """The longest clean cooling stretch per day, as a heat-loss coefficient (W/K).
+
+    ``local_of(minute)`` returns the local datetime of a row minute. Evenly hot tank: its mean temperature is
+    simply the mean of top and bottom, without any assumption about layers."""
+    best: dict[str, list[model.Row]] = {}
+    for seg in quiet_stretches(rows):
+        day = local_of(seg[-1].minute).date().isoformat()
+        if day not in best or len(seg) > len(best[day]):
+            best[day] = seg
+    out = []
+    for day, seg in sorted(best.items()):
+        x = [(r.minute - seg[0].minute) / 60 for r in seg]
+        mean = [(r.top + r.bottom) / 2 if r.bottom is not None else r.top for r in seg]
+        average = sum(mean) / len(mean)
+        if average - ROOM_TEMP < MIN_ABOVE_ROOM:
+            continue
+        rate = -_slope(list(zip(x, mean)))
+        top_rate = -_slope([(h, r.top) for h, r in zip(x, seg)])
+        bots = [(h, r.bottom) for h, r in zip(x, seg) if r.bottom is not None]
+        bottom_rate = -_slope(bots) if len(bots) >= 2 else None
+        ua = rate * volume * model.CP * 1000 / (average - ROOM_TEMP)
+        out.append(LossSample(day=day, hours=round(x[-1], 1), average=round(average, 1), rate=round(rate, 3),
+                              top_rate=round(top_rate, 3),
+                              bottom_rate=round(bottom_rate, 3) if bottom_rate is not None else None, ua=round(ua, 3)))
+    return out
+
+
+def merge_samples(stored: list[dict], new: list[LossSample]) -> list[dict]:
+    by = {n["day"]: n for n in stored}
+    for n in new:                       # a day seen again in a shorter window keeps its longest stretch
+        if n.day not in by or n.hours >= by[n.day]["hours"]:
+            by[n.day] = n.as_dict()
+    return [by[k] for k in sorted(by)][-LOSS_KEEP:]
+
+
+def loss_status(samples: list[dict]) -> dict:
+    """The last LOSS_RECENT measurements against the household's own baseline (the ones before them).
+
+    raised: the heat-loss coefficient is clearly higher than it used to be (LOSS_RATIO, in at least 3 of the
+    last LOSS_RECENT). leak_like: the bottom cools much faster relative to the top than it used to, the pattern
+    of cold water trickling in through a dripping hot tap."""
+    out = {"ready": False, "raised": False, "leak_like": False, "ua_baseline": None, "ua_recent": None,
+           "ratio": None, "measurements": len(samples), "bottom_share_baseline": None, "bottom_share_recent": None}
+    if not samples:
+        return out
+    out["ua_recent"] = round(statistics.median(n["ua"] for n in samples[-LOSS_RECENT:]), 3)
+    if len(samples) < LOSS_BASELINE_DAYS + LOSS_RECENT:
+        return out
+    recent, base = samples[-LOSS_RECENT:], samples[:-LOSS_RECENT][-60:]
+    b = statistics.median(n["ua"] for n in base)
+    out.update(ready=True, ua_baseline=round(b, 3), ratio=round(out["ua_recent"] / b, 2) if b > 0 else None)
+    out["raised"] = b > 0 and sum(1 for n in recent if n["ua"] >= b * LOSS_RATIO) >= 3
+
+    def share(ns):
+        vals = [n["bottom_rate"] / n["top_rate"] for n in ns
+                if n.get("bottom_rate") is not None and n["top_rate"] > 0.05]
+        return statistics.median(vals) if vals else None
+    sb, sr = share(base), share(recent)
+    out["bottom_share_baseline"] = round(sb, 2) if sb is not None else None
+    out["bottom_share_recent"] = round(sr, 2) if sr is not None else None
+    if sb is not None and sr is not None and sb > 0 and sr >= LEAK_BOTTOM_SHARE * sb and \
+            sum(1 for n in recent if n.get("bottom_rate") is not None and n["top_rate"] > 0.05
+                and n["bottom_rate"] / n["top_rate"] >= LEAK_BOTTOM_SHARE * sb) >= 3:
+        out["leak_like"] = True
+    return out
+
+
+def heat_loss_watts(ua: float | None, tank_average: float | None) -> float | None:
+    """What the tank loses right now, from the coefficient and how much warmer it is than the room."""
+    if ua is None or tank_average is None:
+        return None
+    return round(max(0.0, ua * (tank_average - ROOM_TEMP)), 1)
+
+
+def night_drips(rows: list[model.Row], *, local_of) -> list[dict]:
+    """Per night: in how many of the hours DRIP_START-DRIP_END the bottom fell steadily faster than the top.
+
+    A healthy tank at night: top and bottom cool together, or the bottom even warms (heat sinking down). A tap
+    used at night: a quick drop within a few minutes. A dripping hot tap or a leak: cold water keeps coming in,
+    so hour after hour the bottom falls more than the top, without a quick drop. Works from the first night."""
+    hours: dict[tuple[str, int], list[model.Row]] = {}
+    for r in rows:
+        if r.bottom is None:
+            continue
+        t = local_of(r.minute)
+        if DRIP_START <= t.hour < DRIP_END:
+            hours.setdefault((t.date().isoformat(), t.hour), []).append(r)
+    nights: dict[str, dict] = {}
+    for (day, _h), rs in sorted(hours.items()):
+        n = nights.setdefault(day, {"day": day, "hours": 0, "dripping": 0})
+        if len(rs) < 50 or any(r.heating for r in rs):
+            continue
+        n["hours"] += 1
+        drop_b, drop_t = rs[0].bottom - rs[-1].bottom, rs[0].top - rs[-1].top
+        quick = max((rs[i - TAP_MINUTES].bottom - rs[i].bottom for i in range(TAP_MINUTES, len(rs))), default=0.0)
+        if drop_b - drop_t >= DRIP_EXCESS and quick < 0.5 * drop_b:
+            n["dripping"] += 1
+    return [n for n in nights.values() if n["hours"] >= 3]
+
+
+def merge_drips(stored: list[dict], new: list[dict]) -> list[dict]:
+    by = {n["day"]: n for n in stored}
+    for n in new:
+        if n["day"] not in by or n["hours"] >= by[n["day"]]["hours"]:
+            by[n["day"]] = n
+    return [by[k] for k in sorted(by)][-30:]
+
+
+def drip_status(nights: list[dict]) -> bool:
+    """A steady drip in most measured hours, in DRIP_NIGHTS of the last 4 nights."""
+    recent = nights[-4:]
+    return sum(1 for n in recent if n["hours"] and n["dripping"] >= max(2, n["hours"] - 1)) >= DRIP_NIGHTS

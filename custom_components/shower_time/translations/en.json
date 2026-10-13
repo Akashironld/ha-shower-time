@@ -76,7 +76,9 @@
           "outdoor_sensor": "Outdoor temperature sensor",
           "electricity_sensor": "Electricity used for hot water (energy sensor)",
           "cop": "COP for hot water",
-          "price_sensor": "Electricity price sensor"
+          "price_sensor": "Electricity price sensor",
+          "legionella_temperature": "Legionella temperature",
+          "legionella_days": "Legionella: warn after"
         },
         "data_description": {
           "flow_source": "Optional. With the flow the integration works out the temperature you shower at and the litres. A water meter measures it while you shower. Don't know it? Choose 'Fill in myself' and measure it in a minute with a bucket (see below), or pick the type of shower head.",
@@ -84,7 +86,9 @@
           "outdoor_sensor": "Optional. Mains water follows the outdoor temperature with a delay of weeks; the model uses a 3-week average of it to estimate the cold water temperature. Without it, a monthly table is used.",
           "electricity_sensor": "Optional. Together with the heat sensor this lets the integration learn the COP for hot water.",
           "cop": "Used when the COP cannot be learned: heat pump about 2–3.5, electric boiler 1.0.",
-          "price_sensor": "Optional, choose your own (e.g. from your energy supplier or evcc). With dynamic tariffs the price at the moment the tank is reheated is used, not when you shower."
+          "price_sensor": "Optional, choose your own (e.g. from your energy supplier or evcc). With dynamic tariffs the price at the moment the tank is reheated is used, not when you shower.",
+          "legionella_temperature": "The whole tank (top and bottom) must reach this to count as a legionella heat-up.",
+          "legionella_days": "Days without such a heat-up before 'Legionella heat-up overdue' turns on. Default 8: a weekly program plus a day."
         }
       }
     },
@@ -155,6 +159,30 @@
       },
       "reheat_ready": {
         "name": "Full again at"
+      },
+      "current_shower": {
+        "name": "Current shower"
+      },
+      "expected_today": {
+        "name": "Shower time expected today"
+      },
+      "showers_total": {
+        "name": "Showers total"
+      },
+      "shower_time_total": {
+        "name": "Shower time total"
+      },
+      "shower_energy_total": {
+        "name": "Shower electricity total"
+      },
+      "shower_cost_total": {
+        "name": "Shower cost total"
+      },
+      "legionella_last": {
+        "name": "Last legionella heat-up"
+      },
+      "heat_loss": {
+        "name": "Tank heat loss"
       }
     },
     "binary_sensor": {
@@ -166,12 +194,56 @@
       },
       "showering": {
         "name": "Hot water in use"
+      },
+      "enough_today": {
+        "name": "Enough for today"
+      },
+      "legionella_overdue": {
+        "name": "Legionella heat-up overdue"
+      },
+      "heat_loss_raised": {
+        "name": "Raised heat loss"
       }
     },
     "button": {
       "learn_now": {
         "name": "Learn now"
       }
+    },
+    "event": {
+      "shower": {
+        "name": "Shower",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "shower_started": "Shower started",
+              "shower_ended": "Shower ended"
+            }
+          }
+        }
+      }
+    }
+  },
+  "issues": {
+    "sensor_missing": {
+      "title": "{name}: tank sensor not reporting",
+      "description": "The sensor {entity} has had no valid reading for more than two hours, so the shower time cannot be calculated. Check the device or integration that provides it."
+    },
+    "sensors_swapped": {
+      "title": "{name}: top and bottom sensor swapped?",
+      "description": "For more than six hours the bottom sensor has been more than 5 °C warmer than the top sensor while the tank was not being reheated. In a hot water tank the top is the warmest. Check whether {top} (top) and {bottom} (bottom) are the right way round in the integration's settings."
+    },
+    "learning_failed": {
+      "title": "{name}: learning keeps failing",
+      "description": "Learning from the history has failed {nights} nights in a row; the integration keeps using what it learned before. Please open an issue on GitHub and attach the diagnostics download."
+    },
+    "heat_loss_raised": {
+      "title": "{name}: the tank loses more heat than it used to",
+      "description": "The tank's heat-loss coefficient is {recent} W/K, against {baseline} W/K before ({ratio}× as much). Possible causes: insulation that came loose or got wet, a pipe or circulation that now loses heat, or the tank standing somewhere colder. Showers and reheats are not counted: this is measured only while nothing happens."
+    },
+    "possible_leak": {
+      "title": "{name}: possible dripping hot tap or leak",
+      "description": "While nobody used hot water, the bottom of the tank kept cooling faster than the top, night after night: the pattern of cold water slowly coming in. This points at a dripping hot water tap, a leaking thermostatic valve or safety valve, or a leak in the hot water pipes. Check the taps and the pipes.\n\nHeat-loss coefficient now: {recent} W/K (usual: {baseline} W/K)."
     }
   }
 }

@@ -1,6 +1,6 @@
 /* Hot Water Shower Time card - served by the shower_time integration. */
 (() => {   // own scope: safe if the file is loaded twice as a classic script (legacy frontend + a manual resource)
-const CARD_VERSION = "0.9.6";
+const CARD_VERSION = "0.10.0";
 
 // Plain ES2017 on purpose (no ?. / ??): wall tablets often run an older browser that gets Home Assistant's
 // legacy frontend. "a ?? b" is written as nn(a, b).
@@ -8,7 +8,7 @@ const nn = (a, b) => (a === null || a === undefined ? b : a);
 
 const T = {
   en: { title: "Shower time", min: "min", showers: "showers", shower1: "shower", water: "hot water",
-        reheating: "REHEATING", inuse: "IN USE", low: "ALMOST GONE", fullat: "full", selflearning: "self-learning",
+        reheating: "REHEATING", inuse: "IN USE", low: "ALMOST GONE", shortat: "EMPTY BY", fullat: "full", selflearning: "self-learning",
         learning: "learning", updated: "updated", today: "Today", lastshower: "Last shower", cooling: "Standing loss",
         perday: "per day", peryear: "/ year", none: "none yet", since: "Since reheat", left: "left", showered: "showered",
         cooled: "cooled", last24: "Last 24 hours", max: "max", ago24: "-24 h", now: "now", yesterday: "yesterday",
@@ -19,7 +19,7 @@ const T = {
         e_temps: "Temperatures", e_split: "Since reheat", e_tiles: "Today / last shower / standing loss",
         e_history: "Last 24 hours", e_footer: "Footer (flow, cold water, COP)" },
   nl: { title: "Douchetijd", min: "min", showers: "douches", shower1: "douche", water: "warm water",
-        reheating: "WORDT OPGEWARMD", inuse: "DOUCHT NU", low: "BIJNA OP", fullat: "vol", selflearning: "zelflerend",
+        reheating: "WORDT OPGEWARMD", inuse: "DOUCHT NU", low: "BIJNA OP", shortat: "OP OM", fullat: "vol", selflearning: "zelflerend",
         learning: "leert", updated: "bijgewerkt", today: "Vandaag", lastshower: "Laatste douche", cooling: "Afkoeling",
         perday: "per dag", peryear: "/ jaar", none: "nog geen", since: "Sinds opwarmen", left: "over", showered: "gedoucht",
         cooled: "afgekoeld", last24: "Laatste 24 uur", max: "max", ago24: "-24 u", now: "nu", yesterday: "gisteren",
@@ -252,7 +252,9 @@ class ShowerTimeCard extends HTMLElement {
     const fullAt = hhmm(a.reheat_full_at);
     const pill = a.reheating ? `<span class="pill heat"><ha-icon icon="mdi:fire"></ha-icon>${this._t("reheating")}${fullAt ? ` \u00b7 ${this._t("fullat")} ${fullAt}` : ""}</span>`
       : (m < low ? `<span class="pill low"><ha-icon icon="mdi:alert"></ha-icon>${this._t("low")}</span>`
-        : (a.showering ? `<span class="pill use"><ha-icon icon="mdi:shower-head"></ha-icon>${this._t("inuse")}</span>` : ""));
+        : (a.showering ? `<span class="pill use"><ha-icon icon="mdi:shower-head"></ha-icon>${this._t("inuse")}${a.current_shower ? ` \u00b7 ${Math.floor(a.current_shower.minutes)} ${this._t("min")}` : ""}</span>`
+          : (a.forecast && a.forecast.enough === false && a.forecast.runs_out_at
+            ? `<span class="pill short"><ha-icon icon="mdi:clock-alert-outline"></ha-icon>${this._t("shortat")} ${hhmm(a.forecast.runs_out_at)}</span>` : "")));
     const learned = a.learned_at ? new Date(a.learned_at) : null;
     const sub = learned ? `${this._t("selflearning")} \u00b7 ${this._t("updated")} ${learned.toLocaleDateString(lang, { day: "numeric", month: "short" })}`
       : `${this._t("selflearning")} \u00b7 ${this._t("learning")}`;
@@ -339,6 +341,7 @@ class ShowerTimeCard extends HTMLElement {
       .pill ha-icon { --mdc-icon-size: 14px; }
       .pill.heat { background: rgba(168,85,247,.16); background: color-mix(in srgb, #a855f7 16%, transparent); color: #a855f7; }
       .pill.use { background: rgba(61,143,230,.16); background: color-mix(in srgb, #3d8fe6 16%, transparent); color: #3d8fe6; animation: pulse 1.6s ease-in-out infinite; }
+      .pill.short { background: rgba(245,165,36,.16); background: color-mix(in srgb, var(--warning-color, #f5a524) 16%, transparent); color: var(--warning-color, #f5a524); }
       .pill.low { background: rgba(229,72,77,.16); background: color-mix(in srgb, var(--error-color, #e5484d) 16%, transparent); color: var(--error-color, #e5484d); }
       @keyframes pulse { 50% { opacity: .55; } }
       .hero { display: flex; align-items: center; gap: 18px; margin-top: 14px; }

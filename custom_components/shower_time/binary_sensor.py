@@ -12,7 +12,7 @@ from .entity import ShowerTimeEntity
 async def async_setup_entry(hass: HomeAssistant, entry: ShowerTimeConfigEntry,
                             async_add_entities: AddEntitiesCallback) -> None:
     m = entry.runtime_data
-    ents = [LowSensor(m), ShoweringSensor(m)]
+    ents = [LowSensor(m), ShoweringSensor(m), EnoughTodaySensor(m), LegionellaOverdueSensor(m), HeatLossRaisedSensor(m)]
     if m.heating:
         ents.append(ReheatingSensor(m))
     async_add_entities(ents)
@@ -64,3 +64,69 @@ class ShoweringSensor(ShowerTimeEntity, BinarySensorEntity):
     @property
     def is_on(self):
         return self.manager.showering
+
+
+class EnoughTodaySensor(ShowerTimeEntity, BinarySensorEntity):
+    """On when the hot water is expected to last for today's usual showers (without a reheat in between)."""
+
+    _attr_icon = "mdi:water-check"
+
+    def __init__(self, manager) -> None:
+        super().__init__(manager, "enough_today")
+
+    @property
+    def available(self) -> bool:
+        return self.manager.forecast() is not None
+
+    @property
+    def is_on(self):
+        f = self.manager.forecast()
+        return f.enough if f else None
+
+    @property
+    def extra_state_attributes(self):
+        return self.manager.forecast_attrs()
+
+
+class LegionellaOverdueSensor(ShowerTimeEntity, BinarySensorEntity):
+    """On (problem) when the whole tank has not been at the legionella temperature for too long."""
+
+    _attr_device_class = BinarySensorDeviceClass.PROBLEM
+    _attr_icon = "mdi:bacteria-outline"
+
+    def __init__(self, manager) -> None:
+        super().__init__(manager, "legionella_overdue")
+
+    @property
+    def available(self) -> bool:
+        return self.manager.legionella_overdue() is not None
+
+    @property
+    def is_on(self):
+        return self.manager.legionella_overdue()
+
+
+class HeatLossRaisedSensor(ShowerTimeEntity, BinarySensorEntity):
+    """On (problem) when the tank loses clearly more heat than it used to: insulation or a dripping hot tap."""
+
+    _attr_device_class = BinarySensorDeviceClass.PROBLEM
+    _attr_icon = "mdi:water-alert-outline"
+
+    def __init__(self, manager) -> None:
+        super().__init__(manager, "heat_loss_raised")
+
+    @property
+    def available(self) -> bool:                # a drip is seen from the first nights, the trend after ~11 days
+        st = self.manager.loss
+        return bool(st.get("ready") or self.manager.drip_nights)
+
+    @property
+    def is_on(self):
+        st = self.manager.loss
+        return bool(st.get("raised") or st.get("leak_like"))
+
+    @property
+    def extra_state_attributes(self):
+        st = self.manager.loss
+        return {"leak_like": st.get("leak_like"), "steady_drip_at_night": st.get("dripping"), "ratio": st.get("ratio"),
+                "coefficient_w_per_k": st.get("ua_recent"), "baseline_w_per_k": st.get("ua_baseline")}

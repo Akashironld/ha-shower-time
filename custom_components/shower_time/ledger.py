@@ -55,11 +55,15 @@ class ShowerLedger:
         self._avg_prev: float | None = None
         self.eta_full: datetime | None = None
         self.eta_one: datetime | None = None
+        # running totals for Home Assistant's long-term statistics (showers logged live, never reset)
+        self.totals: dict = {"showers": 0, "minutes": 0.0, "heat_kwh": 0.0, "electricity_kwh": 0.0, "cost": 0.0}
+        self.covered_from: str | None = None        # local date from which the log holds every shower
 
     # ------------------------------------------------------------------ persistence
     def to_dict(self) -> dict:
         return {"log": self.log, "tank_price": self.tank_price, "currency": self.currency,
-                "cop_learned": self.cop_learned, "backfilled": self.backfilled}
+                "cop_learned": self.cop_learned, "backfilled": self.backfilled, "totals": self.totals,
+                "covered_from": self.covered_from}
 
     def load(self, d: dict | None) -> None:
         if not d:
@@ -69,6 +73,11 @@ class ShowerLedger:
         self.currency = d.get("currency", "")
         self.cop_learned = d.get("cop_learned")
         self.backfilled = d.get("backfilled", False)
+        self.totals.update(d.get("totals") or {})
+        self.covered_from = d.get("covered_from")
+        if self.covered_from is None and self.log:   # logs from before 0.10: complete from the day after the first one
+            first = datetime.fromisoformat(self.log[0]["start"]).date()
+            self.covered_from = (first + timedelta(days=1)).isoformat()
 
     # ------------------------------------------------------------------ COP and price
     def cop(self, m: ShowerTimeManager) -> float:
@@ -132,14 +141,31 @@ class ShowerLedger:
         need = est.empty_at + m.params["duration"]["v"] * est.per_minute
         self.eta_one = now if est.average >= need else now + timedelta(minutes=(need - est.average) / rate["v"])
 
-    def shower_ended(self, m: ShowerTimeManager, start: datetime, end: datetime, est: model.Estimate | None) -> None:
+    def shower_ended(self, m: ShowerTimeManager, start: datetime, end: datetime,
+                     est: model.Estimate | None) -> dict | None:
+        """Log a finished shower; returns the log entry, or None when it was too short or too long."""
         minutes = (end - start).total_seconds() / 60
         if not MIN_SHOWER_MINUTES <= minutes <= MAX_SHOWER_MINUTES or est is None:
-            return
-        self._add(m, start, minutes, est.per_minute, self.tank_price, "live")
+            return None
+        return self._add(m, start, minutes, est.per_minute, self.tank_price, "live")
+
+    def running(self, m: ShowerTimeManager, now: datetime) -> dict | None:
+        """The shower going on right now: minutes so far and what that hot water cost."""
+        if not m.showering or self.session_start is None or m.estimate is None:
+            return None
+        minutes = max(0.0, (now - self.session_start).total_seconds() / 60)
+        heat = model.shower_heat_kwh(m.estimate.per_minute, minutes, m.volume)
+        price = self.tank_price
+        if price is None:
+            p, _ = self.price_now(m)
+            price = p / self.cop(m) if p is not None else None
+        return {"started": dt_util.as_local(self.session_start).isoformat(timespec="seconds"),
+                "minutes": round(minutes, 1), "heat_kwh": round(heat, 2),
+                "electricity_kwh": round(heat / self.cop(m), 2),
+                "cost": round(heat * price, 2) if price is not None else None}
 
     def _add(self, m: ShowerTimeManager, start: datetime, minutes: float, per_minute: float,
-             heat_price: float | None, source: str) -> None:
+             heat_price: float | None, source: str) -> dict:
         heat = model.shower_heat_kwh(per_minute, minutes, m.volume)
         cop = self.cop(m)
         if heat_price is None:
@@ -153,7 +179,16 @@ class ShowerLedger:
         self.log.sort(key=lambda e: e["start"])
         cutoff = (dt_util.now() - timedelta(days=LOG_DAYS)).isoformat()
         self.log = [e for e in self.log if e["start"] >= cutoff]
+        if source == "live":
+            t = self.totals
+            t["showers"] += 1
+            t["minutes"] = round(t["minutes"] + entry["minutes"], 1)
+            t["heat_kwh"] = round(t["heat_kwh"] + entry["heat_kwh"], 3)
+            t["electricity_kwh"] = round(t["electricity_kwh"] + entry["electricity_kwh"], 3)
+            if entry["cost"] is not None:
+                t["cost"] = round(t["cost"] + entry["cost"], 2)
         m.request_save()
+        return entry
 
     # ------------------------------------------------------------------ summaries
     def _since(self, since: datetime) -> list[dict]:
@@ -233,4 +268,6 @@ class ShowerLedger:
             self._add(m, start, d.minutes, est.per_minute, heat_price, "history")
         self.currency = cur or self.currency
         self.backfilled = True
+        first = dt_util.as_local(datetime.fromtimestamp(rows[0].minute * 60, timezone.utc))
+        self.covered_from = (first + timedelta(days=1)).date().isoformat()   # first complete day
         m.request_save()

@@ -11,13 +11,13 @@ from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import config_validation as cv, entity_registry as er
+from homeassistant.helpers import config_validation as cv, entity_registry as er, issue_registry as ir
 from homeassistant.helpers.typing import ConfigType
 
 from .const import CARD_URL, DOMAIN
 from .manager import ShowerTimeManager
 
-PLATFORMS = [Platform.SENSOR, Platform.BINARY_SENSOR, Platform.BUTTON]
+PLATFORMS = [Platform.SENSOR, Platform.BINARY_SENSOR, Platform.BUTTON, Platform.EVENT]
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 type ShowerTimeConfigEntry = ConfigEntry[ShowerTimeManager]
@@ -69,6 +69,12 @@ async def async_unload_entry(hass: HomeAssistant, entry: ShowerTimeConfigEntry) 
     if ok:
         await entry.runtime_data.async_stop()
     return ok
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: ShowerTimeConfigEntry) -> None:
+    """Removed by the user: take its repair notices with it."""
+    for issue_id in [i for (d, i) in ir.async_get(hass).issues if d == DOMAIN and i.startswith(entry.entry_id)]:
+        ir.async_delete_issue(hass, DOMAIN, issue_id)
 
 
 async def _reload(hass: HomeAssistant, entry: ShowerTimeConfigEntry) -> None:

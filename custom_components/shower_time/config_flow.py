@@ -26,12 +26,16 @@ from .const import (
     TEMP_MODES,
     CONF_HEATING,
     CONF_HEATING_STATES,
+    CONF_LEGIONELLA_DAYS,
+    CONF_LEGIONELLA_TEMP,
     CONF_LOW,
     CONF_PROFILE,
     CONF_SHOWER_TEMP,
     CONF_TOP,
     CONF_VOLUME,
     DEFAULT_HEATING_STATES,
+    DEFAULT_LEGIONELLA_DAYS,
+    DEFAULT_LEGIONELLA_TEMP,
     DEFAULT_LOW,
     DEFAULT_NAME,
     DEFAULT_SHOWER_TEMP,
@@ -52,6 +56,8 @@ HEAD_FLOW = selector.NumberSelector(selector.NumberSelectorConfig(min=2, max=25,
 WATER = selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor", device_class=["water", "volume_flow_rate", "volume"]))
 PRICE = selector.EntitySelector(selector.EntitySelectorConfig(domain=["sensor", "input_number"]))
 COP = selector.NumberSelector(selector.NumberSelectorConfig(min=0.8, max=6, step=0.1, mode=selector.NumberSelectorMode.BOX))
+LEGIONELLA_TEMP = selector.NumberSelector(selector.NumberSelectorConfig(min=50, max=75, step=1, unit_of_measurement="°C", mode=selector.NumberSelectorMode.BOX))
+LEGIONELLA_DAYS = selector.NumberSelector(selector.NumberSelectorConfig(min=1, max=60, step=1, unit_of_measurement="d", mode=selector.NumberSelectorMode.BOX))
 PROFILE = selector.SelectSelector(selector.SelectSelectorConfig(options=PROFILES, translation_key="profile", mode=selector.SelectSelectorMode.DROPDOWN))
 
 
@@ -157,6 +163,8 @@ class ShowerTimeOptionsFlow(OptionsFlow):
         cur.setdefault(CONF_TEMP_MODE, "fixed" if CONF_SHOWER_TEMP in cur else "auto")
         cur.setdefault(CONF_FLOW_SOURCE, "unknown")
         cur.setdefault(CONF_LOW, DEFAULT_LOW)
+        cur.setdefault(CONF_LEGIONELLA_TEMP, DEFAULT_LEGIONELLA_TEMP)
+        cur.setdefault(CONF_LEGIONELLA_DAYS, DEFAULT_LEGIONELLA_DAYS)
         schema = vol.Schema({
             vol.Required(CONF_VOLUME): VOLUME,
             vol.Required(CONF_TEMP_MODE): TEMP_MODE,
@@ -173,6 +181,8 @@ class ShowerTimeOptionsFlow(OptionsFlow):
             vol.Optional(CONF_ELEC): ENERGY,
             vol.Optional(CONF_COP, default=DEFAULT_COP): COP,
             vol.Optional(CONF_PRICE): PRICE,
+            vol.Required(CONF_LEGIONELLA_TEMP): LEGIONELLA_TEMP,
+            vol.Required(CONF_LEGIONELLA_DAYS): LEGIONELLA_DAYS,
         })
         return self.async_show_form(step_id="init", data_schema=self.add_suggested_values_to_schema(schema, user_input or cur),
                                     errors=errors)

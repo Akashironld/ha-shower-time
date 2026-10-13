@@ -1,0 +1,62 @@
+blueprint:
+  name: Shower summary notification
+  description: >-
+    After every shower, send a notification with how long it took and what the hot water cost
+    (Hot Water Shower Time "Shower" event).
+  domain: automation
+  source_url: https://github.com/Akashironld/ha-shower-time/blob/main/blueprints/automation/shower_time/shower_summary.yaml
+  author: Akashironld
+  homeassistant:
+    min_version: "2025.1.0"
+  input:
+    shower_event:
+      name: Shower event
+      description: The "Shower" event entity of Hot Water Shower Time.
+      selector:
+        entity:
+          filter:
+            - integration: shower_time
+              domain: event
+    notify_device:
+      name: Phone
+      description: A phone with the Home Assistant app.
+      selector:
+        device:
+          filter:
+            - integration: mobile_app
+    title:
+      name: Title
+      default: Shower
+      selector:
+        text:
+
+mode: queued
+
+triggers:
+  - trigger: state
+    entity_id: !input shower_event
+
+conditions:
+  - condition: template
+    value_template: >-
+      {{ trigger.from_state is not none and trigger.to_state is not none
+         and trigger.from_state.state not in ['unknown', 'unavailable']
+         and trigger.to_state.state not in ['unknown', 'unavailable']
+         and trigger.to_state.state != trigger.from_state.state
+         and trigger.to_state.attributes.event_type == 'shower_ended' }}
+
+variables:
+  title: !input title
+  minutes: "{{ trigger.to_state.attributes.minutes | round(0) | int }}"
+  cost: "{{ trigger.to_state.attributes.cost }}"
+  currency: "{{ trigger.to_state.attributes.currency or '€' }}"
+  message: >-
+    {{ minutes }} min{% if cost is not none %} · {{ currency }} {{ '%.2f' | format(cost | float) }}{% endif %}
+    · {{ trigger.to_state.attributes.electricity_kwh }} kWh
+
+actions:
+  - device_id: !input notify_device
+    domain: mobile_app
+    type: notify
+    title: "{{ title }}"
+    message: "{{ message }}"

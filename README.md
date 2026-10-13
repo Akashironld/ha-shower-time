@@ -19,6 +19,16 @@ your own showers.
 - 💶 **Cost per shower** — also with **dynamic tariffs**: the price of the electricity at the moment the
   tank was *reheated* is used, not the price when you shower
 - 🔔 **Almost empty**, **hot water in use** and **full again at** for automations
+- 🔮 **Enough for today?** It learns when you usually shower and warns when the hot water will run out before
+  the last shower of the day
+- 🛁 **The shower going on now** (minutes and cost so far) and a **Shower** event after every shower — ready-made
+  **blueprints** for a shower timer, a light that flashes when the water runs low, and a summary on your phone
+- 💧 **Leak and insulation watch**: measures how much heat the tank loses while nothing happens, and notices a
+  dripping hot tap or insulation that got worse
+- 🦠 **Legionella watch**: when was the whole tank last at 60 °C?
+- 📈 **Totals for the long run** (showers, minutes, electricity, cost), also in the energy dashboard
+- 🩺 **Health checks** in *Settings → Repairs*: a tank sensor that stopped reporting, top and bottom swapped,
+  learning that keeps failing
 - 🎨 **Dashboard card included** (no separate download): tank graphic with the hot layer, countdown,
   showers left, a 24-hour graph you can hover/touch, and today's showers with cost
 - ⚙️ **Easy setup**: pick the tank sensors; the rest is suggested from the same device
@@ -102,6 +112,56 @@ in the tank. A shower costs the heat it takes out × that price. The COP is lear
 electricity meters for hot water when available (both suggested automatically for Weheat), otherwise the
 value you set (heat pump ≈ 2–3.5, electric boiler 1.0).
 
+## Smart extras
+
+### Enough for today?
+
+Every day the integration adds the minutes you showered per hour to a profile of your household — per weekday,
+so a Saturday morning shower is expected on Saturdays only. After a week it compares the shower minutes still
+expected today with what the tank holds now, minus the standing loss until then:
+**Enough for today** turns off and the card shows **EMPTY BY 21:30** when the hot water will not last — in time
+to reheat. It assumes no reheat in between; if your heat pump reheats on its own when the tank runs low, use it
+as advice. *Shower time expected today* gives the minutes and the next likely shower.
+
+### The shower going on now
+
+*Current shower* counts the minutes of the shower going on (0 otherwise) and what that hot water costs so far.
+The **Shower** event entity fires `shower_started` and, for a real shower (4–40 minutes), `shower_ended` with
+`minutes`, `heat_kwh`, `electricity_kwh`, `cost` and `currency` — see the blueprints below.
+
+### Totals and the energy dashboard
+
+*Showers total*, *Shower time total*, *Shower electricity total* and *Shower cost total* only ever go up, so Home
+Assistant keeps their history forever: showers and costs per week, month or year in the statistics graph card.
+*Shower electricity total* can be added to the **energy dashboard** as an individual device.
+
+### Leak and insulation watch
+
+Every day the integration looks for a quiet stretch of at least three hours (no reheat, no hot water use, the
+layers settled) while the tank is evenly hot, and measures how fast it cools. Divided by how much warmer the tank
+is than the room, that gives the tank's **heat-loss coefficient** in W/K — independent of how hot the tank happens
+to be, so it can be compared over months. *Tank heat loss* shows what that costs right now in watts
+(for example about 70 W for a 200 L tank at 55 °C).
+
+- **Raised heat loss** turns on when the coefficient is clearly higher (×1.4) than your tank's own baseline in 3 of
+  the last 4 measurements: insulation that came loose or got wet, a pipe that now loses heat, a colder spot.
+- A **dripping hot tap** or a leak lets cold water trickle in at the bottom: night after night the bottom cools
+  faster than the top, without the quick drop a tap gives. That is checked every night between 01:00 and 05:00 and
+  works from the first nights; it also turns on *Raised heat loss* with the attribute `leak_like`.
+
+Both also show up in **Settings → Repairs** with what to check. The baseline needs about 11 measured days.
+
+### Legionella watch
+
+*Last legionella heat-up* is the last time the whole tank — top **and** bottom — was at 60 °C or more (found in
+the statistics of the past 45 days on the first start). *Legionella heat-up overdue* turns on after 8 days without
+one. Both numbers can be changed under **Configure**.
+
+### Health checks
+
+In **Settings → Repairs** you get a notice when a tank sensor has not reported for two hours, when the bottom has
+been warmer than the top for six hours (sensors swapped), or when learning failed three nights in a row.
+
 ## Requirements
 
 - Home Assistant 2025.1 or newer with the recorder (default). The logo shows from Home Assistant 2026.
@@ -157,7 +217,8 @@ The setup has two screens. Only the first one needs input; the second is filled 
 ### Change it later
 
 **Settings → Devices & services → Hot Water Shower Time → Configure** lets you change everything except the name,
-the top sensor and the starting knowledge, plus the **"Almost empty" threshold** (default 10 minutes). The model keeps what it learned.
+the top sensor and the starting knowledge, plus the **"Almost empty" threshold** (default 10 minutes) and the
+**legionella temperature and days** (default 60 °C and 8 days). The model keeps what it learned.
 To start learning from scratch, remove the integration and add it again.
 
 ### Good to know
@@ -182,6 +243,15 @@ To start learning from scratch, remove the integration and add it again.
 | `binary_sensor.<name>_almost_empty` | below the threshold (default 10 min) |
 | `binary_sensor.<name>_hot_water_in_use` | someone is showering / drawing hot water now |
 | `binary_sensor.<name>_reheating` | the tank is being reheated (with a reheat entity) |
+| `sensor.<name>_current_shower` | minutes of the shower going on now (0 otherwise); attributes: cost so far |
+| `event.<name>_shower` | `shower_started` / `shower_ended` (with minutes, kWh and cost) |
+| `binary_sensor.<name>_enough_for_today` | on when the hot water lasts for today's usual showers (after a week) |
+| `sensor.<name>_shower_time_expected_today` | shower minutes still expected today; attributes: runs out at, next shower |
+| `sensor.<name>_showers_total`, `_shower_time_total`, `_shower_electricity_total`, `_shower_cost_total` | totals for long-term statistics and the energy dashboard |
+| `sensor.<name>_tank_heat_loss` | watts the tank loses now; attributes: coefficient (W/K) and baseline |
+| `binary_sensor.<name>_raised_heat_loss` | the tank loses clearly more heat than it used to, or a drip pattern (`leak_like`) |
+| `sensor.<name>_last_legionella_heat_up` | the last time the whole tank was at the legionella temperature |
+| `binary_sensor.<name>_legionella_heat_up_overdue` | longer ago than the set number of days |
 | `sensor.<name>_learned_model` | diagnostic: everything learned so far |
 | `button.<name>_learn_now` | learn from the history right away |
 
@@ -241,35 +311,29 @@ card_mod:
     }
 ```
 
-## Automation example
+## Blueprints
 
-Blink the bathroom light orange when the hot water is almost gone during a shower:
+Ready-made automations — click a button to import one into Home Assistant, then fill in the blanks:
+
+| Blueprint | |
+| --- | --- |
+| **Hot water almost gone** — flash lights in a colour (and/or your own actions) when the hot water runs low | [![Import blueprint](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2FAkashironld%2Fha-shower-time%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fshower_time%2Fhot_water_low.yaml) |
+| **Shower timer** — flash lights or announce something after a number of minutes in the shower | [![Import blueprint](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2FAkashironld%2Fha-shower-time%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fshower_time%2Fshower_timer.yaml) |
+| **Shower summary** — a notification after every shower with its minutes and cost | [![Import blueprint](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2FAkashironld%2Fha-shower-time%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fshower_time%2Fshower_summary.yaml) |
+| **Hot water will not last today** — a warning (and/or start a reheat) when today's showers will not fit | [![Import blueprint](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2FAkashironld%2Fha-shower-time%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fshower_time%2Fnot_enough_today.yaml) |
+
+Lights that flash return to how they were afterwards. Or build your own with the **Shower** event:
 
 ```yaml
 triggers:
   - trigger: state
-    entity_id: binary_sensor.hot_water_almost_empty
-    to: "on"
+    entity_id: event.hot_water_shower
 conditions:
-  - condition: state
-    entity_id: binary_sensor.hot_water_hot_water_in_use
-    state: "on"
+  - "{{ trigger.to_state.attributes.event_type == 'shower_ended' }}"
 actions:
-  - action: scene.create
-    data: { scene_id: before_blink, snapshot_entities: [light.bathroom] }
-  - repeat:
-      count: 3
-      sequence:
-        - action: light.turn_on
-          target: { entity_id: light.bathroom }
-          data: { rgb_color: [255, 140, 0], brightness_pct: 100 }
-        - delay: 0.6
-        - action: light.turn_off
-          target: { entity_id: light.bathroom }
-        - delay: 0.4
-  - action: scene.turn_on
-    target: { entity_id: scene.before_blink }
-mode: single
+  - action: notify.notify
+    data:
+      message: "Showered {{ trigger.to_state.attributes.minutes | round }} min"
 ```
 
 ## Reporting a problem
@@ -287,6 +351,10 @@ your situation can be replayed exactly.
   local values, but starts a few degrees off.
 - Live updates follow your sensors: with readings every few minutes the countdown runs on its own for up to
   4 minutes between readings.
+- *Enough for today* does not know when your heat pump will reheat on its own; treat it as advice.
+- The heat-loss watts assume the tank stands in a room of about 20 °C; the trend (and the alarm) does not depend
+  on that. A tank that is never evenly hot (no full reheats) gives no heat-loss measurements.
+- The legionella watch only sees the two sensors; it cannot tell whether the pipes were flushed hot.
 
 ## Nederlands
 
@@ -311,6 +379,20 @@ Configureren**.
 
 Debiet van je douchekop meten: zet de douche aan zoals je normaal doucht, houd een emmer eronder en kijk
 hoeveel seconden het duurt tot er 10 liter in zit. Debiet = 600 ÷ seconden (75 s = 8 L/min).
+
+**Slimme extra's:**
+- **Genoeg voor vandaag?** Hij leert wanneer jullie douchen (per weekdag) en waarschuwt als het warme water op
+  raakt vóór de laatste douche van de dag; de kaart toont dan bijvoorbeeld **OP OM 21:30**.
+- **Huidige douche** (minuten en kosten tot nu toe) en een **Douche**-gebeurtenis na elke douche.
+- **Lek- en isolatiewacht**: meet hoeveel warmte het vat verliest als er niets gebeurt (in W/K, onafhankelijk van hoe
+  heet het vat is) en ziet een druppelende warmwaterkraan aan het patroon: 's nachts koelt de onderkant gestaag
+  sneller af dan de bovenkant. Melding onder *Instellingen → Reparaties*.
+- **Legionellawacht**: wanneer was het hele vat (boven én onder) voor het laatst 60 °C?
+- **Totalen** voor de lange termijn (douches, minuten, stroom, kosten), ook in het energiedashboard.
+- **Gezondheidscontroles** onder *Reparaties*: een sensor die niets meer geeft, boven en onder verwisseld, leren dat
+  steeds mislukt.
+- **Blueprints** (zie boven) voor een douchetimer, een lamp die knippert als het warme water bijna op is, een
+  samenvatting na het douchen en een waarschuwing als het vandaag niet genoeg is.
 
 ## Support
 

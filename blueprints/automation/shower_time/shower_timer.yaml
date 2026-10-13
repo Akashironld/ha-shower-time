@@ -1,0 +1,95 @@
+blueprint:
+  name: Shower timer
+  description: >-
+    When a shower has lasted a number of minutes (Hot Water Shower Time "Current shower"), flash lights in a colour
+    and/or run your own actions, such as an announcement on a speaker. The lights return to how they were afterwards.
+  domain: automation
+  source_url: https://github.com/Akashironld/ha-shower-time/blob/main/blueprints/automation/shower_time/shower_timer.yaml
+  author: Akashironld
+  homeassistant:
+    min_version: "2025.1.0"
+  input:
+    current_shower:
+      name: Current shower sensor
+      description: The "Current shower" sensor of Hot Water Shower Time.
+      selector:
+        entity:
+          filter:
+            - integration: shower_time
+              domain: sensor
+    minutes:
+      name: After how many minutes
+      default: 10
+      selector:
+        number:
+          min: 2
+          max: 40
+          unit_of_measurement: min
+    lights:
+      name: Lights to flash (optional)
+      default: []
+      selector:
+        entity:
+          multiple: true
+          filter:
+            - domain: light
+    color:
+      name: Colour
+      default: [0, 120, 255]
+      selector:
+        color_rgb:
+    flashes:
+      name: Number of flashes
+      default: 2
+      selector:
+        number:
+          min: 1
+          max: 10
+    extra_actions:
+      name: Your own actions (optional)
+      description: For example a spoken message or a notification.
+      default: []
+      selector:
+        action:
+
+mode: single
+max_exceeded: silent
+
+triggers:
+  - trigger: numeric_state
+    entity_id: !input current_shower
+    above: !input minutes
+
+variables:
+  lights: !input lights
+
+actions:
+  - if:
+      - condition: template
+        value_template: "{{ lights | length > 0 }}"
+    then:
+      - action: scene.create
+        data:
+          scene_id: "{{ this.entity_id | replace('automation.', '') }}_before"
+          snapshot_entities: "{{ lights }}"
+      - repeat:
+          count: !input flashes
+          sequence:
+            - action: light.turn_on
+              target:
+                entity_id: "{{ lights }}"
+              data:
+                rgb_color: !input color
+                brightness: 255
+            - delay:
+                milliseconds: 700
+            - action: light.turn_off
+              target:
+                entity_id: "{{ lights }}"
+            - delay:
+                milliseconds: 500
+      - action: scene.turn_on
+        target:
+          entity_id: "scene.{{ this.entity_id | replace('automation.', '') }}_before"
+  - choose: []
+    default: !input extra_actions

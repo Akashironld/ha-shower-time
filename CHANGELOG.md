@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.10.0
+
+- **Enough for today?** Learns when the household showers (per hour, per weekday) and, after a week, compares the
+  minutes still expected today with what the tank holds: *Enough for today*, *Shower time expected today* (runs out
+  at, next shower) and **EMPTY BY 21:30** on the card
+- **The shower going on now**: *Current shower* (minutes and cost so far, also in the card's IN USE label) and a
+  **Shower** event entity (`shower_started`, `shower_ended` with minutes, kWh and cost)
+- **Blueprints**: hot water almost gone (flashing lights), shower timer, shower summary notification, hot water will
+  not last today — with import buttons in the README
+- **Totals** for long-term statistics: showers, shower time, shower electricity (energy dashboard) and cost
+- **Leak and insulation watch**: the tank's heat-loss coefficient (W/K) measured in quiet, evenly hot stretches,
+  against its own baseline (*Raised heat loss*, *Tank heat loss* in W), and a dripping hot tap recognised from the
+  bottom cooling steadily faster than the top at night — with a notice in Settings → Repairs
+- **Legionella watch**: *Last legionella heat-up* (whole tank ≥ 60 °C) and *Legionella heat-up overdue* (8 days);
+  both adjustable
+- **Health checks** in Settings → Repairs: tank sensor not reporting, top and bottom swapped, learning failing
+- Diagnostics include the habits, the heat-loss measurements and the legionella state
+
 ## v0.9.6
 
 - Dashboard card: **every part can be hidden** — `show_tank`, `show_temps`, `show_split`, `show_tiles`,

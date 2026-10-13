@@ -1,0 +1,88 @@
+blueprint:
+  name: Hot water almost gone
+  description: >-
+    When the hot water is almost gone (Hot Water Shower Time "Almost empty"), flash lights in a colour and/or run
+    your own actions, such as a notification. The lights return to how they were afterwards.
+  domain: automation
+  source_url: https://github.com/Akashironld/ha-shower-time/blob/main/blueprints/automation/shower_time/hot_water_low.yaml
+  author: Akashironld
+  homeassistant:
+    min_version: "2025.1.0"
+  input:
+    low_sensor:
+      name: Almost empty sensor
+      description: The "Almost empty" binary sensor of Hot Water Shower Time.
+      selector:
+        entity:
+          filter:
+            - integration: shower_time
+              domain: binary_sensor
+    lights:
+      name: Lights to flash (optional)
+      default: []
+      selector:
+        entity:
+          multiple: true
+          filter:
+            - domain: light
+    color:
+      name: Colour
+      default: [255, 80, 0]
+      selector:
+        color_rgb:
+    flashes:
+      name: Number of flashes
+      default: 3
+      selector:
+        number:
+          min: 1
+          max: 10
+    extra_actions:
+      name: Your own actions (optional)
+      description: For example a notification to your phone.
+      default: []
+      selector:
+        action:
+
+mode: single
+max_exceeded: silent
+
+triggers:
+  - trigger: state
+    entity_id: !input low_sensor
+    from: "off"
+    to: "on"
+
+variables:
+  lights: !input lights
+
+actions:
+  - if:
+      - condition: template
+        value_template: "{{ lights | length > 0 }}"
+    then:
+      - action: scene.create
+        data:
+          scene_id: "{{ this.entity_id | replace('automation.', '') }}_before"
+          snapshot_entities: "{{ lights }}"
+      - repeat:
+          count: !input flashes
+          sequence:
+            - action: light.turn_on
+              target:
+                entity_id: "{{ lights }}"
+              data:
+                rgb_color: !input color
+                brightness: 255
+            - delay:
+                milliseconds: 700
+            - action: light.turn_off
+              target:
+                entity_id: "{{ lights }}"
+            - delay:
+                milliseconds: 500
+      - action: scene.turn_on
+        target:
+          entity_id: "scene.{{ this.entity_id | replace('automation.', '') }}_before"
+  - choose: []
+    default: !input extra_actions

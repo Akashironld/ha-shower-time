@@ -49,3 +49,9 @@ DEFAULT_COP = 2.5
 LOG_DAYS = 14
 MIN_SHOWER_MINUTES = 4          # shorter: a tap, not a shower
 MAX_SHOWER_MINUTES = 40         # longer: a bath or another long draw
+
+# Legionella watcher: the last time the whole tank was at least this hot, and how many days is too long
+CONF_LEGIONELLA_TEMP = "legionella_temperature"
+CONF_LEGIONELLA_DAYS = "legionella_days"
+DEFAULT_LEGIONELLA_TEMP = 60
+DEFAULT_LEGIONELLA_DAYS = 8          # a weekly program plus a day of margin

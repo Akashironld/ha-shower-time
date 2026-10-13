@@ -76,7 +76,9 @@
           "outdoor_sensor": "Buitentemperatuursensor",
           "electricity_sensor": "Stroomverbruik voor warm water (energiesensor)",
           "cop": "COP voor warm water",
-          "price_sensor": "Stroomprijs-sensor"
+          "price_sensor": "Stroomprijs-sensor",
+          "legionella_temperature": "Legionellatemperatuur",
+          "legionella_days": "Legionella: waarschuwen na"
         },
         "data_description": {
           "flow_source": "Optioneel. Met het debiet berekent de integratie op welke temperatuur jullie douchen en hoeveel liter dat is. Een watermeter meet het tijdens het douchen. Weet je het niet? Kies 'Zelf invullen' en meet het in een minuut met een emmer (zie hieronder), of kies het type douchekop.",
@@ -84,7 +86,9 @@
           "outdoor_sensor": "Optioneel. Leidingwater volgt de buitentemperatuur met weken vertraging; het model gebruikt het gemiddelde van de afgelopen 3 weken om de koudwatertemperatuur te schatten. Zonder deze sensor gebruikt het een tabel per maand.",
           "electricity_sensor": "Optioneel. Samen met de warmtesensor leert de integratie hiermee de COP voor warm water.",
           "cop": "Gebruikt als de COP niet geleerd kan worden: warmtepomp ongeveer 2–3,5, elektrische boiler 1,0.",
-          "price_sensor": "Optioneel, kies je eigen sensor (bijvoorbeeld van je energieleverancier of evcc). Bij een dynamisch tarief telt de prijs op het moment dat het vat opwarmt, niet als je doucht."
+          "price_sensor": "Optioneel, kies je eigen sensor (bijvoorbeeld van je energieleverancier of evcc). Bij een dynamisch tarief telt de prijs op het moment dat het vat opwarmt, niet als je doucht.",
+          "legionella_temperature": "Het hele vat (boven en onder) moet dit halen om als legionella-opwarming te tellen.",
+          "legionella_days": "Aantal dagen zonder zo'n opwarming voordat 'Legionella-opwarming te lang geleden' aangaat. Standaard 8: een wekelijks programma plus een dag."
         }
       }
     },
@@ -155,6 +159,30 @@
       },
       "reheat_ready": {
         "name": "Weer vol om"
+      },
+      "current_shower": {
+        "name": "Huidige douche"
+      },
+      "expected_today": {
+        "name": "Verwachte douchetijd vandaag"
+      },
+      "showers_total": {
+        "name": "Douches totaal"
+      },
+      "shower_time_total": {
+        "name": "Douchetijd totaal"
+      },
+      "shower_energy_total": {
+        "name": "Douchestroom totaal"
+      },
+      "shower_cost_total": {
+        "name": "Douchekosten totaal"
+      },
+      "legionella_last": {
+        "name": "Laatste legionella-opwarming"
+      },
+      "heat_loss": {
+        "name": "Warmteverlies vat"
       }
     },
     "binary_sensor": {
@@ -166,12 +194,56 @@
       },
       "showering": {
         "name": "Douche in gebruik"
+      },
+      "enough_today": {
+        "name": "Genoeg voor vandaag"
+      },
+      "legionella_overdue": {
+        "name": "Legionella-opwarming te lang geleden"
+      },
+      "heat_loss_raised": {
+        "name": "Verhoogd warmteverlies"
       }
     },
     "button": {
       "learn_now": {
         "name": "Nu leren"
       }
+    },
+    "event": {
+      "shower": {
+        "name": "Douche",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "shower_started": "Douche begonnen",
+              "shower_ended": "Douche klaar"
+            }
+          }
+        }
+      }
+    }
+  },
+  "issues": {
+    "sensor_missing": {
+      "title": "{name}: vatsensor geeft geen waarde",
+      "description": "De sensor {entity} heeft al meer dan twee uur geen geldige meting, waardoor de douchetijd niet berekend kan worden. Controleer het apparaat of de integratie die hem levert."
+    },
+    "sensors_swapped": {
+      "title": "{name}: boven- en ondersensor verwisseld?",
+      "description": "Al meer dan zes uur is de ondersensor meer dan 5 °C warmer dan de bovensensor, terwijl het vat niet wordt opgewarmd. In een warmwatervat is boven het warmst. Controleer in de instellingen van de integratie of {top} (boven) en {bottom} (onder) goed om staan."
+    },
+    "learning_failed": {
+      "title": "{name}: leren lukt steeds niet",
+      "description": "Leren uit de historie is {nights} nachten achter elkaar mislukt; de integratie gebruikt wat ze eerder leerde. Maak een issue aan op GitHub en voeg het diagnostics-bestand toe."
+    },
+    "heat_loss_raised": {
+      "title": "{name}: het vat verliest meer warmte dan vroeger",
+      "description": "De warmteverliescoëfficiënt van het vat is {recent} W/K, tegen {baseline} W/K eerder ({ratio}× zo veel). Mogelijke oorzaken: isolatie die los of nat is geraakt, een leiding of circulatie die nu warmte verliest, of het vat staat ergens kouder. Douches en opwarmen tellen niet mee: dit wordt alleen gemeten als er niets gebeurt."
+    },
+    "possible_leak": {
+      "title": "{name}: mogelijk lekkende warmwaterkraan of lek",
+      "description": "Terwijl niemand warm water gebruikte, koelde de onderkant van het vat nacht na nacht sneller af dan de bovenkant: het patroon van koud water dat langzaam binnenkomt. Dit wijst op een druppelende warmwaterkraan, een lekkende thermostaatkraan of overstortventiel, of een lek in de warmwaterleiding. Controleer de kranen en leidingen.\n\nWarmteverliescoëfficiënt nu: {recent} W/K (normaal: {baseline} W/K)."
     }
   }
 }

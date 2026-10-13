@@ -2,7 +2,16 @@
 from __future__ import annotations
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
-from homeassistant.const import PERCENTAGE, EntityCategory, UnitOfTemperature, UnitOfTime, UnitOfVolume
+from homeassistant.const import (
+    PERCENTAGE,
+    EntityCategory,
+    UnitOfEnergy,
+    UnitOfPower,
+    UnitOfTemperature,
+    UnitOfTime,
+    UnitOfVolume,
+)
+from homeassistant.util import dt as dt_util
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
@@ -15,7 +24,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ShowerTimeConfigEntry,
     m = entry.runtime_data
     async_add_entities([MinutesSensor(m), ShowersSensor(m), LitresSensor(m), ShowerTemperatureSensor(m), FillSensor(m), ModelSensor(m),
                         ShowersTodaySensor(m), ShowerTimeTodaySensor(m), ShowerTimeWeekSensor(m), LastShowerSensor(m),
-                        ReheatReadySensor(m)] + ([ShowerCostTodaySensor(m)] if m.price else []))
+                        ReheatReadySensor(m), CurrentShowerSensor(m), ExpectedTodaySensor(m), ShowersTotalSensor(m),
+                        ShowerTimeTotalSensor(m), ShowerEnergyTotalSensor(m), LegionellaSensor(m), HeatLossSensor(m)]
+                       + ([ShowerCostTodaySensor(m), ShowerCostTotalSensor(m)] if m.price else []))
 
 
 class MinutesSensor(ShowerTimeEntity, SensorEntity):
@@ -72,6 +83,8 @@ class MinutesSensor(ShowerTimeEntity, SensorEntity):
             "reheat_one_shower_at": m.ledger.eta_one.isoformat(timespec="minutes") if m.ledger.eta_one else None,
             "live_countdown": m.live_offset > 0,
             "low_threshold": m.low_minutes,
+            "current_shower": m.ledger.running(m, dt_util.utcnow()),
+            "forecast": m.forecast_attrs(),
             "learned_at": m.last_learn,
             "observations": p["flow"]["n"],
         }
@@ -312,3 +325,157 @@ class ReheatReadySensor(_LogSensor):
     def extra_state_attributes(self):
         eta = self.manager.ledger.eta_one
         return {"one_shower_at": eta.isoformat(timespec="minutes") if eta else None}
+
+
+class CurrentShowerSensor(_LogSensor):
+    """Minutes of the shower going on right now (0 when nobody showers); attributes: cost so far."""
+
+    _attr_device_class = SensorDeviceClass.DURATION
+    _attr_native_unit_of_measurement = UnitOfTime.MINUTES
+    _attr_suggested_display_precision = 0
+    _attr_icon = "mdi:shower-head"
+
+    def __init__(self, manager) -> None:
+        super().__init__(manager, "current_shower")
+
+    @property
+    def native_value(self):
+        r = self.manager.ledger.running(self.manager, dt_util.utcnow())
+        return r["minutes"] if r else 0
+
+    @property
+    def extra_state_attributes(self):
+        r = self.manager.ledger.running(self.manager, dt_util.utcnow())
+        return {**(r or {}), "currency": self.manager.ledger.currency or None}
+
+
+class ExpectedTodaySensor(ShowerTimeEntity, SensorEntity):
+    """Shower minutes still expected today, from the household's habits; attributes: will the water last."""
+
+    _attr_device_class = SensorDeviceClass.DURATION
+    _attr_native_unit_of_measurement = UnitOfTime.MINUTES
+    _attr_suggested_display_precision = 0
+    _attr_icon = "mdi:calendar-clock"
+
+    def __init__(self, manager) -> None:
+        super().__init__(manager, "expected_today")
+
+    @property
+    def available(self) -> bool:
+        return self.manager.forecast() is not None
+
+    @property
+    def native_value(self):
+        f = self.manager.forecast()
+        return round(f.expected_minutes) if f else None
+
+    @property
+    def extra_state_attributes(self):
+        return {**(self.manager.forecast_attrs() or {}), "days_learned": self.manager.habits["days"]}
+
+
+class _TotalSensor(_LogSensor):
+    """Never-decreasing totals of logged showers, for Home Assistant's long-term statistics."""
+
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    key = ""
+
+    @property
+    def native_value(self):
+        return self.manager.ledger.totals[self.key]
+
+
+class ShowersTotalSensor(_TotalSensor):
+    _attr_icon = "mdi:counter"
+    key = "showers"
+
+    def __init__(self, manager) -> None:
+        super().__init__(manager, "showers_total")
+
+
+class ShowerTimeTotalSensor(_TotalSensor):
+    _attr_device_class = SensorDeviceClass.DURATION
+    _attr_native_unit_of_measurement = UnitOfTime.MINUTES
+    _attr_suggested_display_precision = 0
+    _attr_icon = "mdi:timer-outline"
+    key = "minutes"
+
+    def __init__(self, manager) -> None:
+        super().__init__(manager, "shower_time_total")
+
+
+class ShowerEnergyTotalSensor(_TotalSensor):
+    """Electricity used to heat the shower water (usable in the energy dashboard as an individual device)."""
+
+    _attr_device_class = SensorDeviceClass.ENERGY
+    _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+    _attr_suggested_display_precision = 2
+    _attr_icon = "mdi:lightning-bolt"
+    key = "electricity_kwh"
+
+    def __init__(self, manager) -> None:
+        super().__init__(manager, "shower_energy_total")
+
+
+class ShowerCostTotalSensor(_TotalSensor):
+    _attr_device_class = SensorDeviceClass.MONETARY
+    _attr_state_class = SensorStateClass.TOTAL
+    _attr_suggested_display_precision = 2
+    _attr_icon = "mdi:cash"
+    key = "cost"
+
+    def __init__(self, manager) -> None:
+        super().__init__(manager, "shower_cost_total")
+
+    @property
+    def native_unit_of_measurement(self):
+        return self.manager.ledger.currency or "€"
+
+
+class LegionellaSensor(_LogSensor):
+    """The last time the whole tank was at the legionella temperature."""
+
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+    _attr_icon = "mdi:bacteria-outline"
+
+    def __init__(self, manager) -> None:
+        super().__init__(manager, "legionella_last")
+
+    @property
+    def native_value(self):
+        at = self.manager.legionella_at
+        return dt_util.parse_datetime(at) if at else None
+
+    @property
+    def extra_state_attributes(self):
+        m = self.manager
+        return {"temperature": m.legionella_temp, "max_days": m.legionella_days, "overdue": m.legionella_overdue()}
+
+
+class HeatLossSensor(ShowerTimeEntity, SensorEntity):
+    """What the tank loses to its surroundings right now (W), from its measured heat-loss coefficient."""
+
+    _attr_device_class = SensorDeviceClass.POWER
+    _attr_native_unit_of_measurement = UnitOfPower.WATT
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 0
+    _attr_icon = "mdi:home-thermometer-outline"
+
+    def __init__(self, manager) -> None:
+        super().__init__(manager, "heat_loss")
+
+    @property
+    def available(self) -> bool:
+        return self.manager.heat_loss_now() is not None
+
+    @property
+    def native_value(self):
+        return self.manager.heat_loss_now()
+
+    @property
+    def extra_state_attributes(self):
+        st = self.manager.loss
+        last = self.manager.loss_samples[-1] if self.manager.loss_samples else None
+        return {"coefficient_w_per_k": st.get("ua_recent"), "baseline_w_per_k": st.get("ua_baseline"),
+                "ratio": st.get("ratio"), "raised": st.get("raised"), "leak_like": st.get("leak_like"),
+                "measurements": st.get("measurements"), "last_measurement": last}
