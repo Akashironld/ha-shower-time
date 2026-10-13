@@ -37,6 +37,25 @@ start from a generic profile and learn their own behaviour.
 | Standing loss | quiet hours without showers or reheating |
 | Typical shower length | the showers it sees |
 
+## Shower temperature: automatic, sensed or set
+
+The tank only feels **heat per minute** = flow × (shower temperature − cold water). A 6 L/min shower at 40 °C and a
+7 L/min shower at 37 °C cost the tank exactly the same, so no calculation on tank data alone can tell them apart.
+That is fine for the minutes — they only depend on the heat per minute, which is learned — so by default you do
+not have to know your shower temperature at all.
+
+| Setting | Shower temperature | Litres |
+| --- | --- | --- |
+| **Automatic** (default) | not needed — litres are shown at a 38 °C reference | estimated |
+| + **water meter / flow sensor** | **sensed**: cold water + learned heat ÷ measured flow while you shower | measured |
+| + **shower-head type** (water-saving 6 / normal 8 / rain 12 L/min) | calculated | from the type |
+| + **flow filled in yourself** (e.g. 7.2 L/min — fill a 10 L bucket and time it) | calculated | from your value |
+| **Set it myself** | your fixed value | estimated |
+
+With a known flow you get an extra `sensor.<name>_shower_temperature` ("you shower at ≈ 39.4 °C"). Expect about
+±1–2 °C at first; it sharpens as the model learns. A water meter in L/min or a cumulative meter in litres or m³
+both work; the median over many showers keeps a toilet flush during a shower from disturbing it.
+
 ## Requirements
 
 - Home Assistant 2025.1 or newer with the recorder enabled (default)
