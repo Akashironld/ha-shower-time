@@ -59,6 +59,15 @@ def _num(state) -> float | None:
         return None
 
 
+def _temp(state) -> float | None:
+    """Tank temperature, or None for missing or impossible readings.
+
+    Some heat pumps report -1 or 0 when they have no reading (Weheat does during outages);
+    treating those as real temperatures would look like a shower followed by a reheat."""
+    v = _num(state)
+    return v if v is not None and 0.5 < v < 95 else None
+
+
 class ShowerTimeManager:
     """One per config entry (one tank)."""
 
@@ -145,8 +154,8 @@ class ShowerTimeManager:
 
     @callback
     def update(self) -> None:
-        self.top_value = _num(self.hass.states.get(self.top))
-        self.bottom_value = _num(self.hass.states.get(self.bottom)) if self.bottom else None
+        self.top_value = _temp(self.hass.states.get(self.top))
+        self.bottom_value = _temp(self.hass.states.get(self.bottom)) if self.bottom else None
         if self.heating:
             st = self.hass.states.get(self.heating)
             self.reheating = bool(st and str(st.state).lower() in self.heating_states)
@@ -177,7 +186,7 @@ class ShowerTimeManager:
             if ent:
                 res = await recorder.async_add_executor_job(
                     history.state_changes_during_period, self.hass, start, now, ent, True, False, None, True)
-                series[ent] = [(st.last_changed.timestamp(), _num(st)) for st in res.get(ent, [])]
+                series[ent] = [(st.last_changed.timestamp(), _temp(st)) for st in res.get(ent, [])]
         head = self.head_flow()[0] if self.temp_mode == "auto" else None
 
         def compute() -> list[list[float]]:
@@ -304,8 +313,8 @@ class ShowerTimeManager:
             for st in series.get(ent, []):
                 out.append((int(st.last_changed.timestamp() // 60), conv(st)))
             return out
-        top = prep(self.top, _num)
-        bottom = prep(self.bottom, _num) if self.bottom else []
+        top = [x for x in prep(self.top, _temp) if x[1] is not None]           # skip invalid readings: hold the last good one
+        bottom = [x for x in prep(self.bottom, _temp) if x[1] is not None] if self.bottom else []
         heat = prep(self.heating, lambda s: str(s.state).lower() in self.heating_states) if self.heating else []
         idx = {"t": 0, "b": 0, "h": 0}
         cur = {"t": None, "b": None, "h": False}
