@@ -15,6 +15,7 @@ from .const import (
     CONF_ENERGY,
     CONF_FLOW_SOURCE,
     CONF_HEAD_FLOW,
+    CONF_OUTDOOR,
     CONF_TEMP_MODE,
     CONF_WATER,
     FLOW_SOURCES,
@@ -69,6 +70,9 @@ def suggest(hass: HomeAssistant, top: str, volume: float) -> dict[str, Any]:
         if CONF_HEATING not in out and any(any(k in o for k in keywords) for o in opts):
             out[CONF_HEATING] = e.entity_id
         eid = e.entity_id.lower()
+        if (st.attributes.get("device_class") == "temperature" and CONF_OUTDOOR not in out
+                and any(k in eid for k in ("outside", "outdoor", "buiten", "air_in", "ambient"))):
+            out[CONF_OUTDOOR] = e.entity_id
         if (st.attributes.get("device_class") == "energy" and "dhw" in eid and "defrost" not in eid
                 and ("output" in eid or "out_" in eid or "produced" in eid)):
             out.setdefault(CONF_ENERGY, e.entity_id)
@@ -116,6 +120,7 @@ class ShowerTimeConfigFlow(ConfigFlow, domain=DOMAIN):
             vol.Optional(CONF_HEATING): ANY,
             vol.Optional(CONF_HEATING_STATES, default=DEFAULT_HEATING_STATES): selector.TextSelector(),
             vol.Optional(CONF_ENERGY): ENERGY,
+            vol.Optional(CONF_OUTDOOR): TEMP,
             vol.Required(CONF_FLOW_SOURCE, default="unknown"): FLOW_SOURCE,
             vol.Optional(CONF_HEAD_FLOW): HEAD_FLOW,
             vol.Optional(CONF_WATER): WATER,
@@ -152,6 +157,7 @@ class ShowerTimeOptionsFlow(OptionsFlow):
             vol.Optional(CONF_HEATING): ANY,
             vol.Optional(CONF_HEATING_STATES, default=DEFAULT_HEATING_STATES): selector.TextSelector(),
             vol.Optional(CONF_ENERGY): ENERGY,
+            vol.Optional(CONF_OUTDOOR): TEMP,
         })
         return self.async_show_form(step_id="init", data_schema=self.add_suggested_values_to_schema(schema, user_input or cur),
                                     errors=errors)

@@ -5,6 +5,7 @@ from collections.abc import Callable
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 import logging
+import math
 
 from homeassistant.components.recorder import get_instance, history, statistics
 from homeassistant.config_entries import ConfigEntry
@@ -24,6 +25,8 @@ from .const import (
     CONF_ENERGY,
     CONF_FLOW_SOURCE,
     CONF_HEAD_FLOW,
+    CONF_OUTDOOR,
+    COLD_TAU_DAYS,
     CONF_TEMP_MODE,
     CONF_WATER,
     HEAD_PRESETS,
@@ -85,6 +88,9 @@ class ShowerTimeManager:
         self.flow_source: str = cfg.get(CONF_FLOW_SOURCE, "unknown")
         self.head_flow_manual: float | None = float(cfg[CONF_HEAD_FLOW]) if cfg.get(CONF_HEAD_FLOW) else None
         self.water: str | None = cfg.get(CONF_WATER) or None
+        self.outdoor: str | None = cfg.get(CONF_OUTDOOR) or None
+        self._ema_by_day: dict[str, float] = {}       # local date -> outdoor running average
+        self.ema_now: float | None = None
         self.heating: str | None = cfg.get(CONF_HEATING) or None
         self.heating_states = {s.strip().lower() for s in str(cfg.get(CONF_HEATING_STATES, DEFAULT_HEATING_STATES)).split(",") if s.strip()}
         self.energy: str | None = cfg.get(CONF_ENERGY) or None
@@ -129,6 +135,8 @@ class ShowerTimeManager:
         self._unsubs.append(async_track_time_change(self.hass, self._nightly, hour=LEARN_HOUR, minute=LEARN_MINUTE, second=0))
         if not self.last_learn:                 # first install: learn from what the recorder already has
             self._unsubs.append(async_call_later(self.hass, 120, self._first_learn))
+        if self.outdoor:
+            self.entry.async_create_background_task(self.hass, self._refresh_ema(update=True), f"{DOMAIN}_ema")
         self.update()
         if self.full_ref is None:               # find the last reheat in the history once
             self.entry.async_create_background_task(self.hass, self._init_full_ref(), f"{DOMAIN}_full_ref")
@@ -173,11 +181,58 @@ class ShowerTimeManager:
             self.estimate = None
         else:
             head = self.head_flow()[0] if self.temp_mode == "auto" else None
+            now = dt_util.now()
             self.estimate = model.estimate(self.params, self.top_value, self.bottom_value, volume=self.volume,
-                                           shower_temp=self.shower_temp, month=dt_util.now().month, head_flow=head)
+                                           shower_temp=self.shower_temp, month=now.month, head_flow=head,
+                                           doy=now.timetuple().tm_yday, ema=self.ema_now)
             self._track_full(self.estimate.minutes)
         for cb in list(self._listeners):
             cb()
+
+    # ------------------------------------------------------------------ outdoor running average (cold water)
+    def _ema_on(self, day: str) -> float | None:
+        if not self._ema_by_day:
+            return None
+        if day in self._ema_by_day:
+            return self._ema_by_day[day]
+        earlier = [d for d in self._ema_by_day if d <= day]
+        return self._ema_by_day[max(earlier)] if earlier else None
+
+    async def _refresh_ema(self, update: bool = False) -> None:
+        """~3-week exponential average of the daily mean outdoor temperature, from long-term statistics."""
+        try:
+            end = dt_util.utcnow()
+            start = end - timedelta(days=70)
+            stats = await get_instance(self.hass).async_add_executor_job(
+                statistics.statistics_during_period, self.hass, start, end, {self.outdoor}, "hour",
+                {"temperature": "°C"}, {"mean"})
+            days: dict[str, list[float]] = {}
+            for row in stats.get(self.outdoor, []):
+                if row.get("mean") is None:
+                    continue
+                ts = row["start"]
+                ts = ts.timestamp() if isinstance(ts, datetime) else float(ts)
+                day = dt_util.as_local(datetime.fromtimestamp(ts, timezone.utc)).date().isoformat()
+                days.setdefault(day, []).append(float(row["mean"]))
+            if len(days) < 14:                  # too little history yet: keep using the monthly table
+                self._ema_by_day, self.ema_now = {}, None
+                return
+            alpha = 1 - math.exp(-1 / COLD_TAU_DAYS)
+            ema, out = None, {}
+            for day in sorted(days):
+                mean = sum(days[day]) / len(days[day])
+                ema = mean if ema is None else ema + alpha * (mean - ema)
+                out[day] = round(ema, 2)
+            self._ema_by_day = out
+            self.ema_now = out[max(out)]
+        except Exception:  # noqa: BLE001 - without it we fall back to the monthly table
+            _LOGGER.exception("Could not read the outdoor temperature statistics")
+            self._ema_by_day, self.ema_now = {}, None
+        if update:
+            self.update()
+
+    def cold_source(self) -> str:
+        return "outdoor" if self.ema_now is not None else "table"
 
     # ------------------------------------------------------------------ fill level
     def _set_ref(self, minutes: float) -> None:
@@ -285,9 +340,10 @@ class ShowerTimeManager:
                     bot = bots[j][1] if bots[j][1] is not None else bot
                     j += 1
                 if top is not None and (not self.bottom or bot is not None):
-                    month = dt_util.as_local(datetime.fromtimestamp(t, timezone.utc)).month
+                    local = dt_util.as_local(datetime.fromtimestamp(t, timezone.utc))
                     e = model.estimate(self.params, top, bot, volume=self.volume, shower_temp=self.shower_temp,
-                                       month=month, head_flow=head)
+                                       month=local.month, head_flow=head, doy=local.timetuple().tm_yday,
+                                       ema=self._ema_on(local.date().isoformat()))
                     v = round(e.minutes)
                     if v != last:
                         out.append([int(t * 1000), v])
@@ -328,6 +384,8 @@ class ShowerTimeManager:
             self.update()
 
     async def _learn(self) -> None:
+        if self.outdoor:
+            await self._refresh_ema()
         now = dt_util.utcnow()
         end = now - timedelta(minutes=30)
         start = now - timedelta(days=HISTORY_DAYS)
@@ -361,10 +419,17 @@ class ShowerTimeManager:
         def month_of(minute: int) -> int:
             return dt_util.as_local(datetime.fromtimestamp(minute * 60, timezone.utc)).month
 
+        def doy_of(minute: int) -> int:
+            return dt_util.as_local(datetime.fromtimestamp(minute * 60, timezone.utc)).timetuple().tm_yday
+
+        def ema_of(minute: int) -> float | None:
+            return self._ema_on(dt_util.as_local(datetime.fromtimestamp(minute * 60, timezone.utc)).date().isoformat())
+
         result, last = await self.hass.async_add_executor_job(
             lambda: model.learn(self.params, rows, volume=self.volume, shower_temp=self.shower_temp,
                                 since=self.processed_until, energy_by_hour=energy,
-                                previous_cycle=self.last_cycle, month_of=month_of, water=water))
+                                previous_cycle=self.last_cycle, month_of=month_of, water=water,
+                                doy_of=doy_of, ema_of=ema_of if self.outdoor else None))
         self.params = result.params
         self.last_cycle = last
         self.processed_until = int(end.timestamp() // 60)

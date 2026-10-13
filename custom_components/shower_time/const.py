@@ -36,3 +36,7 @@ HEAD_PRESETS = {"eco": 6.0, "normal": 8.0, "rain": 12.0}
 CONF_HEAD_FLOW = "head_flow"
 CONF_WATER = "water_sensor"
 WATER_MIN_OBSERVATIONS = 3
+
+# Optional outdoor temperature: mains water follows a ~3-week running average of it
+CONF_OUTDOOR = "outdoor_sensor"
+COLD_TAU_DAYS = 21

@@ -75,6 +75,9 @@ def new_params(profile: str) -> dict:
 def ensure_params(p: dict) -> dict:
     """Add fields introduced in later versions to stored parameters."""
     p.setdefault("head_flow", {"v": 8.0, "n": 0})     # measured shower-head flow (water meter), L/min
+    # cold water = a + b * outdoor running average (°C); starts from a typical Dutch/Belgian network
+    p.setdefault("cold_model", {"a": {"v": 7.5, "n": 6}, "b": {"v": 0.7, "n": 6}})
+    p.setdefault("cold_samples", [])                  # [outdoor running average, measured cold] pairs
     return p
 
 
@@ -98,8 +101,29 @@ def tank_average(params: dict, top: float, bottom: float | None) -> float:
     return bottom + w_at(params, bottom) * (top - bottom)
 
 
-def cold_for(params: dict, month: int) -> float:
-    return params["cold"]["%02d" % month]
+def _cold_table(params: dict, month: int, doy: int | None) -> float:
+    """Monthly table, interpolated between mid-month values so there is no jump on the 1st."""
+    if doy is None:
+        return params["cold"]["%02d" % month]
+    pos = (doy - 15.2) / 30.44                  # 0 = mid January
+    i = math.floor(pos)
+    f = pos - i
+    a = params["cold"]["%02d" % (i % 12 + 1)]
+    b = params["cold"]["%02d" % ((i + 1) % 12 + 1)]
+    return a + (b - a) * f
+
+
+def cold_for(params: dict, month: int, doy: int | None = None, ema: float | None = None) -> float:
+    """Cold (mains) water temperature.
+
+    Mains water follows the ground, which follows the weather with a delay of weeks: a few warm days hardly
+    matter, a cold month does. With an outdoor sensor the model uses a ~3-week running average of the outdoor
+    temperature: cold = a + b * average, with a and b learned from long showers. Without one it uses the
+    learned monthly table, smoothly interpolated."""
+    if ema is not None:
+        cm = params["cold_model"]
+        return round(min(25.0, max(4.0, cm["a"]["v"] + cm["b"]["v"] * ema)), 2)
+    return _cold_table(params, month, doy)
 
 
 @dataclass
@@ -129,11 +153,11 @@ def sensed_shower_temp(params: dict, cold: float, ref_temp: float, head_flow: fl
 
 
 def estimate(params: dict, top: float, bottom: float | None, *, volume: float, shower_temp: float,
-             month: int, head_flow: float | None = None) -> Estimate:
+             month: int, head_flow: float | None = None, doy: int | None = None, ema: float | None = None) -> Estimate:
     """``shower_temp`` is the fixed temperature or the 38 °C reference in auto mode.
     ``head_flow`` (L/min) is the known shower-head flow, if any: it only changes the litres and the
     reported shower temperature, never the minutes (those come from the learned heat per minute)."""
-    cold = cold_for(params, month)
+    cold = cold_for(params, month, doy, ema)
     flow = params["flow"]["v"]
     per_minute = flow * max(shower_temp - cold, 5.0) / volume
     empty = cold + params["phi"]["v"] * (shower_temp + 2 - cold)
@@ -278,21 +302,28 @@ class LearnResult:
 
 def learn(params: dict, rows: list[Row], *, volume: float, shower_temp: float, since: int,
           energy_by_hour: dict[int, float] | None, previous_cycle: Cycle | None,
-          month_of, water: tuple[str, list[tuple[int, float]]] | None = None) -> tuple[LearnResult, Cycle | None]:
+          month_of, water: tuple[str, list[tuple[int, float]]] | None = None,
+          doy_of=None, ema_of=None) -> tuple[LearnResult, Cycle | None]:
     """Update ``params`` with everything that happened after minute ``since``.
 
     ``month_of(minute) -> int`` maps a minute to the local month (1-12).
     ``water`` is an optional water meter: ("rate", [(minute, L/min)]) or ("total", [(minute, litres)]).
+    ``doy_of(minute)`` (day of year) and ``ema_of(minute)`` (outdoor running average, or None) refine the
+    cold water temperature; both are optional.
     Returns the result and the last complete cycle (kept for the next run).
     """
     p = ensure_params(copy.deepcopy(params))
+
+    def cold_at(minute: int) -> float:
+        return cold_for(p, month_of(minute), doy_of(minute) if doy_of else None, ema_of(minute) if ema_of else None)
+
     if not any(r.heating for r in rows):
         mark_heating_from_temperature(rows)
     has_bottom = any(r.bottom is not None for r in rows)
     cycles = find_cycles(rows, energy_by_hour)
     draws = find_draws(rows)
     s: dict[str, list] = {"w20": [], "w30": [], "w45": [], "veff_factor": [], "phi": [], "flow": [],
-                          "loss": [], "duration": [], "head_flow": [], "cold": {}}
+                          "loss": [], "duration": [], "head_flow": [], "cold": {}, "cold_pairs": []}
     full = lambda c: c.bottom_after is None or c.top_after - c.bottom_after <= 2.5
     veff = volume * p["veff_factor"]["v"]
     # An energy meter is only trusted for stratification and flow once its scale against the tank is known;
@@ -302,7 +333,7 @@ def learn(params: dict, rows: list[Row], *, volume: float, shower_temp: float, s
     for c in cycles:
         if c.start < since or not full(c):
             continue
-        cold = cold_for(p, month_of(c.start))
+        cold = cold_at(c.start)
         if c.energy is not None and c.energy >= 0.2 and c.bottom_before is not None:
             if c.top_before - c.bottom_before < 3 and c.top_after - c.top_before >= 4:
                 start_avg = (c.top_before + c.bottom_before) / 2
@@ -328,7 +359,7 @@ def learn(params: dict, rows: list[Row], *, volume: float, shower_temp: float, s
         if any(a.end < c.start < b.start for c in cycles):
             continue                              # a partial top-up in between: its heat is not in the sum
         inside = [d for d in draws if a.end + 20 <= d.start < b.start]
-        cold_b = cold_for(p, month_of(b.start))
+        cold_b = cold_at(b.start)
         if not inside or any(d.bottom_low is not None and d.bottom_low < 30 for d in inside[:-1]):
             continue                              # a later draw could have been invisible
         if inside[-1].bottom_low is not None and inside[-1].bottom_low < cold_b + 3:
@@ -341,7 +372,7 @@ def learn(params: dict, rows: list[Row], *, volume: float, shower_temp: float, s
         else:
             drawn = tank_average(p, a.top_after, a.bottom_after) - tank_average(p, b.top_before, b.bottom_before)
         drawn -= p["loss"]["v"] * hours
-        cold = cold_for(p, month_of(b.start))
+        cold = cold_at(b.start)
         if drawn > 0:
             s["flow"].append(drawn * volume / (minutes * (shower_temp - cold)))
 
@@ -370,6 +401,9 @@ def learn(params: dict, rows: list[Row], *, volume: float, shower_temp: float, s
         if d.bottom_start is not None and d.bottom_low is not None and d.bottom_start - d.bottom_low >= 15:
             m = "%02d" % month_of(d.start)
             s["cold"][m] = min(s["cold"].get(m, 99.0), d.bottom_low - 1)
+            ema = ema_of(d.start) if ema_of else None
+            if ema is not None:
+                s["cold_pairs"].append([round(ema, 2), round(d.bottom_low - 1, 2)])
 
     if water:
         s["head_flow"] = water_flow_samples(water, [d for d in draws if d.start >= since])
@@ -380,6 +414,10 @@ def learn(params: dict, rows: list[Row], *, volume: float, shower_temp: float, s
         p[key] = _blend(p[key], s[key], LIMITS[key])
     for m, low in s["cold"].items():                 # cold water only moves towards what was seen
         p["cold"][m] = round(min(max(4.0, 0.7 * p["cold"][m] + 0.3 * low), 25.0), 1)
+
+    if s["cold_pairs"]:
+        p["cold_samples"] = (p["cold_samples"] + s["cold_pairs"])[-150:]
+        p["cold_model"] = fit_cold_model(p["cold_model"], p["cold_samples"])
 
     tops = [c.top_after for c in cycles if full(c)]
     if tops:
@@ -418,3 +456,29 @@ def water_flow_samples(water: tuple[str, list[tuple[int, float]]], draws: list[D
             if v0 is not None and v1 is not None and v1 > v0:
                 out.append((v1 - v0) / (b - a))
     return [x for x in out if 2.0 <= x <= 25.0]
+
+
+def fit_cold_model(prior: dict, samples: list[list[float]]) -> dict:
+    """Learn cold = a + b * outdoor average from (average, measured cold) pairs.
+
+    The slope is only learned once the samples span at least 4 °C of outdoor average (i.e. over the seasons);
+    until then only the offset moves. Both stay blended with the prior so a handful of showers cannot swing it."""
+    a0, b0 = prior["a"]["v"], prior["b"]["v"]
+    n = len(samples)
+    if n == 0:
+        return prior
+    xs = [x for x, _ in samples]
+    ys = [y for _, y in samples]
+    if n >= 8 and max(xs) - min(xs) >= 4:
+        mx, my = statistics.mean(xs), statistics.mean(ys)
+        sxx = sum((x - mx) ** 2 for x in xs)
+        b = sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / sxx
+        b = min(1.0, max(0.3, b))
+        a = my - b * mx
+    else:
+        b = b0
+        a = statistics.median([y - b0 * x for x, y in zip(xs, ys)])
+    w0 = min(prior["a"]["n"], MAX_PRIOR_WEIGHT)
+    blend = lambda old, new: (w0 * old + n * new) / (w0 + n)
+    return {"a": {"v": round(blend(a0, a), 3), "n": prior["a"]["n"]},
+            "b": {"v": round(blend(b0, b), 3), "n": prior["b"]["n"]}}
