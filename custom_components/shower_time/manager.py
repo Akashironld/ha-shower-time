@@ -409,11 +409,11 @@ class ShowerTimeManager:
         return self.full_ref
 
     def since_reheat(self) -> dict | None:
-        """Where the hot water went since the last complete reheat: showered vs. lost to standing loss.
+        """Where the hot water went since the last complete reheat: left, showered and lost to cooling.
 
-        Cooling is the learned standing loss (°C/h of tank average) over the hours since the reheat, turned
-        into shower minutes, kWh and money. Showered is what is left of the drop. The three parts always add
-        up to the minutes the tank held right after the reheat."""
+        Showered comes from the showers actually logged since the reheat (one shower minute takes about one
+        minute off the estimate); the rest of the drop is standing loss. The three parts always add up to the
+        minutes the tank held right after the reheat."""
         e, ref = self.current, self.ref_minutes()
         if e is None or not ref or not self.full_ref_at:
             return None
@@ -424,10 +424,16 @@ class ShowerTimeManager:
         if since is None:
             return None
         hours = max(0.0, (dt_util.now() - since).total_seconds() / 3600)
-        loss = self.params["loss"]["v"]
-        cooling = min(max(0.0, ref - e.minutes), loss * hours / e.per_minute) if e.per_minute > 0 else 0.0
-        used = max(0.0, ref - e.minutes - cooling)
-        heat = loss * hours * self.volume * model.CP
+        # showered = the showers actually logged since the reheat (plus a shower still running); the rest of the
+        # drop is cooling. One minute of showering takes about one minute off the estimate.
+        key = dt_util.as_local(since).isoformat(timespec="minutes")
+        logged = sum(x["minutes"] for x in self.ledger.log if x["start"] >= key)
+        if self.showering and self.ledger.session_start:
+            logged += max(0.0, (dt_util.utcnow() - self.ledger.session_start).total_seconds() / 60)
+        drop = max(0.0, ref - e.minutes)
+        used = min(drop, logged)
+        cooling = drop - used
+        heat = cooling * e.per_minute * self.volume * model.CP
         price = self.ledger.tank_price
         if price is None:
             p, _ = self.ledger.price_now(self)
