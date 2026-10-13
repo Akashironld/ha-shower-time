@@ -19,6 +19,8 @@ your own showers.
 - 💶 **Cost per shower** — also with **dynamic tariffs**: the price of the electricity at the moment the
   tank was *reheated* is used, not the price when you shower
 - 🔔 **Almost empty**, **hot water in use** and **full again at** for automations
+- 🍽️ **Shower or washing up?** Tells a shower from the kitchen tap by how much heat it takes (or right away with
+  a bathroom humidity sensor or a smart plug on the bathroom fan) — only showers count as showers
 - 🔮 **Enough for today?** It learns when you usually shower and warns when the hot water will run out before
   the last shower of the day
 - 🛁 **The shower going on now** (minutes and cost so far) and a **Shower** event after every shower — ready-made
@@ -113,6 +115,24 @@ electricity meters for hot water when available (both suggested automatically fo
 value you set (heat pump ≈ 2–3.5, electric boiler 1.0).
 
 ## Smart extras
+
+### Shower or washing up?
+
+The tank only sees heat leaving, so at first a shower and the kitchen tap look the same. They differ in how much
+heat they take: washing up a few tenths of a degree of the tank average, a shower several degrees at a steady pace;
+a bath or bucket filled with hot water only goes about three times faster than a shower. So a use shows as
+**HOT WATER** on the card first, and becomes **SHOWERING** once enough heat has left at a shower's pace — a few
+minutes, depending on how often your sensors report. With a **bathroom signal** (a humidity sensor, a smart plug on
+the bathroom fan, or a fan or light that switches on) it is recognised within a minute. The threshold between your
+taps and your showers is learned per household.
+
+Water drawn from the tank is replaced by cold water at the bottom, so the top stays hot while you shower. When the
+top falls while the bottom is still warm — a heat pump starting a reheat, or heat taken out through the coil — no
+water was drawn and it is not counted at all.
+
+Only showers go in the shower log, the habits and the shower totals. Everything else is counted as *Other hot water
+today* (heat, how often, cost) and fires `hot_water_used` on the Shower event. *Showering* is on only for a
+recognised shower; *Hot water in use* for any use.
 
 ### Enough for today?
 
@@ -213,6 +233,7 @@ The setup has two screens. Only the first one needs input; the second is filled 
 | **Shower-head flow** | *Water meter*, *type* or *fill in myself*: litres and the temperature you shower at | Litres at a 38 °C reference | *I don't know* |
 | **Flow, filled in yourself** | Only with *Fill in myself* (bucket method above) | — | `7.2` |
 | **Water meter or flow sensor** | Only with *Water meter*: measures the shower-head flow | — | — |
+| **Bathroom signal** | A shower is recognised within a minute: bathroom humidity, the power of the bathroom fan, or a fan, light or motion sensor (suggested when one has *bathroom* in its name) | Recognised by its heat after a few minutes | a smart plug on the bathroom fan: `sensor.…_power` |
 
 ### Change it later
 
@@ -241,10 +262,12 @@ To start learning from scratch, remove the integration and add it again.
 | `sensor.<name>_full_again_at` | while reheating: when the tank is full again (attribute: enough for one shower) |
 | `sensor.<name>_shower_temperature` | with a known shower-head flow or a fixed temperature |
 | `binary_sensor.<name>_almost_empty` | below the threshold (default 10 min) |
-| `binary_sensor.<name>_hot_water_in_use` | someone is showering / drawing hot water now |
+| `binary_sensor.<name>_hot_water_in_use` | hot water is being drawn now (a shower, washing up, a tap) |
 | `binary_sensor.<name>_reheating` | the tank is being reheated (with a reheat entity) |
+| `binary_sensor.<name>_showering` | someone showers now (recognised as a shower, not washing up) |
 | `sensor.<name>_current_shower` | minutes of the shower going on now (0 otherwise); attributes: cost so far |
-| `event.<name>_shower` | `shower_started` / `shower_ended` (with minutes, kWh and cost) |
+| `event.<name>_shower` | `shower_started` (once recognised) / `shower_ended` (with minutes, kWh and cost) / `hot_water_used` (other use) |
+| `sensor.<name>_other_hot_water_today` | heat of today's hot water that was not a shower; attributes: how often, cost |
 | `binary_sensor.<name>_enough_for_today` | on when the hot water lasts for today's usual showers (after a week) |
 | `sensor.<name>_shower_time_expected_today` | shower minutes still expected today; attributes: runs out at, next shower |
 | `sensor.<name>_showers_total`, `_shower_time_total`, `_shower_electricity_total`, `_shower_cost_total` | totals for long-term statistics and the energy dashboard |
@@ -381,6 +404,10 @@ Debiet van je douchekop meten: zet de douche aan zoals je normaal doucht, houd e
 hoeveel seconden het duurt tot er 10 liter in zit. Debiet = 600 ÷ seconden (75 s = 8 L/min).
 
 **Slimme extra's:**
+- **Douche of afwas?** Warm water verschijnt eerst als **WARM WATER** op de kaart en wordt **DOUCHT NU** zodra er
+  genoeg warmte in douchetempo uit het vat is gegaan (een paar minuten). Met een **badkamersignaal** (vochtigheid,
+  een slimme stekker op de badkamerventilatie, of een ventilator of lamp) binnen een minuut. Afwas en kranen tellen
+  apart als *Overig warm water vandaag*; een warmtepomp die opstart telt helemaal niet.
 - **Genoeg voor vandaag?** Hij leert wanneer jullie douchen (per weekdag) en waarschuwt als het warme water op
   raakt vóór de laatste douche van de dag; de kaart toont dan bijvoorbeeld **OP OM 21:30**.
 - **Huidige douche** (minuten en kosten tot nu toe) en een **Douche**-gebeurtenis na elke douche.

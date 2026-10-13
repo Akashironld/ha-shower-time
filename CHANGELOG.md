@@ -5,8 +5,15 @@
 - **Enough for today?** Learns when the household showers (per hour, per weekday) and, after a week, compares the
   minutes still expected today with what the tank holds: *Enough for today*, *Shower time expected today* (runs out
   at, next shower) and **EMPTY BY 21:30** on the card
-- **The shower going on now**: *Current shower* (minutes and cost so far, also in the card's IN USE label) and a
-  **Shower** event entity (`shower_started`, `shower_ended` with minutes, kWh and cost)
+- **Shower or washing up?** A hot water use shows as HOT WATER first and becomes SHOWERING once enough heat has left
+  at a shower's pace (threshold learned per household), or within a minute with the new optional **bathroom
+  signal** (humidity, the power of the bathroom fan, a fan/light/motion that switches on; suggested automatically).
+  A bath or bucket filled with hot water only is FILLING. Heat leaving without water (a heat pump starting a reheat,
+  heat taken out through the coil) is not counted. Only showers go in the log; the rest is *Other hot water today*.
+  Checked on 11 days of a real tank: all 8 logged showers recognised, washing up and three heat-pump events not
+- **The shower going on now**: *Showering* (recognised showers only), *Current shower* (minutes and cost so far, also
+  in the card's label) and a **Shower** event entity (`shower_started`, `shower_ended` with minutes, kWh and cost,
+  `hot_water_used` for other use)
 - **Blueprints**: hot water almost gone (flashing lights), shower timer, shower summary notification, hot water will
   not last today — with import buttons in the README
 - **Totals** for long-term statistics: showers, shower time, shower electricity (energy dashboard) and cost

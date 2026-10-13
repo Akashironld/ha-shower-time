@@ -25,7 +25,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ShowerTimeConfigEntry,
     async_add_entities([MinutesSensor(m), ShowersSensor(m), LitresSensor(m), ShowerTemperatureSensor(m), FillSensor(m), ModelSensor(m),
                         ShowersTodaySensor(m), ShowerTimeTodaySensor(m), ShowerTimeWeekSensor(m), LastShowerSensor(m),
                         ReheatReadySensor(m), CurrentShowerSensor(m), ExpectedTodaySensor(m), ShowersTotalSensor(m),
-                        ShowerTimeTotalSensor(m), ShowerEnergyTotalSensor(m), LegionellaSensor(m), HeatLossSensor(m)]
+                        ShowerTimeTotalSensor(m), ShowerEnergyTotalSensor(m), LegionellaSensor(m), HeatLossSensor(m),
+                        OtherHotWaterTodaySensor(m)]
                        + ([ShowerCostTodaySensor(m), ShowerCostTotalSensor(m)] if m.price else []))
 
 
@@ -84,6 +85,8 @@ class MinutesSensor(ShowerTimeEntity, SensorEntity):
             "live_countdown": m.live_offset > 0,
             "low_threshold": m.low_minutes,
             "current_shower": m.ledger.running(m, dt_util.utcnow()),
+            "hot_water_use": {"kind": m.use_kind(), "bathroom_signal": m.bath_active()} if m.showering else None,
+            "other_today": m.ledger.other_today(),
             "forecast": m.forecast_attrs(),
             "learned_at": m.last_learn,
             "observations": p["flow"]["n"],
@@ -479,3 +482,25 @@ class HeatLossSensor(ShowerTimeEntity, SensorEntity):
         return {"coefficient_w_per_k": st.get("ua_recent"), "baseline_w_per_k": st.get("ua_baseline"),
                 "ratio": st.get("ratio"), "raised": st.get("raised"), "leak_like": st.get("leak_like"),
                 "measurements": st.get("measurements"), "last_measurement": last}
+
+
+class OtherHotWaterTodaySensor(_LogSensor):
+    """Hot water used today that was not a shower (washing up, taps, a bath being filled): heat taken from the
+    tank; attributes: how often, electricity and cost."""
+
+    _attr_device_class = SensorDeviceClass.ENERGY
+    _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+    _attr_suggested_display_precision = 2
+    _attr_icon = "mdi:water-pump"
+
+    def __init__(self, manager) -> None:
+        super().__init__(manager, "other_hot_water_today")
+
+    @property
+    def native_value(self):
+        return self.manager.ledger.other_today()["heat_kwh"]
+
+    @property
+    def extra_state_attributes(self):
+        return {**self.manager.ledger.other_today(), "currency": self.manager.ledger.currency or None,
+                "recent": self.manager.ledger.other[-10:]}

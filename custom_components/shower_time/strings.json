@@ -32,7 +32,8 @@
           "outdoor_sensor": "Outdoor temperature sensor",
           "electricity_sensor": "Electricity used for hot water (energy sensor)",
           "cop": "COP for hot water",
-          "price_sensor": "Electricity price sensor"
+          "price_sensor": "Electricity price sensor",
+          "bathroom_sensor": "Bathroom signal (optional)"
         },
         "data_description": {
           "profile": "Where the model starts before it has learned from your own showers.",
@@ -44,7 +45,8 @@
           "outdoor_sensor": "Optional. Mains water follows the outdoor temperature with a delay of weeks; the model uses a 3-week average of it to estimate the cold water temperature. Without it, a monthly table is used.",
           "electricity_sensor": "Optional. Together with the heat sensor this lets the integration learn the COP for hot water.",
           "cop": "Used when the COP cannot be learned: heat pump about 2–3.5, electric boiler 1.0.",
-          "price_sensor": "Optional, choose your own (e.g. from your energy supplier or evcc). With dynamic tariffs the price at the moment the tank is reheated is used, not when you shower."
+          "price_sensor": "Optional, choose your own (e.g. from your energy supplier or evcc). With dynamic tariffs the price at the moment the tank is reheated is used, not when you shower.",
+          "bathroom_sensor": "Recognises a shower within a minute instead of after a few: a bathroom humidity sensor (rising), the power of the bathroom fan (running harder than usual), or a fan, light or motion sensor that switches on. Without it showers are told apart from washing up by how much heat they take, which takes a few minutes."
         }
       }
     },
@@ -78,7 +80,8 @@
           "cop": "COP for hot water",
           "price_sensor": "Electricity price sensor",
           "legionella_temperature": "Legionella temperature",
-          "legionella_days": "Legionella: warn after"
+          "legionella_days": "Legionella: warn after",
+          "bathroom_sensor": "Bathroom signal (optional)"
         },
         "data_description": {
           "flow_source": "Optional. With the flow the integration works out the temperature you shower at and the litres. A water meter measures it while you shower. Don't know it? Choose 'Fill in myself' and measure it in a minute with a bucket (see below), or pick the type of shower head.",
@@ -88,7 +91,8 @@
           "cop": "Used when the COP cannot be learned: heat pump about 2–3.5, electric boiler 1.0.",
           "price_sensor": "Optional, choose your own (e.g. from your energy supplier or evcc). With dynamic tariffs the price at the moment the tank is reheated is used, not when you shower.",
           "legionella_temperature": "The whole tank (top and bottom) must reach this to count as a legionella heat-up.",
-          "legionella_days": "Days without such a heat-up before 'Legionella heat-up overdue' turns on. Default 8: a weekly program plus a day."
+          "legionella_days": "Days without such a heat-up before 'Legionella heat-up overdue' turns on. Default 8: a weekly program plus a day.",
+          "bathroom_sensor": "Recognises a shower within a minute instead of after a few: a bathroom humidity sensor (rising), the power of the bathroom fan (running harder than usual), or a fan, light or motion sensor that switches on. Without it showers are told apart from washing up by how much heat they take, which takes a few minutes."
         }
       }
     },
@@ -183,6 +187,9 @@
       },
       "heat_loss": {
         "name": "Tank heat loss"
+      },
+      "other_hot_water_today": {
+        "name": "Other hot water today"
       }
     },
     "binary_sensor": {
@@ -203,6 +210,9 @@
       },
       "heat_loss_raised": {
         "name": "Raised heat loss"
+      },
+      "shower_active": {
+        "name": "Showering"
       }
     },
     "button": {
@@ -217,7 +227,8 @@
           "event_type": {
             "state": {
               "shower_started": "Shower started",
-              "shower_ended": "Shower ended"
+              "shower_ended": "Shower ended",
+              "hot_water_used": "Other hot water used"
             }
           }
         }

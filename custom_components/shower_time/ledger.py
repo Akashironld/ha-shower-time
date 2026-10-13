@@ -15,7 +15,7 @@ from homeassistant.components.recorder import get_instance, statistics
 from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.util import dt as dt_util
 
-from . import model
+from . import insights, model
 from .const import LOG_DAYS, MAX_SHOWER_MINUTES, MIN_SHOWER_MINUTES
 
 if TYPE_CHECKING:
@@ -58,12 +58,13 @@ class ShowerLedger:
         # running totals for Home Assistant's long-term statistics (showers logged live, never reset)
         self.totals: dict = {"showers": 0, "minutes": 0.0, "heat_kwh": 0.0, "electricity_kwh": 0.0, "cost": 0.0}
         self.covered_from: str | None = None        # local date from which the log holds every shower
+        self.other: list[dict] = []                 # other hot water use: washing up, taps, a bath being filled
 
     # ------------------------------------------------------------------ persistence
     def to_dict(self) -> dict:
         return {"log": self.log, "tank_price": self.tank_price, "currency": self.currency,
                 "cop_learned": self.cop_learned, "backfilled": self.backfilled, "totals": self.totals,
-                "covered_from": self.covered_from}
+                "covered_from": self.covered_from, "other": self.other}
 
     def load(self, d: dict | None) -> None:
         if not d:
@@ -75,6 +76,7 @@ class ShowerLedger:
         self.backfilled = d.get("backfilled", False)
         self.totals.update(d.get("totals") or {})
         self.covered_from = d.get("covered_from")
+        self.other = d.get("other", [])
         if self.covered_from is None and self.log:   # logs from before 0.10: complete from the day after the first one
             first = datetime.fromisoformat(self.log[0]["start"]).date()
             self.covered_from = (first + timedelta(days=1)).isoformat()
@@ -142,16 +144,16 @@ class ShowerLedger:
         self.eta_one = now if est.average >= need else now + timedelta(minutes=(need - est.average) / rate["v"])
 
     def shower_ended(self, m: ShowerTimeManager, start: datetime, end: datetime,
-                     est: model.Estimate | None) -> dict | None:
+                     est: model.Estimate | None, min_minutes: float = MIN_SHOWER_MINUTES) -> dict | None:
         """Log a finished shower; returns the log entry, or None when it was too short or too long."""
         minutes = (end - start).total_seconds() / 60
-        if not MIN_SHOWER_MINUTES <= minutes <= MAX_SHOWER_MINUTES or est is None:
+        if not min_minutes <= minutes <= MAX_SHOWER_MINUTES or est is None:
             return None
         return self._add(m, start, minutes, est.per_minute, self.tank_price, "live")
 
     def running(self, m: ShowerTimeManager, now: datetime) -> dict | None:
-        """The shower going on right now: minutes so far and what that hot water cost."""
-        if not m.showering or self.session_start is None or m.estimate is None:
+        """The shower going on right now (once recognised as one): minutes so far and what that hot water cost."""
+        if not m.showering or self.session_start is None or m.estimate is None or m.use_kind() != "shower":
             return None
         minutes = max(0.0, (now - self.session_start).total_seconds() / 60)
         heat = model.shower_heat_kwh(m.estimate.per_minute, minutes, m.volume)
@@ -190,6 +192,34 @@ class ShowerLedger:
         m.request_save()
         return entry
 
+    def other_ended(self, m: ShowerTimeManager, kind: str, start: datetime, minutes: float, heat_kwh: float) -> dict:
+        """Log hot water that was not a shower (washing up, a tap, a bath or bucket), with what it cost."""
+        cop = self.cop(m)
+        price = self.tank_price
+        if price is None:
+            p, cur = self.price_now(m)
+            price = p / cop if p is not None else None
+            self.currency = cur or self.currency
+        entry = {"start": dt_util.as_local(start).isoformat(timespec="minutes"), "kind": kind,
+                 "minutes": round(minutes, 1), "heat_kwh": round(heat_kwh, 2),
+                 "electricity_kwh": round(heat_kwh / cop, 2),
+                 "cost": round(heat_kwh * price, 2) if price is not None else None}
+        cutoff = (dt_util.now() - timedelta(days=LOG_DAYS)).isoformat()
+        self.other = [e for e in self.other if e["start"] >= cutoff] + [entry]
+        m.request_save()
+        return entry
+
+    def other_today(self) -> dict:
+        today = dt_util.now().replace(hour=0, minute=0, second=0, microsecond=0).isoformat(timespec="minutes")
+        t = [e for e in self.other if e["start"] >= today]
+        costs = [e["cost"] for e in t if e.get("cost") is not None]
+        kinds: dict[str, int] = {}
+        for e in t:
+            kinds[e["kind"]] = kinds.get(e["kind"], 0) + 1
+        return {"count": len(t), "heat_kwh": round(sum(e["heat_kwh"] for e in t), 2),
+                "electricity_kwh": round(sum(e["electricity_kwh"] for e in t), 2),
+                "cost": round(sum(costs), 2) if costs else (0.0 if not t else None), "by_kind": kinds}
+
     # ------------------------------------------------------------------ summaries
     def _since(self, since: datetime) -> list[dict]:
         key = since.isoformat(timespec="minutes")
@@ -225,7 +255,12 @@ class ShowerLedger:
         if self.backfilled or not rows:
             return
         cycles = model.find_cycles(rows, None)
-        draws = [d for d in model.find_draws(rows) if MIN_SHOWER_MINUTES <= d.minutes <= MAX_SHOWER_MINUTES]
+        def cold_at(minute: int) -> float:
+            local = dt_util.as_local(datetime.fromtimestamp(minute * 60, timezone.utc))
+            return model.cold_for(m.params, local.month, local.timetuple().tm_yday, m._ema_on(local.date().isoformat()))
+        # showers only: not washing up, and not heat that left without water (a heat pump starting a reheat)
+        draws = [d for d in model.find_draws(rows) if MIN_SHOWER_MINUTES <= d.minutes <= MAX_SHOWER_MINUTES
+                 and insights.draw_kind(m.params, rows, d.start, d.minutes, cold_at(d.start), m.confirm_k()) == "shower"]
         price_by_hour: dict[int, float] = {}
         cur = ""
         if m.price:

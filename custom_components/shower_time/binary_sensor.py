@@ -12,7 +12,8 @@ from .entity import ShowerTimeEntity
 async def async_setup_entry(hass: HomeAssistant, entry: ShowerTimeConfigEntry,
                             async_add_entities: AddEntitiesCallback) -> None:
     m = entry.runtime_data
-    ents = [LowSensor(m), ShoweringSensor(m), EnoughTodaySensor(m), LegionellaOverdueSensor(m), HeatLossRaisedSensor(m)]
+    ents = [LowSensor(m), ShoweringSensor(m), ShowerActiveSensor(m), EnoughTodaySensor(m), LegionellaOverdueSensor(m),
+            HeatLossRaisedSensor(m)]
     if m.heating:
         ents.append(ReheatingSensor(m))
     async_add_entities(ents)
@@ -63,7 +64,30 @@ class ShoweringSensor(ShowerTimeEntity, BinarySensorEntity):
 
     @property
     def is_on(self):
-        return self.manager.showering
+        return self.manager.showering and self.manager.use_kind() != "coil"
+
+    @property
+    def extra_state_attributes(self):
+        return {"kind": self.manager.use_kind()}
+
+
+class ShowerActiveSensor(ShowerTimeEntity, BinarySensorEntity):
+    """On while someone showers: hot water in use that was recognised as a shower (by its heat, or right away
+    with a bathroom signal). Washing up and taps do not turn it on."""
+
+    _attr_device_class = BinarySensorDeviceClass.RUNNING
+    _attr_icon = "mdi:shower"
+
+    def __init__(self, manager) -> None:
+        super().__init__(manager, "shower_active")
+
+    @property
+    def available(self) -> bool:
+        return True
+
+    @property
+    def is_on(self):
+        return self.manager.use_kind() == "shower"
 
 
 class EnoughTodaySensor(ShowerTimeEntity, BinarySensorEntity):

@@ -10,6 +10,18 @@ Today's forecast
     The minutes still expected today (from the habits) against what the tank holds now, minus the standing
     loss until then. Without a reheat in between: when would the hot water run out?
 
+What kind of hot water use
+    The tank only sees heat leaving it, so a shower and a sink being filled look the same at first. They differ
+    in how much heat they take and how fast: washing up takes a few tenths of a degree from the tank average,
+    a shower several degrees at a steady pace, a bath or bucket filled with hot water only falls about three
+    times faster than a shower. A use is shown as hot water first and becomes a shower once enough heat has
+    left at a shower's pace, or right away when a bathroom signal (humidity rising, the bathroom fan running
+    harder, a fan or light switched on) confirms it. The threshold is learned per household.
+    Water drawn from the tank is replaced by cold water at the bottom, so the top stays hot until the tank is
+    nearly empty. When the top falls while the bottom is still warm, or falls more than the bottom, heat leaves
+    without water: a heat pump starting a reheat (the coil is cold for a moment) or heat taken out through the
+    coil. That is not counted as hot water use.
+
 Heat loss (insulation and leaks)
     Each day the longest quiet stretch (no reheating, no hot water use, layers settled) while the tank is
     evenly hot gives a clean measurement of how fast it cools. Divided by how much warmer the tank is than the
@@ -137,6 +149,161 @@ def forecast(habits: dict, *, weekday: int, hour: float, minutes_now: float, per
     return Forecast(expected_minutes=round(need, 1), available_minutes=round(max(0.0, available), 1),
                     enough=runs_out is None, runs_out_at=round(runs_out, 2) if runs_out is not None else None,
                     next_shower_at=nxt)
+
+
+# --------------------------------------------------------------------------- what kind of hot water use
+
+SHOWER_CONFIRM_K = 1.8        # tank average drop that makes a use a shower (until learned per household)
+BATH_CONFIRM_K = 0.6          # with a bathroom signal a much smaller drop is enough
+FILL_RATE = 1.2               # K/min, far faster than any shower: a bath or bucket filled with hot water only
+FILL_MIN_K = 2.0
+COIL_TOP_DROP = 1.0           # K the top falls while the bottom is still warm (or falls less) = no water drawn
+COIL_BOTTOM_ABOVE_COLD = 15.0
+BATH_SIGNAL_MINUTES = 10      # a bathroom signal this long before or during the use counts
+HUMIDITY_RISE = 3.0           # %RH above the lowest value of the last 15 minutes
+POWER_RISE = 1.0              # W above the usual (median) power of the last day, and at least 30 % more
+
+
+@dataclass
+class UseSession:
+    """One hot water use, followed live. Times are minutes on any clock."""
+    start: float
+    start_avg: float | None              # tank average just before the use
+    start_top: float | None = None
+    start_bottom: float | None = None
+    kind: str = "unknown"                # unknown -> shower, fill or coil; a use never confirmed was a tap
+    drawn: float = 0.0                   # K the tank average fell since the start
+    confirmed_after: float | None = None
+    bath_seen: bool = False
+
+    def update(self, t: float, avg: float | None, bath_active: bool, confirm_k: float = SHOWER_CONFIRM_K, *,
+               top: float | None = None, bottom: float | None = None, cold: float | None = None) -> bool:
+        """Feed a new reading; returns True at the moment the use is recognised as a shower."""
+        if avg is not None and self.start_avg is not None:
+            self.drawn = max(self.drawn, self.start_avg - avg)
+        self.bath_seen = self.bath_seen or bool(bath_active)
+        if self.kind not in ("unknown", "shower"):
+            return False
+        if top is not None and bottom is not None and self.start_top is not None and self.start_bottom is not None:
+            top_drop, bottom_drop = self.start_top - top, self.start_bottom - bottom
+            warm_bottom = cold is not None and bottom > cold + COIL_BOTTOM_ABOVE_COLD
+            if top_drop >= COIL_TOP_DROP and (top_drop > bottom_drop or warm_bottom):
+                self.kind = "coil"               # heat left without water: not a use after all
+                return False
+        if self.kind != "unknown":
+            return False
+        rate = self.drawn / max(1.0, t - self.start)
+        if self.drawn >= FILL_MIN_K and rate >= FILL_RATE:
+            self.kind = "fill"
+        elif self.drawn >= (BATH_CONFIRM_K if self.bath_seen else confirm_k):
+            self.kind = "shower"
+            self.confirmed_after = round(t - self.start, 1)
+            return True
+        return False
+
+    def final(self, minutes: float, max_shower: float, min_shower: float = 2.0) -> str:
+        """shower, fill (bath or bucket), tap (washing up, hand washing), coil (no water drawn) or other (a use
+        too long for a shower). A shower confirmed by its heat counts from ``min_shower`` minutes."""
+        if self.kind == "shower":
+            return "shower" if min_shower <= minutes <= max_shower else "other"
+        return self.kind if self.kind in ("fill", "coil") else "tap"
+
+
+def _quantile(values: list[float], q: float) -> float:
+    v = sorted(values)
+    pos = q * (len(v) - 1)
+    lo = int(pos)
+    return v[lo] + (v[min(lo + 1, len(v) - 1)] - v[lo]) * (pos - lo)
+
+
+def learn_confirm_k(showers: list[float], taps: list[float]) -> float:
+    """Threshold between this household's taps and showers (tank average drop, K): the geometric middle of the
+    largest taps and the smallest showers. The default until both have been seen five times, or when they
+    overlap."""
+    if len(showers) < 5 or len(taps) < 5:
+        return SHOWER_CONFIRM_K
+    s10, t90 = _quantile(showers, 0.1), _quantile(taps, 0.9)
+    if s10 <= t90:
+        return SHOWER_CONFIRM_K
+    return round(min(2.5, max(1.0, (s10 * max(t90, 0.01)) ** 0.5)), 2)
+
+
+class BathSignal:
+    """Is the bathroom in use? From a humidity sensor (rising), a power sensor such as a bathroom fan (above its
+    usual power, learned) or anything that switches on (fan, light, motion). Times are minutes."""
+
+    def __init__(self, kind: str) -> None:
+        self.kind = kind                         # humidity, power or on_off
+        self.values: list[tuple[float, float]] = []
+        self.active_at: float | None = None
+
+    def feed(self, t: float, value) -> None:
+        if value is None:
+            return
+        if self.kind == "on_off":
+            if value:
+                self.active_at = t
+            return
+        v = float(value)
+        if not self.values or self.values[-1][1] != v:
+            self.values.append((t, v))
+        keep = [x for x in self.values if x[0] >= t - 1440]
+        older = [x for x in self.values if x[0] < t - 1440]
+        self.values = older[-1:] + keep          # plus the value in effect a day ago
+        if self.kind == "humidity":
+            # the values of the last 15 minutes, including the one that was in effect when they began
+            older = [x[1] for x in self.values if x[0] < t - 15]
+            window = [x[1] for x in self.values if x[0] >= t - 15] + older[-1:]
+            if v - min(window) >= HUMIDITY_RISE:
+                self.active_at = t
+        else:
+            if len(self.values) >= 10:
+                usual = statistics.median(x[1] for x in self.values)
+                if v >= usual + max(POWER_RISE, 0.3 * usual):
+                    self.active_at = t
+
+    def active(self, t: float) -> bool:
+        return self.active_at is not None and t - self.active_at <= BATH_SIGNAL_MINUTES
+
+
+def draw_heat(params: dict, rows: list[model.Row], start: int, minutes: int) -> float:
+    """Tank average drop (K) of a draw found in the history: start against the lowest point in the 10 minutes
+    after it, as the layers settle."""
+    seg = []
+    for r in rows:
+        if r.minute < start:
+            continue
+        if r.minute > start + minutes + 10 or (r.heating and seg):
+            break
+        seg.append(r)
+    if not seg:
+        return 0.0
+    a0 = model.tank_average(params, seg[0].top, seg[0].bottom)
+    return max(0.0, a0 - min(model.tank_average(params, r.top, r.bottom) for r in seg))
+
+
+def draw_kind(params: dict, rows: list[model.Row], start: int, minutes: int, cold: float,
+              confirm_k: float = SHOWER_CONFIRM_K) -> str:
+    """The same judgement for a draw found in the history: shower, tap or coil (heat left without water).
+    Like the live judgement it stops where a reheat begins (a heat pump starting up dips the top)."""
+    seg = []
+    for r in rows:
+        if r.minute < start:
+            continue
+        if r.minute > start + minutes + 10 or r.heating:
+            break
+        seg.append(r)
+    if not seg:
+        return "tap"
+    first = seg[0]
+    if first.bottom is not None:
+        bottom_drop = first.bottom - min(r.bottom for r in seg if r.bottom is not None)
+        top_drop = first.top - min(r.top for r in seg)
+        dipped = next((r for r in seg if first.top - r.top >= COIL_TOP_DROP), None)
+        if dipped is not None and (top_drop > bottom_drop or (dipped.bottom is not None
+                                                              and dipped.bottom > cold + COIL_BOTTOM_ABOVE_COLD)):
+            return "coil"
+    return "shower" if draw_heat(params, rows, start, minutes) >= confirm_k else "tap"
 
 
 # --------------------------------------------------------------------------- heat loss

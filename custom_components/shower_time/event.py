@@ -15,10 +15,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ShowerTimeConfigEntry,
 
 
 class ShowerEvent(ShowerTimeEntity, EventEntity):
-    """shower_started when hot water use begins; shower_ended for a finished shower (4 to 40 minutes),
-    with minutes, heat_kwh, electricity_kwh, cost and currency."""
+    """shower_started once a hot water use is recognised as a shower; shower_ended for a finished shower, with
+    minutes, heat_kwh, electricity_kwh, cost and currency; hot_water_used for other hot water (kind: tap, fill
+    or other)."""
 
-    _attr_event_types = ["shower_started", "shower_ended"]
+    _attr_event_types = ["shower_started", "shower_ended", "hot_water_used"]
     _attr_icon = "mdi:shower-head"
 
     def __init__(self, manager) -> None:

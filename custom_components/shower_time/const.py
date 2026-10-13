@@ -55,3 +55,6 @@ CONF_LEGIONELLA_TEMP = "legionella_temperature"
 CONF_LEGIONELLA_DAYS = "legionella_days"
 DEFAULT_LEGIONELLA_TEMP = 60
 DEFAULT_LEGIONELLA_DAYS = 8          # a weekly program plus a day of margin
+
+# Optional bathroom signal that confirms a shower quickly: humidity, the bathroom fan's power, or a fan/light/motion
+CONF_BATH = "bathroom_sensor"

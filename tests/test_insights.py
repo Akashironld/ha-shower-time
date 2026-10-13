@@ -196,3 +196,107 @@ def test_merge_keeps_the_longest_stretch_per_day():
     b = insights.LossSample(day="2026-10-01", hours=3.5, average=60, rate=0.4, top_rate=0.4, bottom_rate=0.4, ua=2.6)
     merged = insights.merge_samples(insights.merge_samples([], [a]), [b])
     assert len(merged) == 1 and merged[0]["ua"] == 2.0
+
+
+# --------------------------------------------------------------------------- what kind of hot water use
+
+def run_use(steps, bath=lambda t: False, start=(55.0, 50.0), cold=15.0, confirm_k=insights.SHOWER_CONFIRM_K):
+    """steps: [(minute, top, bottom)] after the start. Returns the session and the minute it became a shower."""
+    p = model.new_params("weheat_200")
+    s = insights.UseSession(start=0.0, start_avg=model.tank_average(p, *start), start_top=start[0], start_bottom=start[1])
+    confirmed = None
+    for t, top, bottom in steps:
+        if s.update(t, model.tank_average(p, top, bottom), bath(t), confirm_k, top=top, bottom=bottom, cold=cold):
+            confirmed = t
+    return s, confirmed
+
+
+def test_shower_is_confirmed_by_its_heat():
+    # a shower: cold water comes in at the bottom, the top stays hot
+    steps = [(2 * i, 55.0, 50.0 - 2.5 * i) for i in range(1, 8)]
+    s, at = run_use(steps)
+    assert s.kind == "shower" and at is not None and at <= 6
+    assert s.final(14, 40) == "shower"
+
+
+def test_washing_up_stays_a_tap():
+    s, at = run_use([(1, 55.0, 49.6), (2, 55.0, 49.5), (3, 55.0, 49.5)])
+    assert at is None and s.kind == "unknown" and s.final(3, 40) == "tap"
+
+
+def test_bathroom_signal_confirms_quickly():
+    steps = [(2 * i, 55.0, 50.0 - 1.0 * i) for i in range(1, 6)]
+    without, at1 = run_use(steps)
+    with_bath, at2 = run_use(steps, bath=lambda t: True)
+    assert at2 is not None and (at1 is None or at2 < at1)
+    assert with_bath.bath_seen
+
+
+def test_hot_fill_is_not_a_shower():
+    s, _ = run_use([(1, 55.0, 44.0), (2, 55.0, 38.0), (3, 55.0, 32.0)])     # bottom falls far faster than a shower
+    assert s.kind == "fill" and s.final(3, 40) == "fill"
+
+
+def test_heat_leaving_without_water_is_not_a_use():
+    # a heat pump starting a reheat: the top dips, the bottom hardly moves
+    s, _ = run_use([(2, 41.0, 21.5), (4, 37.0, 20.5), (6, 33.0, 19.5)], start=(43.5, 21.7), cold=17.0)
+    assert s.kind == "coil" and s.final(6, 40) == "coil"
+    # heat taken out through the coil: top and bottom fall while the bottom is still far above cold water
+    s, _ = run_use([(2 * i, 55.8 - 0.35 * i, 49.4 - 1.5 * i) for i in range(1, 8)], start=(55.8, 49.4), cold=17.0)
+    assert s.kind == "coil"
+
+
+def test_end_of_a_long_shower_is_still_a_shower():
+    # near the end of a long shower the top falls too, but the bottom is down at cold water by then
+    steps = [(2 * i, 55.0, 50.0 - 4 * i) for i in range(1, 8)] + [(16, 52.0, 20.0), (18, 50.0, 19.0)]
+    s, _ = run_use(steps, cold=17.0)
+    assert s.kind == "shower"
+
+
+def test_confirm_threshold_is_learned_between_taps_and_showers():
+    assert insights.learn_confirm_k([7, 6, 12], [0.3]) == insights.SHOWER_CONFIRM_K       # too few yet
+    k = insights.learn_confirm_k([3.3, 6.5, 12.4, 6.5, 12.8, 3.2, 6.6, 5.5], [0.25, 0.76, 0.3, 0.24, 0.34, 0.3])
+    assert 1.0 <= k < 1.8                                                                 # faster than default
+    assert insights.learn_confirm_k([1.0] * 6, [1.2] * 6) == insights.SHOWER_CONFIRM_K   # overlap: keep default
+
+
+def test_bath_signal_humidity_power_and_switch():
+    h = insights.BathSignal("humidity")
+    h.feed(0, 60.0)
+    h.feed(30, 60.5)
+    assert not h.active(30)
+    h.feed(32, 64.0)                                    # +4 %RH within 15 minutes (60.5 was in effect)
+    assert h.active(33) and not h.active(50)
+    fan = insights.BathSignal("power")
+    for i in range(30):
+        fan.feed(i * 40, 3.0 if i % 2 else 4.0)        # idles at 3-4 W
+    assert not fan.active(1200)
+    fan.feed(1201, 6.0)                                 # runs harder: someone is in the bathroom
+    assert fan.active(1205)
+    sw = insights.BathSignal("on_off")
+    sw.feed(10, False)
+    assert not sw.active(10)
+    sw.feed(11, True)
+    assert sw.active(15) and not sw.active(30)
+
+
+def test_history_draws_are_judged_the_same_way():
+    p = model.new_params("weheat_200")
+    m0 = 1000
+    shower = [model.Row(minute=m0 + i, top=55.0, bottom=50.0 - min(i, 12) * 2.0, heating=False) for i in range(25)]
+    assert insights.draw_kind(p, shower, m0, 12, cold=15.0) == "shower"
+    tap = [model.Row(minute=m0 + i, top=55.0, bottom=50.0 - (0.5 if i > 2 else 0), heating=False) for i in range(20)]
+    assert insights.draw_kind(p, tap, m0, 4, cold=15.0) == "tap"
+    coil = [model.Row(minute=m0 + i, top=55.8 - 0.2 * i, bottom=49.4 - 0.9 * i, heating=False) for i in range(20)]
+    assert insights.draw_kind(p, coil, m0, 15, cold=17.0) == "coil"
+
+
+def test_reheat_starting_during_a_shower_does_not_make_it_coil():
+    """A real case: the heat pump started reheating 7 minutes into a shower; its start-up dips the top."""
+    p = model.new_params("weheat_200")
+    m0 = 2000
+    vals = [(50.0, 47.3, 0), (50.0, 46.3, 0), (50.0, 46.3, 0), (49.9, 44.4, 0), (49.9, 44.4, 0), (49.9, 41.1, 0),
+            (49.9, 41.1, 0), (49.7, 37.0, 1), (49.7, 37.0, 1), (49.3, 36.4, 1), (49.3, 36.4, 1), (49.1, 37.3, 1),
+            (48.9, 38.4, 1), (48.8, 39.3, 1)]
+    rows = [model.Row(minute=m0 + i, top=t, bottom=b, heating=bool(h)) for i, (t, b, h) in enumerate(vals)]
+    assert insights.draw_kind(p, rows, m0, 5, cold=17.0) == "shower"

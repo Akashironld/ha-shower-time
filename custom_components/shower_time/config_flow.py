@@ -11,6 +11,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er, selector
 
 from .const import (
+    CONF_BATH,
     CONF_BOTTOM,
     CONF_ENERGY,
     CONF_FLOW_SOURCE,
@@ -54,6 +55,8 @@ TEMP_MODE = selector.SelectSelector(selector.SelectSelectorConfig(options=TEMP_M
 FLOW_SOURCE = selector.SelectSelector(selector.SelectSelectorConfig(options=FLOW_SOURCES, translation_key="flow_source", mode=selector.SelectSelectorMode.DROPDOWN))
 HEAD_FLOW = selector.NumberSelector(selector.NumberSelectorConfig(min=2, max=25, step=0.1, unit_of_measurement="L/min", mode=selector.NumberSelectorMode.BOX))
 WATER = selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor", device_class=["water", "volume_flow_rate", "volume"]))
+BATH = selector.EntitySelector(selector.EntitySelectorConfig(
+    domain=["sensor", "binary_sensor", "switch", "fan", "light", "input_boolean"]))
 PRICE = selector.EntitySelector(selector.EntitySelectorConfig(domain=["sensor", "input_number"]))
 COP = selector.NumberSelector(selector.NumberSelectorConfig(min=0.8, max=6, step=0.1, mode=selector.NumberSelectorMode.BOX))
 LEGIONELLA_TEMP = selector.NumberSelector(selector.NumberSelectorConfig(min=50, max=75, step=1, unit_of_measurement="°C", mode=selector.NumberSelectorMode.BOX))
@@ -61,10 +64,36 @@ LEGIONELLA_DAYS = selector.NumberSelector(selector.NumberSelectorConfig(min=1, m
 PROFILE = selector.SelectSelector(selector.SelectSelectorConfig(options=PROFILES, translation_key="profile", mode=selector.SelectSelectorMode.DROPDOWN))
 
 
+def suggest_bathroom(hass: HomeAssistant) -> str | None:
+    """A bathroom humidity sensor, else the power of a bathroom fan, else a bathroom fan itself."""
+    reg = er.async_get(hass)
+    words = ("badkamer", "bathroom", "badezimmer", "salle_de_bain", "douche", "shower", "bad_")
+    best: tuple[int, str] | None = None
+    for st in hass.states.async_all(("sensor", "fan", "switch")):
+        eid = st.entity_id.lower()
+        ent = reg.async_get(st.entity_id)
+        if (ent and ent.platform == DOMAIN) or not any(w in eid for w in words):
+            continue
+        dc = st.attributes.get("device_class")
+        if st.domain == "sensor" and dc == "humidity":
+            rank = 0
+        elif st.domain == "sensor" and dc == "power" and any(k in eid for k in ("ventil", "fan", "luefter", "afzuig")):
+            rank = 1
+        elif st.domain in ("fan", "switch") and any(k in eid for k in ("ventil", "fan", "luefter", "afzuig")):
+            rank = 2
+        else:
+            continue
+        if best is None or rank < best[0]:
+            best = (rank, st.entity_id)
+    return best[1] if best else None
+
+
 def suggest(hass: HomeAssistant, top: str, volume: float) -> dict[str, Any]:
     """Look at the device of the top sensor for a reheat state and a hot-water energy meter."""
     reg = er.async_get(hass)
     out: dict[str, Any] = {CONF_PROFILE: "generic"}
+    if bath := suggest_bathroom(hass):
+        out[CONF_BATH] = bath
     ent = reg.async_get(top)
     if ent is None:
         return out
@@ -142,6 +171,7 @@ class ShowerTimeConfigFlow(ConfigFlow, domain=DOMAIN):
             vol.Required(CONF_FLOW_SOURCE, default="unknown"): FLOW_SOURCE,
             vol.Optional(CONF_HEAD_FLOW): HEAD_FLOW,
             vol.Optional(CONF_WATER): WATER,
+            vol.Optional(CONF_BATH): BATH,
         })
         return self.async_show_form(step_id="extras", data_schema=self.add_suggested_values_to_schema(schema, user_input or sug),
                                     errors=errors)
@@ -165,6 +195,8 @@ class ShowerTimeOptionsFlow(OptionsFlow):
         cur.setdefault(CONF_LOW, DEFAULT_LOW)
         cur.setdefault(CONF_LEGIONELLA_TEMP, DEFAULT_LEGIONELLA_TEMP)
         cur.setdefault(CONF_LEGIONELLA_DAYS, DEFAULT_LEGIONELLA_DAYS)
+        if CONF_BATH not in cur and (bath := suggest_bathroom(self.hass)):
+            cur[CONF_BATH] = bath                   # suggested only: saved when you press submit
         schema = vol.Schema({
             vol.Required(CONF_VOLUME): VOLUME,
             vol.Required(CONF_TEMP_MODE): TEMP_MODE,
@@ -181,6 +213,7 @@ class ShowerTimeOptionsFlow(OptionsFlow):
             vol.Optional(CONF_ELEC): ENERGY,
             vol.Optional(CONF_COP, default=DEFAULT_COP): COP,
             vol.Optional(CONF_PRICE): PRICE,
+            vol.Optional(CONF_BATH): BATH,
             vol.Required(CONF_LEGIONELLA_TEMP): LEGIONELLA_TEMP,
             vol.Required(CONF_LEGIONELLA_DAYS): LEGIONELLA_DAYS,
         })

@@ -8,7 +8,7 @@ const nn = (a, b) => (a === null || a === undefined ? b : a);
 
 const T = {
   en: { title: "Shower time", min: "min", showers: "showers", shower1: "shower", water: "hot water",
-        reheating: "REHEATING", inuse: "IN USE", low: "ALMOST GONE", shortat: "EMPTY BY", fullat: "full", selflearning: "self-learning",
+        reheating: "REHEATING", inuse: "SHOWERING", hotwater: "HOT WATER", filling: "FILLING", low: "ALMOST GONE", shortat: "EMPTY BY", fullat: "full", selflearning: "self-learning",
         learning: "learning", updated: "updated", today: "Today", lastshower: "Last shower", cooling: "Standing loss",
         perday: "per day", peryear: "/ year", none: "none yet", since: "Since reheat", left: "left", showered: "showered",
         cooled: "cooled", last24: "Last 24 hours", max: "max", ago24: "-24 h", now: "now", yesterday: "yesterday",
@@ -19,7 +19,7 @@ const T = {
         e_temps: "Temperatures", e_split: "Since reheat", e_tiles: "Today / last shower / standing loss",
         e_history: "Last 24 hours", e_footer: "Footer (flow, cold water, COP)" },
   nl: { title: "Douchetijd", min: "min", showers: "douches", shower1: "douche", water: "warm water",
-        reheating: "WORDT OPGEWARMD", inuse: "DOUCHT NU", low: "BIJNA OP", shortat: "OP OM", fullat: "vol", selflearning: "zelflerend",
+        reheating: "WORDT OPGEWARMD", inuse: "DOUCHT NU", hotwater: "WARM WATER", filling: "BAD / EMMER", low: "BIJNA OP", shortat: "OP OM", fullat: "vol", selflearning: "zelflerend",
         learning: "leert", updated: "bijgewerkt", today: "Vandaag", lastshower: "Laatste douche", cooling: "Afkoeling",
         perday: "per dag", peryear: "/ jaar", none: "nog geen", since: "Sinds opwarmen", left: "over", showered: "gedoucht",
         cooled: "afgekoeld", last24: "Laatste 24 uur", max: "max", ago24: "-24 u", now: "nu", yesterday: "gisteren",
@@ -176,6 +176,22 @@ class ShowerTimeCard extends HTMLElement {
     </svg>`;
   }
 
+  // What the hot water use going on looks like. Older versions of the integration only said "showering".
+  _useKind(a) {
+    return a.hot_water_use ? (a.hot_water_use.kind || "unknown") : "shower";
+  }
+
+  _usePill(a) {
+    const kind = this._useKind(a);
+    if (kind === "shower") {
+      return `<span class="pill use"><ha-icon icon="mdi:shower-head"></ha-icon>${this._t("inuse")}${a.current_shower ? ` \u00b7 ${Math.floor(a.current_shower.minutes)} ${this._t("min")}` : ""}</span>`;
+    }
+    if (kind === "fill") {
+      return `<span class="pill water"><ha-icon icon="mdi:bathtub-outline"></ha-icon>${this._t("filling")}</span>`;
+    }
+    return `<span class="pill water"><ha-icon icon="mdi:water-outline"></ha-icon>${this._t("hotwater")}</span>`;
+  }
+
   _money(v, a, lang) {
     if (v === null || v === undefined) return null;
     return `${a.currency || "\u20ac"} ${Number(v).toLocaleString(lang, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -252,7 +268,7 @@ class ShowerTimeCard extends HTMLElement {
     const fullAt = hhmm(a.reheat_full_at);
     const pill = a.reheating ? `<span class="pill heat"><ha-icon icon="mdi:fire"></ha-icon>${this._t("reheating")}${fullAt ? ` \u00b7 ${this._t("fullat")} ${fullAt}` : ""}</span>`
       : (m < low ? `<span class="pill low"><ha-icon icon="mdi:alert"></ha-icon>${this._t("low")}</span>`
-        : (a.showering ? `<span class="pill use"><ha-icon icon="mdi:shower-head"></ha-icon>${this._t("inuse")}${a.current_shower ? ` \u00b7 ${Math.floor(a.current_shower.minutes)} ${this._t("min")}` : ""}</span>`
+        : (a.showering && this._useKind(a) !== "coil" ? this._usePill(a)
           : (a.forecast && a.forecast.enough === false && a.forecast.runs_out_at
             ? `<span class="pill short"><ha-icon icon="mdi:clock-alert-outline"></ha-icon>${this._t("shortat")} ${hhmm(a.forecast.runs_out_at)}</span>` : "")));
     const learned = a.learned_at ? new Date(a.learned_at) : null;
@@ -341,6 +357,7 @@ class ShowerTimeCard extends HTMLElement {
       .pill ha-icon { --mdc-icon-size: 14px; }
       .pill.heat { background: rgba(168,85,247,.16); background: color-mix(in srgb, #a855f7 16%, transparent); color: #a855f7; }
       .pill.use { background: rgba(61,143,230,.16); background: color-mix(in srgb, #3d8fe6 16%, transparent); color: #3d8fe6; animation: pulse 1.6s ease-in-out infinite; }
+      .pill.water { background: rgba(127,127,127,.16); background: color-mix(in srgb, var(--secondary-text-color, #888) 16%, transparent); color: var(--secondary-text-color, #888); }
       .pill.short { background: rgba(245,165,36,.16); background: color-mix(in srgb, var(--warning-color, #f5a524) 16%, transparent); color: var(--warning-color, #f5a524); }
       .pill.low { background: rgba(229,72,77,.16); background: color-mix(in srgb, var(--error-color, #e5484d) 16%, transparent); color: var(--error-color, #e5484d); }
       @keyframes pulse { 50% { opacity: .55; } }

@@ -63,6 +63,9 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: ShowerT
         "legionella": {"last": m.legionella_at, "checked": m.legionella_checked, "overdue": m.legionella_overdue(),
                        "temperature": m.legionella_temp, "days": m.legionella_days},
         "health": {"learn_failures": m.learn_failures},
+        "hot_water_use": {"bathroom_signal": m.bath, "signal_kind": m.bath_signal.kind if m.bath_signal else None,
+                          "confirm_k": m.confirm_k(), "use_stats": m.use_stats, "coil_events": m.coil_events,
+                          "other": m.ledger.other[-30:]},
         "tank_readings_24h_5min": {"columns": ["minute_since_epoch_utc", "top_c", "bottom_c", "reheating"],
                                    "rows": readings},
     }
