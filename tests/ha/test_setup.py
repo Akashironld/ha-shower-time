@@ -84,6 +84,9 @@ async def test_card_becomes_a_dashboard_resource_old_and_new_style(hass: HomeAss
         await _async_register_resource(hass, CARD_URL + "?v=1")
         await _async_register_resource(hass, CARD_URL + "?v=2")
         items = [i for i in res.async_items() if i["url"].startswith(CARD_URL)]
-        assert [(i["url"], i["res_type"]) for i in items] == [(CARD_URL + "?v=2", "module")], style
+        assert [(i["url"], i["type"]) for i in items] == [(CARD_URL + "?v=2", "module")], style
+        before = dict(items[0])
+        await _async_register_resource(hass, CARD_URL + "?v=2")    # already up to date: left alone
+        assert [dict(i) for i in res.async_items() if i["url"].startswith(CARD_URL)] == [before], style
     hass.data.pop("lovelace")
     await _async_register_resource(hass, CARD_URL + "?v=3")        # no dashboards: nothing to do, no error
