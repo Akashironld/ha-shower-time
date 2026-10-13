@@ -2,7 +2,7 @@
 
 # Hot Water Shower Time
 
-[![Ko-fi](https://img.shields.io/badge/Ko--fi-support%20this%20project-FF5E5B?logo=kofi&logoColor=white)](https://ko-fi.com/akashironl)
+<a href="https://ko-fi.com/akashironl/?hidefeed=true&widget=true&embed=true"><img src="https://storage.ko-fi.com/cdn/kofi2.png?v=3" alt="Buy me a coffee on Ko-fi" height="36"></a>
 
 **How long can I still shower?** A self-learning Home Assistant integration that turns the temperature
 sensors of your hot water tank into minutes of showering — and gets better every night by learning from
@@ -201,9 +201,11 @@ hoeveel seconden het duurt tot er 10 liter in zit. Debiet = 600 ÷ seconden (75 
 ## Support
 
 Hot Water Shower Time is free and open source. If it saves you a cold shower (or some money) and you'd like to
-say thanks, you can buy me a coffee on **[Ko-fi](https://ko-fi.com/akashironl)** ☕ — it keeps the next feature coming.
+say thanks, you can buy me a coffee ☕ — the button opens the Ko-fi tip panel straight away, no account needed:
 
-Vind je het handig? Een koffie via [Ko-fi](https://ko-fi.com/akashironl) wordt zeer gewaardeerd. ☕
+<a href="https://ko-fi.com/akashironl/?hidefeed=true&widget=true&embed=true"><img src="https://storage.ko-fi.com/cdn/kofi2.png?v=3" alt="Buy me a coffee on Ko-fi" height="36"></a>
+
+Vind je het handig? Een koffie via [Ko-fi](https://ko-fi.com/akashironl/?hidefeed=true&widget=true&embed=true) wordt zeer gewaardeerd. ☕
 
 ## License
 
