@@ -1,18 +1,18 @@
 /* Hot Water Shower Time card — served by the shower_time integration. */
-const CARD_VERSION = "0.2.1";
+const CARD_VERSION = "0.3.0";
 
 const T = {
   en: { title: "Shower time", min: "min", shower: "of showering", empty: "empty", full: "full",
         showers: "showers", water: "hot water", cold: "cold water", reheating: "REHEATING",
         low: "ALMOST GONE", learned: "Learned", updated: "updated", learning: "learning from your showers",
-        selflearning: "self-learning", last24: "last 24 h", unavailable: "Not available",
+        selflearning: "self-learning", last24: "last 24 h", ago24: "-24 h", now: "now", nohist: "no history yet — fills in by itself", unavailable: "Not available",
         pick: "Pick the 'Shower time' sensor of the Hot Water Shower Time integration.",
         sensed: "sensed", set: "set", head: "shower head", you: "you shower at",
         src: { water_meter: "water meter", manual: "set", eco: "water-saving", normal: "normal", rain: "rain shower" } },
   nl: { title: "Douchetijd", min: "min", shower: "douchen", empty: "leeg", full: "vol",
         showers: "douchebeurten", water: "warm water", cold: "koud water", reheating: "WORDT OPGEWARMD",
         low: "BIJNA OP", learned: "Geleerd", updated: "bijgewerkt", learning: "leert van jullie douches",
-        selflearning: "zelflerend", last24: "laatste 24 u", unavailable: "Niet beschikbaar",
+        selflearning: "zelflerend", last24: "laatste 24 u", ago24: "-24 u", now: "nu", nohist: "nog geen historie — vult zich vanzelf", unavailable: "Niet beschikbaar",
         pick: "Kies de sensor 'Douchetijd' van de integratie Hot Water Shower Time.",
         sensed: "gemeten", set: "ingesteld", head: "douchekop", you: "jullie douchen op",
         src: { water_meter: "watermeter", manual: "ingevuld", eco: "waterbesparend", normal: "normaal", rain: "regendouche" } },
@@ -57,40 +57,50 @@ class ShowerTimeCard extends HTMLElement {
     if (!this._config || !this._config.show_history || !this._hass) return;
     if (Date.now() - this._histAt < 5 * 60 * 1000) return;
     this._histAt = Date.now();
-    try {
-      const end = new Date(), start = new Date(end.getTime() - 24 * 3600 * 1000);
-      const res = await this._hass.callWS({ type: "history/history_during_period", start_time: start.toISOString(),
-        end_time: end.toISOString(), entity_ids: [this._config.entity], minimal_response: true, no_attributes: true,
-        significant_changes_only: false });
-      const rows = (res && res[this._config.entity]) || [];
-      this._hist = rows.map((r) => [((r.lu || r.lc || 0) * 1000) || Date.parse(r.last_changed || r.last_updated),
-        parseFloat(r.s !== undefined ? r.s : r.state)]).filter((p) => !isNaN(p[1]) && p[0]);
-      this._render();
-    } catch (e) { this._hist = null; }
-  }
-
-  _histReady() {                       // only draw the graph once there are at least two hours of history
-    const p = this._hist;
-    return !!(p && p.length >= 3 && Date.now() - p[0][0] >= 2 * 3600 * 1000);
+    let pts = null;
+    try {                                   // recomputed from the tank sensors: full from day one
+      const res = await this._hass.callWS({ type: "shower_time/history", entity_id: this._config.entity, hours: 24 });
+      pts = (res && res.points) || [];
+    } catch (e) {
+      try {                                 // fall back to the recorded history of the sensor itself
+        const end = new Date(), start = new Date(end.getTime() - 24 * 3600 * 1000);
+        const res = await this._hass.callWS({ type: "history/history_during_period", start_time: start.toISOString(),
+          end_time: end.toISOString(), entity_ids: [this._config.entity], minimal_response: true, no_attributes: true,
+          significant_changes_only: false });
+        pts = ((res && res[this._config.entity]) || []).map((r) => [((r.lu || r.lc || 0) * 1000) ||
+          Date.parse(r.last_changed || r.last_updated), parseFloat(r.s !== undefined ? r.s : r.state)]);
+      } catch (e2) { pts = []; }
+    }
+    this._hist = pts.filter((p) => p[0] && !isNaN(p[1]));
+    this._key = null;                       // force a redraw
+    this._render();
   }
 
   _sparkline(w, h, color) {
-    const pts = this._hist;
-    if (!this._histReady()) return "";
     const now = Date.now(), t0 = now - 24 * 3600 * 1000;
+    const pts = (this._hist || []).filter((p) => p[0] <= now);
+    const x = (t) => ((Math.max(t, t0) - t0) / (now - t0)) * w;
+    const base = `<line x1="0" x2="${w}" y1="${h - 1}" y2="${h - 1}" stroke="var(--divider-color, rgba(127,127,127,.35))" stroke-width="1" stroke-dasharray="3 4" vector-effect="non-scaling-stroke"/>`;
+    if (!pts.length) {
+      return `<div class="sparkwrap"><svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">${base}</svg>
+        <div class="nohist">${this._t("nohist")}</div></div>`;
+    }
     const series = [...pts, [now, pts[pts.length - 1][1]]];
     const max = Math.max(10, ...series.map((p) => p[1]));
-    const x = (t) => ((Math.max(t, t0) - t0) / (now - t0)) * w;
-    const y = (v) => h - 2 - (v / max) * (h - 4);
+    const y = (v) => h - 2 - (v / max) * (h - 6);
     let d = `M ${x(series[0][0]).toFixed(1)} ${y(series[0][1]).toFixed(1)}`;
     for (let i = 1; i < series.length; i++) {          // step line: the value holds until the next change
       d += ` H ${x(series[i][0]).toFixed(1)} V ${y(series[i][1]).toFixed(1)}`;
     }
     const area = `${d} V ${h} H ${x(series[0][0]).toFixed(1)} Z`;
-    return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
+    const gap = x(series[0][0]) > 2 ? `<rect x="0" y="0" width="${x(series[0][0]).toFixed(1)}" height="${h}" fill="var(--divider-color, rgba(127,127,127,.12))" opacity=".35"/>` : "";
+    const peak = series.reduce((m, p) => (p[1] > m[1] ? p : m), series[0]);
+    return `<div class="sparkwrap"><svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
       <defs><linearGradient id="sg" x1="0" x2="0" y1="0" y2="1">
         <stop offset="0" stop-color="${color}" stop-opacity=".35"/><stop offset="1" stop-color="${color}" stop-opacity="0"/></linearGradient></defs>
-      <path d="${area}" fill="url(#sg)"/><path d="${d}" fill="none" stroke="${color}" stroke-width="1.6" vector-effect="non-scaling-stroke"/></svg>`;
+      ${base}${gap}<path d="${area}" fill="url(#sg)"/>
+      <path d="${d}" fill="none" stroke="${color}" stroke-width="1.6" vector-effect="non-scaling-stroke"/></svg>
+      <div class="axis"><span>${this._t("ago24")}</span><span>max ${fmt(peak[1])} ${this._t("min")}</span><span>${this._t("now")}</span></div></div>`;
   }
 
   _tank(a, color) {
@@ -162,7 +172,7 @@ class ShowerTimeCard extends HTMLElement {
           <div class="chip"><ha-icon icon="mdi:water"></ha-icon><b>≈ ${fmt(a.litres)} L</b><span>${this._t("water")} ${a.shower_temperature_mode === "reference" ? "≈" : ""}${fmt(a.shower_temperature, a.shower_temperature_mode === "sensed" ? 1 : 0)}°</span></div>
           <div class="chip"><ha-icon icon="mdi:snowflake-thermometer"></ha-icon><b>${fmt(a.cold_water)}°</b><span>${this._t("cold")}</span></div>
         </div>
-        ${this._config.show_history && this._histReady() ? `
+        ${this._config.show_history ? `
           <div class="hist"><div class="hl">${this._t("last24")}</div>${this._sparkline(300, 44, color)}</div>` : ""}
         <div class="foot">${this._foot(a)}</div>
       </ha-card>`;
@@ -217,7 +227,10 @@ class ShowerTimeCard extends HTMLElement {
       .chip span { font-size: 11px; color: var(--secondary-text-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       .hist { margin-top: 12px; }
       .hl { font-size: 11px; color: var(--secondary-text-color); margin-bottom: 2px; }
+      .sparkwrap { position: relative; }
       .spark { width: 100%; height: 44px; display: block; }
+      .nohist { position: absolute; inset: 0; display: grid; place-items: center; font-size: 11px; color: var(--secondary-text-color); }
+      .axis { display: flex; justify-content: space-between; font-size: 10px; color: var(--secondary-text-color); margin-top: 2px; }
       .foot { font-size: 11px; color: var(--secondary-text-color); margin-top: 10px; }
     </style>`;
   }

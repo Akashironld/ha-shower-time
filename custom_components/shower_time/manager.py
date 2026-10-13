@@ -159,6 +159,55 @@ class ShowerTimeManager:
         for cb in list(self._listeners):
             cb()
 
+    # ------------------------------------------------------------------ history for the card
+    async def async_history(self, hours: int = 24) -> list[list[float]]:
+        """Shower minutes over the last ``hours``, recomputed with the current model from the tank sensors.
+
+        Works from day one: the tank sensors usually have far more history than this integration.
+        Returns [[timestamp_ms, minutes], ...] every 5 minutes (only where the value changes).
+        """
+        now = dt_util.utcnow()
+        cached = getattr(self, "_hist_cache", None)
+        if cached and cached[0] == hours and (now - cached[1]).total_seconds() < 300:
+            return cached[2]
+        start = now - timedelta(hours=hours)
+        recorder = get_instance(self.hass)
+        series = {}
+        for ent in (self.top, self.bottom):
+            if ent:
+                res = await recorder.async_add_executor_job(
+                    history.state_changes_during_period, self.hass, start, now, ent, True, False, None, True)
+                series[ent] = [(st.last_changed.timestamp(), _num(st)) for st in res.get(ent, [])]
+        head = self.head_flow()[0] if self.temp_mode == "auto" else None
+
+        def compute() -> list[list[float]]:
+            out, i, j, top, bot, last = [], 0, 0, None, None, None
+            tops, bots = series.get(self.top, []), series.get(self.bottom, []) if self.bottom else []
+            t = start.timestamp()
+            while t <= now.timestamp():
+                while i < len(tops) and tops[i][0] <= t:
+                    top = tops[i][1] if tops[i][1] is not None else top
+                    i += 1
+                while j < len(bots) and bots[j][0] <= t:
+                    bot = bots[j][1] if bots[j][1] is not None else bot
+                    j += 1
+                if top is not None and (not self.bottom or bot is not None):
+                    month = dt_util.as_local(datetime.fromtimestamp(t, timezone.utc)).month
+                    e = model.estimate(self.params, top, bot, volume=self.volume, shower_temp=self.shower_temp,
+                                       month=month, head_flow=head)
+                    v = round(e.minutes)
+                    if v != last:
+                        out.append([int(t * 1000), v])
+                        last = v
+                t += 300
+            if out and out[-1][0] < int(now.timestamp() * 1000):
+                out.append([int(now.timestamp() * 1000), last])
+            return out
+
+        result = await self.hass.async_add_executor_job(compute)
+        self._hist_cache = (hours, now, result)
+        return result
+
     # ------------------------------------------------------------------ learning
     async def _first_learn(self, _now) -> None:
         await self.async_learn()

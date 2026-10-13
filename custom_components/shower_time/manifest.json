@@ -3,11 +3,16 @@
   "name": "Hot Water Shower Time",
   "codeowners": [],
   "config_flow": true,
-  "dependencies": ["recorder", "http", "frontend"],
+  "dependencies": [
+    "recorder",
+    "http",
+    "frontend",
+    "websocket_api"
+  ],
   "documentation": "https://github.com/OWNER/ha-shower-time",
   "integration_type": "service",
   "iot_class": "calculated",
   "issue_tracker": "https://github.com/OWNER/ha-shower-time/issues",
   "requirements": [],
-  "version": "0.2.1"
+  "version": "0.3.0"
 }
