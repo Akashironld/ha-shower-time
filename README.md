@@ -366,6 +366,15 @@ file**: *Settings → Devices & services → Hot Water Shower Time → ⋮ → D
 settings, what has been learned and the tank readings of the last 24 hours (no passwords or personal data), so
 your situation can be replayed exactly.
 
+## Development
+
+Two sets of tests run on every push:
+
+- `tests/` — the tank model, the forecast, heat loss and the shower/washing-up judgement, in plain Python
+  (`pip install pytest && pytest tests --ignore=tests/ha`)
+- `tests/ha/` — the integration inside a real test Home Assistant: setup, a shower followed live, washing up,
+  repairs, the setup and options screens (`pip install -r requirements_test.txt && pytest`, Python 3.14)
+
 ## Limitations
 
 - Without a bottom sensor showers are hard to see: no live countdown or log, little learning.
