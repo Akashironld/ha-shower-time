@@ -18,7 +18,6 @@ jobs:
       - uses: hacs/action@main
         with:
           category: integration
-          ignore: brands   # the logo ships in custom_components/shower_time/brand (served by HA 2026+)
   tests:
     runs-on: ubuntu-latest
     steps:
