@@ -1,5 +1,5 @@
 /* Hot Water Shower Time card — served by the shower_time integration. */
-const CARD_VERSION = "0.9.0";
+const CARD_VERSION = "0.9.1";
 
 const T = {
   en: { title: "Shower time", min: "min", showers: "showers", shower1: "shower", water: "hot water",
