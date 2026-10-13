@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.10.1
+
+- **Fix: v0.10.0 did not load on Home Assistant before mid-2025** (it imported a constant that older versions do
+  not have). The dashboard resource is now found the way every supported version keeps it
+- Learning uses **only real showers** for the shower length and the flow: washing up is taken off as the little heat
+  it took, and heat that left without water (a heat pump starting a reheat, heat taken out through the coil) no
+  longer counts as showering
+- Large, frequently changing attributes (shower log, forecast, since-reheat overview…) are no longer written to the
+  database; the card reads them live as before
+
 ## v0.10.0
 
 - **Card on iPhone/iPad and in the mobile apps**: the card could be missing ("configuration error", not in the card

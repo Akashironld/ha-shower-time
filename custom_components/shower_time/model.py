@@ -288,6 +288,15 @@ def find_draws(rows: list[Row]) -> list[Draw]:
     return out
 
 
+def _draw_drop(params: dict, rows: list[Row], d: Draw) -> float:
+    """Tank average drop (K) of a draw: its start against the lowest point in the 10 minutes after it."""
+    seg = [r for r in rows if d.start <= r.minute <= d.start + d.minutes + 10 and not r.heating]
+    if not seg:
+        return 0.0
+    a0 = tank_average(params, seg[0].top, seg[0].bottom)
+    return max(0.0, a0 - min(tank_average(params, r.top, r.bottom) for r in seg))
+
+
 def _blend(old: dict, samples: list[float], limits: tuple[float, float]) -> dict:
     if not samples:
         return old
@@ -308,13 +317,17 @@ class LearnResult:
 def learn(params: dict, rows: list[Row], *, volume: float, shower_temp: float, since: int,
           energy_by_hour: dict[int, float] | None, previous_cycle: Cycle | None,
           month_of, water: tuple[str, list[tuple[int, float]]] | None = None,
-          doy_of=None, ema_of=None) -> tuple[LearnResult, Cycle | None]:
+          doy_of=None, ema_of=None, draw_kind=None) -> tuple[LearnResult, Cycle | None]:
     """Update ``params`` with everything that happened after minute ``since``.
 
     ``month_of(minute) -> int`` maps a minute to the local month (1-12).
     ``water`` is an optional water meter: ("rate", [(minute, L/min)]) or ("total", [(minute, litres)]).
     ``doy_of(minute)`` (day of year) and ``ema_of(minute)`` (outdoor running average, or None) refine the
     cold water temperature; both are optional.
+    ``draw_kind(draw) -> str`` (optional) tells showers from other draws ("tap", "fill", "coil": heat that left
+    without water). Only showers then teach the shower length; for the flow the heat of taps is taken off, and an
+    interval with heat leaving without water (or a bath) is not used. Every draw still keeps standing-loss
+    blocks clean.
     Returns the result and the last complete cycle (kept for the next run).
     """
     p = ensure_params(copy.deepcopy(params))
@@ -327,6 +340,7 @@ def learn(params: dict, rows: list[Row], *, volume: float, shower_temp: float, s
     has_bottom = any(r.bottom is not None for r in rows)
     cycles = find_cycles(rows, energy_by_hour)
     draws = find_draws(rows)
+    kinds = {d.start: (draw_kind(d) if draw_kind else "shower") for d in draws}
     s: dict[str, list] = {"w20": [], "w30": [], "w45": [], "veff_factor": [], "phi": [], "flow": [],
                           "loss": [], "duration": [], "head_flow": [], "cold": {}, "cold_pairs": [], "reheat_rate": []}
     full = lambda c: c.bottom_after is None or c.top_after - c.bottom_after <= 2.5
@@ -373,6 +387,12 @@ def learn(params: dict, rows: list[Row], *, volume: float, shower_temp: float, s
         cold_b = cold_at(b.start)
         if not inside or any(d.bottom_low is not None and d.bottom_low < 30 for d in inside[:-1]):
             continue                              # a later draw could have been invisible
+        if any(kinds[d.start] not in ("shower", "tap") for d in inside):
+            continue                              # heat that left without water, or a bath: no shower measure
+        taps = [d for d in inside if kinds[d.start] == "tap"]
+        inside = [d for d in inside if kinds[d.start] == "shower"]
+        if not inside:
+            continue
         if inside[-1].bottom_low is not None and inside[-1].bottom_low < cold_b + 3:
             continue                              # bottom hit mains temperature: the end of the shower was invisible
         minutes = sum(d.minutes for d in inside)
@@ -383,6 +403,7 @@ def learn(params: dict, rows: list[Row], *, volume: float, shower_temp: float, s
         else:
             drawn = tank_average(p, a.top_after, a.bottom_after) - tank_average(p, b.top_before, b.bottom_before)
         drawn -= p["loss"]["v"] * hours
+        drawn -= sum(_draw_drop(p, rows, d) for d in taps)      # washing up took a little heat too
         cold = cold_at(b.start)
         if drawn > 0:
             s["flow"].append(drawn * volume / (minutes * (shower_temp - cold)))
@@ -406,7 +427,7 @@ def learn(params: dict, rows: list[Row], *, volume: float, shower_temp: float, s
         i += 60
 
     for d in draws:
-        if d.start < since:
+        if d.start < since or kinds[d.start] != "shower":
             continue
         s["duration"].append(d.minutes)
         if d.bottom_start is not None and d.bottom_low is not None and d.bottom_start - d.bottom_low >= 15:

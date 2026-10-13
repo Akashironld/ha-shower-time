@@ -300,3 +300,18 @@ def test_reheat_starting_during_a_shower_does_not_make_it_coil():
             (48.9, 38.4, 1), (48.8, 39.3, 1)]
     rows = [model.Row(minute=m0 + i, top=t, bottom=b, heating=bool(h)) for i, (t, b, h) in enumerate(vals)]
     assert insights.draw_kind(p, rows, m0, 5, cold=17.0) == "shower"
+
+
+def test_learning_uses_only_showers_when_told_the_kind():
+    """Heat that left without water (or washing up) must not teach the shower length."""
+    p = model.new_params("generic")
+    m0 = 5000
+    rows = [model.Row(minute=m0 + i, top=55.0, bottom=50.0, heating=False) for i in range(60)]
+    rows += [model.Row(minute=m0 + 60 + i, top=55.0, bottom=50.0 - 2.0 * min(i, 10), heating=False) for i in range(40)]
+    rows += [model.Row(minute=m0 + 100 + i, top=55.0, bottom=30.0, heating=False) for i in range(60)]
+    month_of = lambda m: 10
+    plain, _ = model.learn(p, [model.Row(**vars(r)) for r in rows], volume=200, shower_temp=38, since=0,
+                           energy_by_hour=None, previous_cycle=None, month_of=month_of)
+    told, _ = model.learn(p, [model.Row(**vars(r)) for r in rows], volume=200, shower_temp=38, since=0,
+                          energy_by_hour=None, previous_cycle=None, month_of=month_of, draw_kind=lambda d: "coil")
+    assert plain.samples["duration"] == 1 and told.samples["duration"] == 0

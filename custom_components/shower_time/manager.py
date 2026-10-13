@@ -916,11 +916,19 @@ class ShowerTimeManager:
         def ema_of(minute: int) -> float | None:
             return self._ema_on(dt_util.as_local(datetime.fromtimestamp(minute * 60, timezone.utc)).date().isoformat())
 
+        confirm_k = self.confirm_k()
+
+        def draw_kind(d: model.Draw) -> str:            # only real showers teach shower length and flow
+            local = dt_util.as_local(datetime.fromtimestamp(d.start * 60, timezone.utc))
+            cold = model.cold_for(self.params, local.month, local.timetuple().tm_yday,
+                                  ema_of(d.start) if self.outdoor else None)
+            return insights.draw_kind(self.params, rows, d.start, d.minutes, cold, confirm_k)
+
         result, last = await self.hass.async_add_executor_job(
             lambda: model.learn(self.params, rows, volume=self.volume, shower_temp=self.shower_temp,
                                 since=self.processed_until, energy_by_hour=energy,
                                 previous_cycle=self.last_cycle, month_of=month_of, water=water,
-                                doy_of=doy_of, ema_of=ema_of if self.outdoor else None))
+                                doy_of=doy_of, ema_of=ema_of if self.outdoor else None, draw_kind=draw_kind))
         self.params = result.params
         self.last_cycle = last
 

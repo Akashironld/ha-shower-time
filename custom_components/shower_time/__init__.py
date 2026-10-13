@@ -9,8 +9,6 @@ import voluptuous as vol
 from homeassistant.components import websocket_api
 from homeassistant.components.frontend import add_extra_js_url
 from homeassistant.components.http import StaticPathConfig
-from homeassistant.components.lovelace.const import LOVELACE_DATA
-from homeassistant.components.lovelace.resources import ResourceStorageCollection
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EVENT_HOMEASSISTANT_STARTED, Platform
 from homeassistant.core import CoreState, Event, HomeAssistant
@@ -53,10 +51,17 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     return True
 
 
-def _resources(hass: HomeAssistant) -> ResourceStorageCollection | None:
-    """The dashboard resources, when they are managed in the UI (not in YAML)."""
-    data = hass.data.get(LOVELACE_DATA)
-    res = getattr(data, "resources", None)
+def _resources(hass: HomeAssistant):
+    """The dashboard resources, when they are managed in the UI (not in YAML).
+
+    Home Assistant keeps them under hass.data["lovelace"]: a dict up to early 2025, an object since. Only the
+    storage collection can be changed; YAML resources are left alone."""
+    try:
+        from homeassistant.components.lovelace.resources import ResourceStorageCollection
+    except ImportError:  # pragma: no cover - very old or changed Home Assistant
+        return None
+    data = hass.data.get("lovelace")
+    res = data.get("resources") if isinstance(data, dict) else getattr(data, "resources", None)
     return res if isinstance(res, ResourceStorageCollection) else None
 
 

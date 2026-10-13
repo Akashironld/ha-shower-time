@@ -38,6 +38,14 @@ class MinutesSensor(ShowerTimeEntity, SensorEntity):
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_suggested_display_precision = 0
     _attr_icon = "mdi:shower-head"
+    # The card reads these live; the database keeps only the small values that are useful in the history.
+    _unrecorded_attributes = frozenset({
+        "typical_shower_minutes", "full_tank_minutes", "full_reference_minutes", "full_reference_at", "hot_fraction",
+        "tank_average", "cold_water_source", "outdoor_average", "flow", "shower_temperature_mode", "head_flow_source",
+        "today_showers", "today_minutes", "today_cost", "today_electricity_kwh", "week_showers", "week_minutes",
+        "week_cost", "last", "currency", "hot_water_price_per_kwh", "cop", "since_reheat", "standing_loss_per_day",
+        "reheat_full_at", "reheat_one_shower_at", "live_countdown", "low_threshold", "current_shower",
+        "hot_water_use", "other_today", "forecast", "learned_at", "observations"})
 
     def __init__(self, manager) -> None:
         super().__init__(manager, "shower_minutes")
@@ -176,6 +184,8 @@ class ModelSensor(ShowerTimeEntity, SensorEntity):
     """What has been learned so far (state: shower flow in L/min)."""
 
     _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _unrecorded_attributes = frozenset({"stratification", "cold_water_by_month", "cold_water_model", "observations",
+                                        "last_learn_samples", "head_flow_learned", "head_flow_observations"})
     _attr_native_unit_of_measurement = "L/min"
     _attr_icon = "mdi:brain"
 
@@ -271,6 +281,7 @@ class ShowerTimeWeekSensor(_LogSensor):
 
 
 class LastShowerSensor(_LogSensor):
+    _unrecorded_attributes = frozenset({"log"})
     _attr_device_class = SensorDeviceClass.DURATION
     _attr_native_unit_of_measurement = UnitOfTime.MINUTES
     _attr_icon = "mdi:shower-head"
@@ -463,6 +474,7 @@ class HeatLossSensor(ShowerTimeEntity, SensorEntity):
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_suggested_display_precision = 0
     _attr_icon = "mdi:home-thermometer-outline"
+    _unrecorded_attributes = frozenset({"last_measurement"})
 
     def __init__(self, manager) -> None:
         super().__init__(manager, "heat_loss")
@@ -492,6 +504,7 @@ class OtherHotWaterTodaySensor(_LogSensor):
     _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
     _attr_suggested_display_precision = 2
     _attr_icon = "mdi:water-pump"
+    _unrecorded_attributes = frozenset({"recent", "by_kind"})
 
     def __init__(self, manager) -> None:
         super().__init__(manager, "other_hot_water_today")
