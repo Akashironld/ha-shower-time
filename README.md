@@ -2,6 +2,8 @@
 
 # Hot Water Shower Time
 
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-support%20this%20project-FF5E5B?logo=kofi&logoColor=white)](https://ko-fi.com/akashironl)
+
 **How long can I still shower?** A self-learning Home Assistant integration that turns the temperature
 sensors of your hot water tank into minutes of showering — and gets better every night by learning from
 your own showers.
@@ -195,6 +197,13 @@ Nederlandstalig in Home Assistant.
 
 Debiet van je douchekop meten: zet de douche aan zoals je normaal doucht, houd een emmer eronder en kijk
 hoeveel seconden het duurt tot er 10 liter in zit. Debiet = 600 ÷ seconden (75 s = 8 L/min).
+
+## Support
+
+Hot Water Shower Time is free and open source. If it saves you a cold shower (or some money) and you'd like to
+say thanks, you can buy me a coffee on **[Ko-fi](https://ko-fi.com/akashironl)** ☕ — it keeps the next feature coming.
+
+Vind je het handig? Een koffie via [Ko-fi](https://ko-fi.com/akashironl) wordt zeer gewaardeerd. ☕
 
 ## License
 
