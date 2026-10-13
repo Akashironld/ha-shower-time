@@ -29,6 +29,8 @@ from .const import (
     CONF_ENERGY,
     CONF_PRICE,
     DEFAULT_COP,
+    MAX_SHOWER_MINUTES,
+    MIN_SHOWER_MINUTES,
     CONF_FLOW_SOURCE,
     CONF_HEAD_FLOW,
     CONF_OUTDOOR,
@@ -286,6 +288,9 @@ class ShowerTimeManager:
 
     async def _start_ledger(self) -> None:
         await self.ledger.async_refresh_cop(self)
+        if self.ledger.needs_reprice(self) or any(
+                not MIN_SHOWER_MINUTES <= e["minutes"] <= MAX_SHOWER_MINUTES for e in self.ledger.log):
+            self.ledger.reset_history()          # price added later, or entries from before the shower limits
         if not self.ledger.backfilled:
             end = dt_util.utcnow()
             try:

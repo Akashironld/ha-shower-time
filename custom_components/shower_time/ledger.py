@@ -16,7 +16,7 @@ from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.util import dt as dt_util
 
 from . import model
-from .const import LOG_DAYS, MIN_SHOWER_MINUTES
+from .const import LOG_DAYS, MAX_SHOWER_MINUTES, MIN_SHOWER_MINUTES
 
 if TYPE_CHECKING:
     from .manager import ShowerTimeManager
@@ -134,7 +134,7 @@ class ShowerLedger:
 
     def shower_ended(self, m: ShowerTimeManager, start: datetime, end: datetime, est: model.Estimate | None) -> None:
         minutes = (end - start).total_seconds() / 60
-        if minutes < MIN_SHOWER_MINUTES or est is None:
+        if not MIN_SHOWER_MINUTES <= minutes <= MAX_SHOWER_MINUTES or est is None:
             return
         self._add(m, start, minutes, est.per_minute, self.tank_price, "live")
 
@@ -176,13 +176,21 @@ class ShowerLedger:
             "last": self.log[-1] if self.log else None,
         }
 
+    def needs_reprice(self, m: ShowerTimeManager) -> bool:
+        """A price sensor was added after the log was filled from the history: price those entries again."""
+        return bool(m.price) and any(e.get("cost") is None and e.get("source") == "history" for e in self.log)
+
+    def reset_history(self) -> None:
+        self.log = [e for e in self.log if e.get("source") != "history"]
+        self.backfilled = False
+
     # ------------------------------------------------------------------ first run: fill from the history
     async def async_backfill(self, m: ShowerTimeManager, rows: list[model.Row]) -> None:
         """Showers of the past week from the recorder, priced at the last reheat before each shower."""
         if self.backfilled or not rows:
             return
         cycles = model.find_cycles(rows, None)
-        draws = [d for d in model.find_draws(rows) if d.minutes >= MIN_SHOWER_MINUTES]
+        draws = [d for d in model.find_draws(rows) if MIN_SHOWER_MINUTES <= d.minutes <= MAX_SHOWER_MINUTES]
         price_by_hour: dict[int, float] = {}
         cur = ""
         if m.price:

@@ -47,4 +47,5 @@ CONF_ELEC = "electricity_sensor"     # electricity used for hot water (kWh), to 
 CONF_COP = "cop"                     # fallback COP for hot water when it cannot be learned
 DEFAULT_COP = 2.5
 LOG_DAYS = 14
-MIN_SHOWER_MINUTES = 3
+MIN_SHOWER_MINUTES = 4          # shorter: a tap, not a shower
+MAX_SHOWER_MINUTES = 40         # longer: a bath or another long draw
