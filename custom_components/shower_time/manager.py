@@ -152,6 +152,7 @@ class ShowerTimeManager:
         self.habits: dict = insights.new_habits()
         self.loss_samples: list[dict] = []
         self.drip_nights: list[dict] = []
+        self.loss_backfilled = False                # the full history was searched once for heat-loss measurements
         self.loss: dict = self._loss_status()
         self.legionella_temp = float(cfg.get(CONF_LEGIONELLA_TEMP, DEFAULT_LEGIONELLA_TEMP))
         self.legionella_days = float(cfg.get(CONF_LEGIONELLA_DAYS, DEFAULT_LEGIONELLA_DAYS))
@@ -181,6 +182,7 @@ class ShowerTimeManager:
             self.habits = stored.get("habits") or self.habits
             self.loss_samples = stored.get("loss_samples") or []
             self.drip_nights = stored.get("drip_nights") or []
+            self.loss_backfilled = stored.get("loss_backfilled", False)
             self.loss = self._loss_status()
             self.legionella_at = stored.get("legionella_at")
             self.learn_failures = stored.get("learn_failures", 0)
@@ -847,7 +849,7 @@ class ShowerTimeManager:
             "last_samples": self.last_samples, "full_ref": self.full_ref, "full_ref_avg": self.full_ref_avg,
             "full_ref_at": self.full_ref_at, "ledger": self.ledger.to_dict(),
             "habits": self.habits, "loss_samples": self.loss_samples, "drip_nights": self.drip_nights,
-            "use_stats": self.use_stats,
+            "use_stats": self.use_stats, "loss_backfilled": self.loss_backfilled,
             "legionella_at": self.legionella_at,
             "learn_failures": self.learn_failures,
         }
@@ -886,6 +888,9 @@ class ShowerTimeManager:
         recorder = get_instance(self.hass)
         series = await self._fetch_series(start, end)
         rows = await self.hass.async_add_executor_job(self._rows, series, start, end)
+        if rows and not self.heating and not any(r.heating for r in rows):
+            model.mark_heating_from_temperature(rows)
+        await self._update_heat_loss(rows, end)
         if len(rows) < 600:
             _LOGGER.info("Not enough history to learn yet (%d minutes)", len(rows))
             return
@@ -919,6 +924,18 @@ class ShowerTimeManager:
         self.params = result.params
         self.last_cycle = last
 
+        self.processed_until = int(end.timestamp() // 60)
+        self.last_learn = dt_util.now().isoformat(timespec="seconds")
+        self.last_samples = result.samples
+        await self._store.async_save(self._data())
+        _LOGGER.debug("Learned from %d cycles / %d draws: %s", result.cycles, result.draws, result.samples)
+
+    async def _update_heat_loss(self, rows: list[model.Row], end: datetime) -> None:
+        """Heat-loss measurements and night drips from the rows just read. The first time (also after an
+        update) from all the history there is, so the baseline is there right away."""
+        if not self.loss_backfilled:
+            rows = await self._fetch_rows(end - timedelta(days=HISTORY_DAYS), end)
+
         def local_of(minute: int) -> datetime:
             return dt_util.as_local(datetime.fromtimestamp(minute * 60, timezone.utc))
         samples, drips = await self.hass.async_add_executor_job(
@@ -926,13 +943,10 @@ class ShowerTimeManager:
                      insights.night_drips(rows, local_of=local_of)))
         self.loss_samples = insights.merge_samples(self.loss_samples, samples)
         self.drip_nights = insights.merge_drips(self.drip_nights, drips)
+        self.loss_backfilled = True
         self.loss = self._loss_status()
         self._sync_loss_issues()
-        self.processed_until = int(end.timestamp() // 60)
-        self.last_learn = dt_util.now().isoformat(timespec="seconds")
-        self.last_samples = result.samples
-        await self._store.async_save(self._data())
-        _LOGGER.debug("Learned from %d cycles / %d draws: %s", result.cycles, result.draws, result.samples)
+        self.request_save()
 
     async def _fetch_series(self, start: datetime, end: datetime) -> dict[str, list]:
         recorder = get_instance(self.hass)
