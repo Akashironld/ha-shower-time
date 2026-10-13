@@ -32,7 +32,9 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         from homeassistant.loader import async_get_integration
         version = str((await async_get_integration(hass, DOMAIN)).version)
         hass.data[DOMAIN]["version"] = version
+    # Both frontend builds: older browsers (e.g. wall tablets) get the legacy build, which only loads es5 URLs.
     add_extra_js_url(hass, f"{CARD_URL}?v={version}")
+    add_extra_js_url(hass, f"{CARD_URL}?v={version}", es5=True)
     websocket_api.async_register_command(hass, ws_history)
     return True
 

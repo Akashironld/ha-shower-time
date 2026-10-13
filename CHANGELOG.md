@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.9.4
+
+- Dashboard card now also works on **older browsers and wall tablets** (it showed an empty red error card there):
+  the card is loaded in Home Assistant's legacy frontend too, and uses no syntax that older browsers cannot read
+
 ## v0.9.3
 
 - Public release: install with one click via the **Open in HACS** button in the README, and add the integration

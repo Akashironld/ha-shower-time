@@ -1,5 +1,9 @@
 /* Hot Water Shower Time card — served by the shower_time integration. */
-const CARD_VERSION = "0.9.3";
+const CARD_VERSION = "0.9.4";
+
+// Plain ES2017 on purpose (no ?. / ??): wall tablets often run an older browser that gets Home Assistant's
+// legacy frontend. "a ?? b" is written as nn(a, b).
+const nn = (a, b) => (a === null || a === undefined ? b : a);
 
 const T = {
   en: { title: "Shower time", min: "min", showers: "showers", shower1: "shower", water: "hot water",
@@ -33,7 +37,7 @@ class ShowerTimeCard extends HTMLElement {
 
   setConfig(config) {
     if (!config.entity) throw new Error("entity is required (the 'Shower time' sensor)");
-    this._config = { show_tank: true, show_history: true, ...config };
+    this._config = Object.assign({ show_tank: true, show_history: true }, config);
     if (!this.shadowRoot) this.attachShadow({ mode: "open" });
     this._hist = null; this._histAt = 0;
     this._render();
@@ -42,7 +46,7 @@ class ShowerTimeCard extends HTMLElement {
   set hass(hass) {
     this._hass = hass;
     const st = this._config && hass.states[this._config.entity];
-    const key = st ? `${st.state}|${st.last_updated}|${hass.locale?.language}` : "none";
+    const key = st ? `${st.state}|${st.last_updated}|${hass.locale && hass.locale.language}` : "none";
     if (key !== this._key) { this._key = key; this._render(); }
     this._maybeFetchHistory();
   }
@@ -132,7 +136,7 @@ class ShowerTimeCard extends HTMLElement {
 
   _tank(a, pct) {
     const W = 76, H = 132, x = 6, y = 6, w = 64, h = 120, r = 22;
-    const lvl = Math.max(0, Math.min(100, pct ?? 0));
+    const lvl = Math.max(0, Math.min(100, nn(pct, 0)));
     const ly = y + h - (h * lvl) / 100;                 // liquid surface
     const [c1, c2] = this._water(a.top_temperature);
     const wave = `M ${x} ${ly} q 8 -5 16 0 t 16 0 t 16 0 t 16 0 V ${y + h} H ${x} Z`;
@@ -159,7 +163,7 @@ class ShowerTimeCard extends HTMLElement {
     const s = a.since_reheat;
     if (!s || !s.reference_minutes) return "";
     const tot = s.reference_minutes, p = (v) => Math.max(0, Math.min(100, (v / tot) * 100));
-    const lang = this._hass.locale?.language || undefined;
+    const lang = (this._hass.locale && this._hass.locale.language) || undefined;
     const t = new Date(s.since).toLocaleTimeString(lang, { hour: "2-digit", minute: "2-digit" });
     const day = new Date(s.since).toDateString() === new Date().toDateString() ? "" :
       `${new Date(s.since).toLocaleDateString(lang, { weekday: "short" })} `;
@@ -175,7 +179,7 @@ class ShowerTimeCard extends HTMLElement {
     const today = a.today_showers === undefined ? "" : `<div class="tile">
         <div class="tl"><ha-icon icon="mdi:calendar-today"></ha-icon>${this._t("today")}</div>
         <div class="tv">${a.today_showers} × · ${a.today_minutes} ${this._t("min")}</div>
-        <div class="ts">${this._money(a.today_cost, a, lang) ?? "&nbsp;"}</div></div>`;
+        <div class="ts">${nn(this._money(a.today_cost, a, lang), "&nbsp;")}</div></div>`;
     let last = `<div class="tv">${this._t("none")}</div><div class="ts">&nbsp;</div>`;
     if (a.last) {
       const when = new Date(a.last.start);
@@ -186,7 +190,7 @@ class ShowerTimeCard extends HTMLElement {
     const loss = a.standing_loss_per_day;
     const cool = loss ? `<div class="tile">
         <div class="tl"><ha-icon icon="mdi:thermometer-minus"></ha-icon>${this._t("cooling")}</div>
-        <div class="tv">${this._money(loss.cost, a, lang) ?? `${fmt(loss.kwh_electricity, 1)} kWh`} <small>${this._t("perday")}</small></div>
+        <div class="tv">${nn(this._money(loss.cost, a, lang), `${fmt(loss.kwh_electricity, 1)} kWh`)} <small>${this._t("perday")}</small></div>
         <div class="ts">${loss.cost_year !== null && loss.cost_year !== undefined ? `≈ ${a.currency || "€"} ${loss.cost_year} ${this._t("peryear")}` : `${fmt(loss.kwh_heat, 1)} kWh`}</div></div>` : "";
     return `<div class="tiles">${today}<div class="tile"><div class="tl"><ha-icon icon="mdi:shower-head"></ha-icon>${this._t("lastshower")}</div>${last}</div>${cool}</div>`;
   }
@@ -201,11 +205,11 @@ class ShowerTimeCard extends HTMLElement {
       return;
     }
     const a = st.attributes, m = parseFloat(st.state);
-    const lang = hass.locale?.language || hass.language || undefined;
+    const lang = (hass.locale && hass.locale.language) || hass.language || undefined;
     const typical = a.typical_shower_minutes || 10;
-    const low = a.low_threshold ?? 10;
+    const low = nn(a.low_threshold, 10);
     const color = m < low ? "var(--error-color, #e5484d)" : (m < 2 * typical ? "var(--warning-color, #f5a524)" : "var(--success-color, #30a46c)");
-    const pct = a.fill_percent ?? (a.full_reference_minutes ? Math.round((m / a.full_reference_minutes) * 100) : null);
+    const pct = nn(a.fill_percent, a.full_reference_minutes ? Math.round((m / a.full_reference_minutes) * 100) : null);
     const hhmm = (iso) => iso ? new Date(iso).toLocaleTimeString(lang, { hour: "2-digit", minute: "2-digit" }) : null;
     const fullAt = hhmm(a.reheat_full_at);
     const pill = a.reheating ? `<span class="pill heat"><ha-icon icon="mdi:fire"></ha-icon>${this._t("reheating")}${fullAt ? ` · ${this._t("fullat")} ${fullAt}` : ""}</span>`
@@ -255,7 +259,7 @@ class ShowerTimeCard extends HTMLElement {
     if (!wrap || !d) return;
     const svg = wrap.querySelector(".spark"), cur = wrap.querySelector(".cursor"),
       dot = wrap.querySelector(".dot"), tip = wrap.querySelector(".tip");
-    const lang = this._hass.locale?.language || this._hass.language || undefined;
+    const lang = (this._hass.locale && this._hass.locale.language) || this._hass.language || undefined;
     const valueAt = (t) => {                     // step series: the last point at or before t
       let v = null;
       for (const p of d.series) { if (p[0] <= t) v = p[1]; else break; }
@@ -293,7 +297,7 @@ class ShowerTimeCard extends HTMLElement {
       .na { color: var(--secondary-text-color); }
       .head { display: flex; align-items: center; gap: 12px; }
       .ico { width: 38px; height: 38px; border-radius: 12px; display: grid; place-items: center; flex: none;
-             background: color-mix(in srgb, var(--c) 16%, transparent); color: var(--c); }
+             background: rgba(127,127,127,.14); background: color-mix(in srgb, var(--c) 16%, transparent); color: var(--c); }
       .ico ha-icon { --mdc-icon-size: 22px; }
       .ht { flex: 1; min-width: 0; }
       .title { font-size: 16px; font-weight: 600; color: var(--primary-text-color); line-height: 1.2; }
@@ -301,9 +305,9 @@ class ShowerTimeCard extends HTMLElement {
       .pill { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 700; letter-spacing: .02em;
               padding: 4px 10px 4px 8px; border-radius: 999px; flex: none; white-space: nowrap; }
       .pill ha-icon { --mdc-icon-size: 14px; }
-      .pill.heat { background: color-mix(in srgb, #a855f7 16%, transparent); color: #a855f7; }
-      .pill.use { background: color-mix(in srgb, #3d8fe6 16%, transparent); color: #3d8fe6; animation: pulse 1.6s ease-in-out infinite; }
-      .pill.low { background: color-mix(in srgb, var(--error-color, #e5484d) 16%, transparent); color: var(--error-color, #e5484d); }
+      .pill.heat { background: rgba(168,85,247,.16); background: color-mix(in srgb, #a855f7 16%, transparent); color: #a855f7; }
+      .pill.use { background: rgba(61,143,230,.16); background: color-mix(in srgb, #3d8fe6 16%, transparent); color: #3d8fe6; animation: pulse 1.6s ease-in-out infinite; }
+      .pill.low { background: rgba(229,72,77,.16); background: color-mix(in srgb, var(--error-color, #e5484d) 16%, transparent); color: var(--error-color, #e5484d); }
       @keyframes pulse { 50% { opacity: .55; } }
       .hero { display: flex; align-items: center; gap: 18px; margin-top: 14px; }
       .tank { width: 76px; flex: none; }
@@ -322,7 +326,7 @@ class ShowerTimeCard extends HTMLElement {
       .sbar i { display: block; height: 100%; }
       .left { background: var(--success-color, #30a46c); }
       .used { background: #3d8fe6; }
-      .cool { background: repeating-linear-gradient(45deg, #f5a524 0 4px, color-mix(in srgb, #f5a524 55%, transparent) 4px 8px); }
+      .cool { background: #f5a524; background: repeating-linear-gradient(45deg, #f5a524 0 4px, color-mix(in srgb, #f5a524 55%, transparent) 4px 8px); }
       .legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 11px; color: var(--secondary-text-color); margin-top: 5px; }
       .legend span { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
       .d { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
@@ -338,7 +342,7 @@ class ShowerTimeCard extends HTMLElement {
       .sparkwrap { position: relative; }
       .sparkwrap.hover { cursor: crosshair; touch-action: pan-y; }
       .spark { width: 100%; height: 52px; display: block; }
-      .nohist { position: absolute; inset: 0; display: grid; place-items: center; font-size: 11px; color: var(--secondary-text-color); }
+      .nohist { position: absolute; top: 0; right: 0; bottom: 0; left: 0; display: grid; place-items: center; font-size: 11px; color: var(--secondary-text-color); }
       .axis { display: flex; justify-content: space-between; font-size: 10px; color: var(--secondary-text-color); margin-top: 2px; }
       .cursor { position: absolute; top: 0; height: 52px; width: 1px; background: var(--secondary-text-color); opacity: 0; pointer-events: none; }
       .dot { position: absolute; width: 8px; height: 8px; margin: -4px 0 0 -4px; border-radius: 50%; opacity: 0; pointer-events: none;
