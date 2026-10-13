@@ -109,7 +109,7 @@ value you set (heat pump ≈ 2–3.5, electric boiler 1.0).
 
 ## Installation
 
-1. HACS → ⋮ → **Custom repositories** → add `https://github.com/OWNER/ha-shower-time`, category *Integration*
+1. HACS → ⋮ → **Custom repositories** → add `https://github.com/Akashironld/ha-shower-time`, category *Integration*
 2. Install **Hot Water Shower Time** and restart Home Assistant
 3. **Settings → Devices & services → Add integration → Hot Water Shower Time**
 
