@@ -118,6 +118,9 @@
       },
       "shower_temperature": {
         "name": "Shower temperature"
+      },
+      "fill_level": {
+        "name": "Tank charge"
       }
     },
     "binary_sensor": {

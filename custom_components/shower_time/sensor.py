@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
-from homeassistant.const import EntityCategory, UnitOfTemperature, UnitOfTime, UnitOfVolume
+from homeassistant.const import PERCENTAGE, EntityCategory, UnitOfTemperature, UnitOfTime, UnitOfVolume
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
@@ -13,7 +13,7 @@ from .entity import ShowerTimeEntity
 async def async_setup_entry(hass: HomeAssistant, entry: ShowerTimeConfigEntry,
                             async_add_entities: AddEntitiesCallback) -> None:
     m = entry.runtime_data
-    async_add_entities([MinutesSensor(m), ShowersSensor(m), LitresSensor(m), ShowerTemperatureSensor(m), ModelSensor(m)])
+    async_add_entities([MinutesSensor(m), ShowersSensor(m), LitresSensor(m), ShowerTemperatureSensor(m), FillSensor(m), ModelSensor(m)])
 
 
 class MinutesSensor(ShowerTimeEntity, SensorEntity):
@@ -44,6 +44,9 @@ class MinutesSensor(ShowerTimeEntity, SensorEntity):
             "typical_shower_minutes": round(p["duration"]["v"]),
             "litres": round(e.liters, -1),
             "full_tank_minutes": round(e.full_minutes) if e.full_minutes is not None else None,
+            "fill_percent": m.fill_percent(),
+            "full_reference_minutes": round(m.full_ref) if m.full_ref is not None else None,
+            "full_reference_at": m.full_ref_at,
             "hot_fraction": round(e.hot_fraction, 2),
             "tank_average": round(e.average, 1),
             "top_temperature": m.top_value,
@@ -87,6 +90,27 @@ class LitresSensor(ShowerTimeEntity, SensorEntity):
     def native_value(self):
         e = self.manager.estimate
         return round(e.liters) if e else None
+
+
+class FillSensor(ShowerTimeEntity, SensorEntity):
+    """How full the tank is: 100 % right after the last reheat, dropping with use and standing loss."""
+
+    _attr_native_unit_of_measurement = PERCENTAGE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:water-boiler"
+
+    def __init__(self, manager) -> None:
+        super().__init__(manager, "fill_level")
+
+    @property
+    def native_value(self):
+        return self.manager.fill_percent()
+
+    @property
+    def extra_state_attributes(self):
+        m = self.manager
+        return {"full_reference_minutes": round(m.full_ref) if m.full_ref is not None else None,
+                "full_reference_at": m.full_ref_at}
 
 
 class ShowerTemperatureSensor(ShowerTimeEntity, SensorEntity):

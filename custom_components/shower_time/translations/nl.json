@@ -118,6 +118,9 @@
       },
       "shower_temperature": {
         "name": "Douchetemperatuur"
+      },
+      "fill_level": {
+        "name": "Vulgraad"
       }
     },
     "binary_sensor": {

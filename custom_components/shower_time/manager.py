@@ -103,6 +103,11 @@ class ShowerTimeManager:
         self.top_value: float | None = None
         self.bottom_value: float | None = None
         self.reheating = False
+        # 100 % = the shower minutes right after the last reheat; the fill level drops with use and standing loss
+        self.full_ref: float | None = None
+        self.full_ref_at: str | None = None
+        self._ref_low: float | None = None
+        self._last_minutes: float | None = None
         self._listeners: list[Callable[[], None]] = []
         self._unsubs: list[CALLBACK_TYPE] = []
 
@@ -116,12 +121,17 @@ class ShowerTimeManager:
             self.last_cycle = model.Cycle(**lc) if lc else None
             self.last_learn = stored.get("last_learn")
             self.last_samples = stored.get("last_samples", {})
+        if stored:
+            self.full_ref = stored.get("full_ref")
+            self.full_ref_at = stored.get("full_ref_at")
         watch = [e for e in (self.top, self.bottom, self.heating) if e]   # the water meter is only used for learning
         self._unsubs.append(async_track_state_change_event(self.hass, watch, self._state_changed))
         self._unsubs.append(async_track_time_change(self.hass, self._nightly, hour=LEARN_HOUR, minute=LEARN_MINUTE, second=0))
         if not self.last_learn:                 # first install: learn from what the recorder already has
             self._unsubs.append(async_call_later(self.hass, 120, self._first_learn))
         self.update()
+        if self.full_ref is None:               # find the last reheat in the history once
+            self.entry.async_create_background_task(self.hass, self._init_full_ref(), f"{DOMAIN}_full_ref")
 
     async def async_stop(self) -> None:
         for unsub in self._unsubs:
@@ -165,8 +175,65 @@ class ShowerTimeManager:
             head = self.head_flow()[0] if self.temp_mode == "auto" else None
             self.estimate = model.estimate(self.params, self.top_value, self.bottom_value, volume=self.volume,
                                            shower_temp=self.shower_temp, month=dt_util.now().month, head_flow=head)
+            self._track_full(self.estimate.minutes)
         for cb in list(self._listeners):
             cb()
+
+    # ------------------------------------------------------------------ fill level
+    def _set_ref(self, minutes: float) -> None:
+        self.full_ref = minutes
+        self.full_ref_at = dt_util.now().isoformat(timespec="seconds")
+        self._ref_low = minutes
+        self._store.async_delay_save(self._data, 60)
+
+    @callback
+    def _track_full(self, m: float) -> None:
+        """Keep the reference at the end of the latest reheat.
+
+        With a reheat entity: follow the minutes while it is on (the last value is the new 100 %).
+        Without one: a rise of 3+ minutes above the lowest point since the last reheat is a reheat.
+        Sensor values that keep rising just after the reheat state switched off are still followed."""
+        prev = self._last_minutes
+        self._last_minutes = m
+        if self.full_ref is None:
+            return                              # still being initialised from the history
+        if self._ref_low is None or m < self._ref_low:
+            self._ref_low = m
+        rising = prev is not None and m > prev
+        if (self.heating and self.reheating) or (rising and m >= self._ref_low + 3) or m > self.full_ref:
+            self._set_ref(m)
+
+    def fill_percent(self) -> int | None:
+        e = self.estimate
+        if e is None or not self.full_ref or self.full_ref <= 0:
+            return None
+        return int(round(max(0.0, min(100.0, 100 * e.minutes / self.full_ref))))
+
+    async def _init_full_ref(self) -> None:
+        """First run: the minutes at the end of the last reheat in the past two days."""
+        try:
+            points = await self.async_history(48)
+        except Exception:  # noqa: BLE001
+            points = []
+        ref = low = prev = ts = None
+        for t, v in points:                     # same rules as _track_full, replayed over the history
+            if ref is None:
+                ref = low = prev = v
+                ts = t
+                continue
+            low = min(low, v)
+            if (v > prev and v >= low + 3) or v > ref:
+                ref, ts, low = v, t, v
+            prev = v
+        if ref is None and self.estimate:
+            ref = self.estimate.minutes
+        if ref is not None:
+            self.full_ref = float(ref)
+            self.full_ref_at = (dt_util.as_local(datetime.fromtimestamp(ts / 1000, timezone.utc)).isoformat(timespec="seconds")
+                                if ts else dt_util.now().isoformat(timespec="seconds"))
+            self._ref_low = self.estimate.minutes if self.estimate else ref
+            self._store.async_delay_save(self._data, 5)
+            self.update()
 
     # ------------------------------------------------------------------ history for the card
     async def async_history(self, hours: int = 24) -> list[list[float]]:
@@ -218,6 +285,13 @@ class ShowerTimeManager:
         return result
 
     # ------------------------------------------------------------------ learning
+    def _data(self) -> dict:
+        return {
+            "profile": self.profile, "params": self.params, "processed_until": self.processed_until,
+            "last_cycle": asdict(self.last_cycle) if self.last_cycle else None, "last_learn": self.last_learn,
+            "last_samples": self.last_samples, "full_ref": self.full_ref, "full_ref_at": self.full_ref_at,
+        }
+
     async def _first_learn(self, _now) -> None:
         await self.async_learn()
 
@@ -279,11 +353,7 @@ class ShowerTimeManager:
         self.processed_until = int(end.timestamp() // 60)
         self.last_learn = dt_util.now().isoformat(timespec="seconds")
         self.last_samples = result.samples
-        await self._store.async_save({
-            "profile": self.profile, "params": self.params, "processed_until": self.processed_until,
-            "last_cycle": asdict(last) if last else None, "last_learn": self.last_learn,
-            "last_samples": self.last_samples,
-        })
+        await self._store.async_save(self._data())
         _LOGGER.debug("Learned from %d cycles / %d draws: %s", result.cycles, result.draws, result.samples)
 
     def _water_series(self, states: list) -> tuple[str, list[tuple[int, float]]] | None:

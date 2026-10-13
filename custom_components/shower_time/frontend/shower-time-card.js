@@ -1,5 +1,5 @@
 /* Hot Water Shower Time card — served by the shower_time integration. */
-const CARD_VERSION = "0.3.2";
+const CARD_VERSION = "0.4.0";
 
 const T = {
   en: { title: "Shower time", min: "min", shower: "of showering", empty: "empty", full: "full",
@@ -143,9 +143,11 @@ class ShowerTimeCard extends HTMLElement {
     const typical = a.typical_shower_minutes || 10;
     const low = a.low_threshold ?? 10;
     const color = m < low ? "var(--error-color, #e5484d)" : (m < 2 * typical ? "var(--warning-color, #f5a524)" : "var(--success-color, #30a46c)");
-    const full = Math.max(a.full_tank_minutes || 0, m, 1);   // a tank above its usual temperature is 'full'
-    const pct = Math.max(0, Math.min(100, (m / full) * 100));
-    const pctUsual = Math.round(Math.max(0, Math.min(100, (m / (a.full_tank_minutes || full)) * 100)));
+    // 100 % = the minutes right after the last reheat; it drops with showering and standing loss
+    const full = Math.max(a.full_reference_minutes || a.full_tank_minutes || 0, m, 1);
+    const pctNum = a.fill_percent !== undefined && a.fill_percent !== null ? a.fill_percent : Math.round((m / full) * 100);
+    const pct = Math.max(0, Math.min(100, pctNum));
+    const pctUsual = pct;
     const pill = a.reheating ? `<span class="pill heat">${this._t("reheating")}</span>`
       : (m < low ? `<span class="pill low">${this._t("low")}</span>` : "");
     const title = this._config.title || this._t("title");
