@@ -1,0 +1,13 @@
+{
+  "domain": "shower_time",
+  "name": "Hot Water Shower Time",
+  "codeowners": [],
+  "config_flow": true,
+  "dependencies": ["recorder", "http", "frontend"],
+  "documentation": "https://github.com/OWNER/ha-shower-time",
+  "integration_type": "service",
+  "iot_class": "calculated",
+  "issue_tracker": "https://github.com/OWNER/ha-shower-time/issues",
+  "requirements": [],
+  "version": "0.1.0"
+}

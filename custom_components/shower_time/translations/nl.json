@@ -1,0 +1,95 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Warmwaterboiler",
+        "description": "Kies de temperatuursensor bovenin je boiler. Met een sensor onderin wordt de schatting veel slimmer (die ziet het koude water binnenkomen tijdens het douchen).",
+        "data": {
+          "name": "Naam",
+          "top_sensor": "Temperatuursensor boven",
+          "bottom_sensor": "Temperatuursensor onder (aanbevolen)",
+          "tank_volume": "Inhoud boiler",
+          "shower_temperature": "Douchetemperatuur"
+        },
+        "data_description": {
+          "tank_volume": "Staat op het typeplaatje van de boiler.",
+          "shower_temperature": "De temperatuur waarop je doucht; 38 °C is gebruikelijk."
+        }
+      },
+      "extras": {
+        "title": "Slimmer maken (optioneel)",
+        "description": "Waar mogelijk alvast ingevuld vanuit hetzelfde apparaat. Hiermee leert het model sneller en nauwkeuriger. Laat leeg als je ze niet hebt.",
+        "data": {
+          "profile": "Startkennis",
+          "heating_entity": "Entiteit die laat zien dat de boiler opwarmt",
+          "heating_states": "Standen die 'opwarmen' betekenen",
+          "energy_sensor": "Warmte geleverd aan warm water (energiesensor)"
+        },
+        "data_description": {
+          "profile": "Waar het model mee begint voordat het van jullie eigen douches heeft geleerd.",
+          "heating_entity": "Zonder deze herkent het model opwarmen aan de stijgende temperatuur.",
+          "energy_sensor": "Warmte-afgifte voor warm water (niet het stroomverbruik). Daarmee leert het model hoe je boiler gelaagd is."
+        }
+      }
+    },
+    "error": {
+      "same_sensor": "Boven en onder moeten verschillende sensoren zijn."
+    },
+    "abort": {
+      "already_configured": "Deze boiler is al ingesteld."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Instellingen warm water",
+        "data": {
+          "tank_volume": "Inhoud boiler",
+          "shower_temperature": "Douchetemperatuur",
+          "low_minutes": "'Bijna op' onder",
+          "bottom_sensor": "Temperatuursensor onder",
+          "heating_entity": "Entiteit opwarmen",
+          "heating_states": "Standen opwarmen",
+          "energy_sensor": "Warmte warm water (energiesensor)"
+        }
+      }
+    }
+  },
+  "selector": {
+    "profile": {
+      "options": {
+        "generic": "Algemene boiler",
+        "weheat_200": "Weheat-boiler 200 L (geleerd uit 471 douches)"
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "shower_minutes": {
+        "name": "Douchetijd"
+      },
+      "showers": {
+        "name": "Douchebeurten"
+      },
+      "hot_water": {
+        "name": "Warm water"
+      },
+      "model": {
+        "name": "Geleerd model"
+      }
+    },
+    "binary_sensor": {
+      "low": {
+        "name": "Bijna op"
+      },
+      "reheating": {
+        "name": "Opwarmen"
+      }
+    },
+    "button": {
+      "learn_now": {
+        "name": "Nu leren"
+      }
+    }
+  }
+}

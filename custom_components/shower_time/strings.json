@@ -1,0 +1,95 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Hot water tank",
+        "description": "Pick the temperature sensor at the top of your hot water tank. A sensor near the bottom makes the estimate much smarter (it shows the cold water coming in while you shower).",
+        "data": {
+          "name": "Name",
+          "top_sensor": "Top temperature sensor",
+          "bottom_sensor": "Bottom temperature sensor (recommended)",
+          "tank_volume": "Tank volume",
+          "shower_temperature": "Shower temperature"
+        },
+        "data_description": {
+          "tank_volume": "Look on the type plate of the tank.",
+          "shower_temperature": "The temperature you shower at; 38 °C is typical."
+        }
+      },
+      "extras": {
+        "title": "Make it smarter (optional)",
+        "description": "These are suggested from the same device when possible. With them the model learns faster and more precisely. Leave empty if you do not have them.",
+        "data": {
+          "profile": "Starting knowledge",
+          "heating_entity": "Entity that shows the tank is being reheated",
+          "heating_states": "States that mean 'reheating'",
+          "energy_sensor": "Heat delivered to the hot water (energy sensor)"
+        },
+        "data_description": {
+          "profile": "Where the model starts before it has learned from your own showers.",
+          "heating_entity": "Without it, reheating is recognised from the temperature rising.",
+          "energy_sensor": "Heat output for hot water (not electricity used). Lets the model learn how your tank layers."
+        }
+      }
+    },
+    "error": {
+      "same_sensor": "Top and bottom must be different sensors."
+    },
+    "abort": {
+      "already_configured": "This tank is already set up."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Hot water settings",
+        "data": {
+          "tank_volume": "Tank volume",
+          "shower_temperature": "Shower temperature",
+          "low_minutes": "'Almost empty' below",
+          "bottom_sensor": "Bottom temperature sensor",
+          "heating_entity": "Reheating entity",
+          "heating_states": "Reheating states",
+          "energy_sensor": "Hot water heat (energy) sensor"
+        }
+      }
+    }
+  },
+  "selector": {
+    "profile": {
+      "options": {
+        "generic": "Generic tank",
+        "weheat_200": "Weheat 200 L tank (learned from 471 showers)"
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "shower_minutes": {
+        "name": "Shower time"
+      },
+      "showers": {
+        "name": "Showers left"
+      },
+      "hot_water": {
+        "name": "Hot water"
+      },
+      "model": {
+        "name": "Learned model"
+      }
+    },
+    "binary_sensor": {
+      "low": {
+        "name": "Almost empty"
+      },
+      "reheating": {
+        "name": "Reheating"
+      }
+    },
+    "button": {
+      "learn_now": {
+        "name": "Learn now"
+      }
+    }
+  }
+}

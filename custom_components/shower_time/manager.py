@@ -1,0 +1,222 @@
+"""Runtime glue: live estimate, nightly learning and persistence."""
+from __future__ import annotations
+
+from collections.abc import Callable
+from dataclasses import asdict
+from datetime import datetime, timedelta, timezone
+import logging
+
+from homeassistant.components.recorder import get_instance, history, statistics
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
+from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, callback
+from homeassistant.helpers.event import (
+    async_call_later,
+    async_track_state_change_event,
+    async_track_time_change,
+)
+from homeassistant.helpers.storage import Store
+from homeassistant.util import dt as dt_util
+
+from . import model
+from .const import (
+    CONF_BOTTOM,
+    CONF_ENERGY,
+    CONF_HEATING,
+    CONF_HEATING_STATES,
+    CONF_LOW,
+    CONF_PROFILE,
+    CONF_SHOWER_TEMP,
+    CONF_TOP,
+    CONF_VOLUME,
+    DEFAULT_HEATING_STATES,
+    DEFAULT_LOW,
+    DEFAULT_SHOWER_TEMP,
+    DEFAULT_VOLUME,
+    DOMAIN,
+    HISTORY_DAYS,
+    LEARN_HOUR,
+    LEARN_MINUTE,
+    STORAGE_VERSION,
+)
+
+_LOGGER = logging.getLogger(__name__)
+
+
+def _num(state) -> float | None:
+    if state is None or state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN, None, ""):
+        return None
+    try:
+        return float(state.state)
+    except (TypeError, ValueError):
+        return None
+
+
+class ShowerTimeManager:
+    """One per config entry (one tank)."""
+
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
+        self.hass = hass
+        self.entry = entry
+        cfg = {**entry.data, **entry.options}
+        self.top: str = cfg[CONF_TOP]
+        self.bottom: str | None = cfg.get(CONF_BOTTOM) or None
+        self.volume: float = float(cfg.get(CONF_VOLUME, DEFAULT_VOLUME))
+        self.shower_temp: float = float(cfg.get(CONF_SHOWER_TEMP, DEFAULT_SHOWER_TEMP))
+        self.heating: str | None = cfg.get(CONF_HEATING) or None
+        self.heating_states = {s.strip().lower() for s in str(cfg.get(CONF_HEATING_STATES, DEFAULT_HEATING_STATES)).split(",") if s.strip()}
+        self.energy: str | None = cfg.get(CONF_ENERGY) or None
+        self.low_minutes: float = float(cfg.get(CONF_LOW, DEFAULT_LOW))
+        self.profile: str = cfg.get(CONF_PROFILE, "generic")
+
+        self._store: Store = Store(hass, STORAGE_VERSION, f"{DOMAIN}.{entry.entry_id}")
+        self.params: dict = model.new_params(self.profile)
+        self.processed_until: int = 0
+        self.last_cycle: model.Cycle | None = None
+        self.last_learn: str | None = None
+        self.last_samples: dict = {}
+        self.learning = False
+
+        self.estimate: model.Estimate | None = None
+        self.top_value: float | None = None
+        self.bottom_value: float | None = None
+        self.reheating = False
+        self._listeners: list[Callable[[], None]] = []
+        self._unsubs: list[CALLBACK_TYPE] = []
+
+    # ------------------------------------------------------------------ lifecycle
+    async def async_start(self) -> None:
+        stored = await self._store.async_load()
+        if stored and stored.get("profile") == self.profile:
+            self.params = stored["params"]
+            self.processed_until = stored.get("processed_until", 0)
+            lc = stored.get("last_cycle")
+            self.last_cycle = model.Cycle(**lc) if lc else None
+            self.last_learn = stored.get("last_learn")
+            self.last_samples = stored.get("last_samples", {})
+        watch = [e for e in (self.top, self.bottom, self.heating) if e]
+        self._unsubs.append(async_track_state_change_event(self.hass, watch, self._state_changed))
+        self._unsubs.append(async_track_time_change(self.hass, self._nightly, hour=LEARN_HOUR, minute=LEARN_MINUTE, second=0))
+        if not self.last_learn:                 # first install: learn from what the recorder already has
+            self._unsubs.append(async_call_later(self.hass, 120, self._first_learn))
+        self.update()
+
+    async def async_stop(self) -> None:
+        for unsub in self._unsubs:
+            unsub()
+        self._unsubs.clear()
+
+    @callback
+    def add_listener(self, cb: Callable[[], None]) -> Callable[[], None]:
+        self._listeners.append(cb)
+        return lambda: self._listeners.remove(cb)
+
+    # ------------------------------------------------------------------ live estimate
+    @callback
+    def _state_changed(self, _event: Event) -> None:
+        self.update()
+
+    @callback
+    def update(self) -> None:
+        self.top_value = _num(self.hass.states.get(self.top))
+        self.bottom_value = _num(self.hass.states.get(self.bottom)) if self.bottom else None
+        if self.heating:
+            st = self.hass.states.get(self.heating)
+            self.reheating = bool(st and str(st.state).lower() in self.heating_states)
+        if self.top_value is None:
+            self.estimate = None
+        else:
+            self.estimate = model.estimate(self.params, self.top_value, self.bottom_value, volume=self.volume,
+                                           shower_temp=self.shower_temp, month=dt_util.now().month)
+        for cb in list(self._listeners):
+            cb()
+
+    # ------------------------------------------------------------------ learning
+    async def _first_learn(self, _now) -> None:
+        await self.async_learn()
+
+    async def _nightly(self, _now) -> None:
+        await self.async_learn()
+
+    async def async_learn(self) -> None:
+        if self.learning:
+            return
+        self.learning = True
+        try:
+            await self._learn()
+        except Exception:  # noqa: BLE001 - learning must never break the integration
+            _LOGGER.exception("Learning failed; keeping the current model")
+        finally:
+            self.learning = False
+            self.update()
+
+    async def _learn(self) -> None:
+        now = dt_util.utcnow()
+        end = now - timedelta(minutes=30)
+        start = now - timedelta(days=HISTORY_DAYS)
+        if self.processed_until:
+            start = max(start, datetime.fromtimestamp(self.processed_until * 60, timezone.utc) - timedelta(hours=6))
+        recorder = get_instance(self.hass)
+        series: dict[str, list] = {}
+        for ent in (self.top, self.bottom, self.heating):
+            if not ent:
+                continue
+            res = await recorder.async_add_executor_job(
+                history.state_changes_during_period, self.hass, start, end, ent, True, False, None, True)
+            series[ent] = res.get(ent, [])
+        rows = await self.hass.async_add_executor_job(self._rows, series, start, end)
+        if len(rows) < 600:
+            _LOGGER.info("Not enough history to learn yet (%d minutes)", len(rows))
+            return
+        energy = None
+        if self.energy:
+            stats = await recorder.async_add_executor_job(
+                statistics.statistics_during_period, self.hass, start, end, {self.energy}, "hour",
+                {"energy": "kWh"}, {"change"})
+            energy = {}
+            for row in stats.get(self.energy, []):
+                ts = row["start"]
+                ts = ts.timestamp() if isinstance(ts, datetime) else float(ts)
+                energy[int(ts // 60)] = float(row.get("change") or 0.0)
+
+        def month_of(minute: int) -> int:
+            return dt_util.as_local(datetime.fromtimestamp(minute * 60, timezone.utc)).month
+
+        result, last = await self.hass.async_add_executor_job(
+            lambda: model.learn(self.params, rows, volume=self.volume, shower_temp=self.shower_temp,
+                                since=self.processed_until, energy_by_hour=energy,
+                                previous_cycle=self.last_cycle, month_of=month_of))
+        self.params = result.params
+        self.last_cycle = last
+        self.processed_until = int(end.timestamp() // 60)
+        self.last_learn = dt_util.now().isoformat(timespec="seconds")
+        self.last_samples = result.samples
+        await self._store.async_save({
+            "profile": self.profile, "params": self.params, "processed_until": self.processed_until,
+            "last_cycle": asdict(last) if last else None, "last_learn": self.last_learn,
+            "last_samples": self.last_samples,
+        })
+        _LOGGER.debug("Learned from %d cycles / %d draws: %s", result.cycles, result.draws, result.samples)
+
+    def _rows(self, series: dict[str, list], start: datetime, end: datetime) -> list[model.Row]:
+        """Forward-fill all series onto a one-minute grid."""
+        def prep(ent, conv):
+            out = []
+            for st in series.get(ent, []):
+                out.append((int(st.last_changed.timestamp() // 60), conv(st)))
+            return out
+        top = prep(self.top, _num)
+        bottom = prep(self.bottom, _num) if self.bottom else []
+        heat = prep(self.heating, lambda s: str(s.state).lower() in self.heating_states) if self.heating else []
+        idx = {"t": 0, "b": 0, "h": 0}
+        cur = {"t": None, "b": None, "h": False}
+        rows: list[model.Row] = []
+        for m in range(int(start.timestamp() // 60), int(end.timestamp() // 60)):
+            for key, seq in (("t", top), ("b", bottom), ("h", heat)):
+                while idx[key] < len(seq) and seq[idx[key]][0] <= m:
+                    cur[key] = seq[idx[key]][1]
+                    idx[key] += 1
+            if cur["t"] is None or (self.bottom and cur["b"] is None):
+                continue
+            rows.append(model.Row(minute=m, top=cur["t"], bottom=cur["b"] if self.bottom else None, heating=bool(cur["h"])))
+        return rows
