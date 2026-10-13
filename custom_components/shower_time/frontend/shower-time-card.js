@@ -1,5 +1,5 @@
 /* Hot Water Shower Time card — served by the shower_time integration. */
-const CARD_VERSION = "0.2.0";
+const CARD_VERSION = "0.2.1";
 
 const T = {
   en: { title: "Shower time", min: "min", shower: "of showering", empty: "empty", full: "full",
@@ -69,9 +69,14 @@ class ShowerTimeCard extends HTMLElement {
     } catch (e) { this._hist = null; }
   }
 
+  _histReady() {                       // only draw the graph once there are at least two hours of history
+    const p = this._hist;
+    return !!(p && p.length >= 3 && Date.now() - p[0][0] >= 2 * 3600 * 1000);
+  }
+
   _sparkline(w, h, color) {
     const pts = this._hist;
-    if (!pts || pts.length < 3) return "";
+    if (!this._histReady()) return "";
     const now = Date.now(), t0 = now - 24 * 3600 * 1000;
     const series = [...pts, [now, pts[pts.length - 1][1]]];
     const max = Math.max(10, ...series.map((p) => p[1]));
@@ -157,7 +162,7 @@ class ShowerTimeCard extends HTMLElement {
           <div class="chip"><ha-icon icon="mdi:water"></ha-icon><b>≈ ${fmt(a.litres)} L</b><span>${this._t("water")} ${a.shower_temperature_mode === "reference" ? "≈" : ""}${fmt(a.shower_temperature, a.shower_temperature_mode === "sensed" ? 1 : 0)}°</span></div>
           <div class="chip"><ha-icon icon="mdi:snowflake-thermometer"></ha-icon><b>${fmt(a.cold_water)}°</b><span>${this._t("cold")}</span></div>
         </div>
-        ${this._config.show_history && this._hist && this._hist.length > 2 ? `
+        ${this._config.show_history && this._histReady() ? `
           <div class="hist"><div class="hl">${this._t("last24")}</div>${this._sparkline(300, 44, color)}</div>` : ""}
         <div class="foot">${this._foot(a)}</div>
       </ha-card>`;
