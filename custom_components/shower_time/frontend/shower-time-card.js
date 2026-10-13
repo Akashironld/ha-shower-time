@@ -1,5 +1,5 @@
 /* Hot Water Shower Time card — served by the shower_time integration. */
-const CARD_VERSION = "0.1.0";
+const CARD_VERSION = "0.1.1";
 
 const T = {
   en: { title: "Shower time", min: "min", shower: "of showering", empty: "empty", full: "full",
@@ -67,7 +67,7 @@ class ShowerTimeCard extends HTMLElement {
 
   _sparkline(w, h, color) {
     const pts = this._hist;
-    if (!pts || pts.length < 2) return "";
+    if (!pts || pts.length < 3) return "";
     const now = Date.now(), t0 = now - 24 * 3600 * 1000;
     const series = [...pts, [now, pts[pts.length - 1][1]]];
     const max = Math.max(10, ...series.map((p) => p[1]));
@@ -102,6 +102,7 @@ class ShowerTimeCard extends HTMLElement {
         <rect x="10" y="${top}" width="44" height="${(hotH + 4).toFixed(1)}" fill="url(#hot)">${heat}</rect>
         <rect x="10" y="${(top + hotH - 3).toFixed(1)}" width="44" height="8" fill="#ffd7a8" opacity=".35"/>
       </g>
+      <rect x="16" y="${top + 10}" width="5" height="${H - 20}" rx="2.5" fill="#fff" opacity=".18"/>
       <rect x="10" y="${top}" width="44" height="${H}" rx="16" fill="none" stroke="var(--divider-color, rgba(127,127,127,.4))" stroke-width="2"/>
       <text x="32" y="${top + 18}" class="tt">${fmt(a.top_temperature)}°</text>
       ${a.bottom_temperature !== null && a.bottom_temperature !== undefined
@@ -122,7 +123,7 @@ class ShowerTimeCard extends HTMLElement {
     const typical = a.typical_shower_minutes || 10;
     const low = a.low_threshold ?? 10;
     const color = m < low ? "var(--error-color, #e5484d)" : (m < 2 * typical ? "var(--warning-color, #f5a524)" : "var(--success-color, #30a46c)");
-    const full = a.full_tank_minutes || Math.max(m, 1);
+    const full = Math.max(a.full_tank_minutes || 0, m, 1);   // a tank above its usual temperature is 'full'
     const pct = Math.max(0, Math.min(100, (m / full) * 100));
     const pill = a.reheating ? `<span class="pill heat">${this._t("reheating")}</span>`
       : (m < low ? `<span class="pill low">${this._t("low")}</span>` : "");
@@ -144,7 +145,7 @@ class ShowerTimeCard extends HTMLElement {
             <div class="big"><span class="num" style="color:${color}">${fmt(m)}</span><span class="unit">${this._t("min")}</span></div>
             <div class="what">${this._t("shower")}</div>
             <div class="bar"><div style="width:${pct}%;background:${color}"></div></div>
-            <div class="scale"><span>${this._t("empty")}</span><span>${this._t("full")} ≈ ${fmt(a.full_tank_minutes)} ${this._t("min")}</span></div>
+            <div class="scale"><span>${this._t("empty")}</span><span>${this._t("full")} ≈ ${fmt(full)} ${this._t("min")}</span></div>
           </div>
         </div>
         <div class="chips">
@@ -152,7 +153,7 @@ class ShowerTimeCard extends HTMLElement {
           <div class="chip"><ha-icon icon="mdi:water"></ha-icon><b>≈ ${fmt(a.litres)} L</b><span>${this._t("water")} ${fmt(a.shower_temperature)}°</span></div>
           <div class="chip"><ha-icon icon="mdi:snowflake-thermometer"></ha-icon><b>${fmt(a.cold_water)}°</b><span>${this._t("cold")}</span></div>
         </div>
-        ${this._config.show_history && this._hist && this._hist.length > 1 ? `
+        ${this._config.show_history && this._hist && this._hist.length > 2 ? `
           <div class="hist"><div class="hl">${this._t("last24")}</div>${this._sparkline(300, 44, color)}</div>` : ""}
         <div class="foot">${this._t("learned")}: ≈ ${fmt(a.flow, 1)} L/min · ${fmt(a.observations)} obs.</div>
       </ha-card>`;
@@ -178,7 +179,7 @@ class ShowerTimeCard extends HTMLElement {
       .pill.heat { background: color-mix(in srgb, #a855f7 18%, transparent); color: #a855f7; }
       .pill.low { background: color-mix(in srgb, var(--error-color, #e5484d) 18%, transparent); color: var(--error-color, #e5484d); }
       .body { display: flex; align-items: center; gap: 14px; }
-      .tank { width: 58px; flex: none; }
+      .tank { width: 70px; flex: none; }
       .tt { font-size: 10px; font-weight: 700; fill: #fff; text-anchor: middle; paint-order: stroke; stroke: rgba(0,0,0,.35); stroke-width: 2px; }
       .main { flex: 1; min-width: 0; }
       .big { display: flex; align-items: baseline; gap: 6px; }
