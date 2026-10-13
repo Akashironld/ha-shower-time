@@ -117,6 +117,49 @@ value you set (heat pump ≈ 2–3.5, electric boiler 1.0).
 2. Install **Hot Water Shower Time** and restart Home Assistant
 3. **Settings → Devices & services → Add integration → Hot Water Shower Time**
 
+## Configuration
+
+The setup has two screens. Only the first one needs input; the second is filled in for you where possible
+(for Weheat everything is suggested) and can be left as it is.
+
+### Screen 1 — the tank
+
+| Setting | | What it is for | Weheat example |
+| --- | --- | --- | --- |
+| **Name** | required | Name of the device and the start of the entity ids | `Hot water` |
+| **Top temperature sensor** | **required** | Temperature at the top of the tank (the outlet side) | `sensor.…_dhw_top_temperature` |
+| **Bottom temperature sensor** | strongly recommended | Sees cold water coming in while you shower. Without it: no live countdown, no shower log and hardly any learning | `sensor.…_dhw_bottom_temperature` |
+| **Tank volume** | **required** | Litres, from the type plate | `200` |
+| **Shower temperature** | required, default *Automatic* | *Automatic* needs nothing; *Set it myself* uses the fixed value below it | Automatic |
+
+### Screen 2 — make it smarter (all optional)
+
+| Setting | What it adds | Without it | Weheat example |
+| --- | --- | --- | --- |
+| **Starting knowledge** | Where the model starts before it has learned from your showers | *Generic tank* | *Weheat 200 L* (suggested automatically) |
+| **Entity that shows reheating** + **states** | Exact reheat moments, "Reheating" sensor, "Full again at" | Reheats are recognised from the temperature rising | `sensor.blackbird_p80_heat_pump` with `dhw, legionella_prevention` |
+| **Heat delivered to hot water** (energy) | Learns how your tank layers; more precise flow | Fixed layering from the starting knowledge | `sensor.…_energy_output_dhw` |
+| **Outdoor temperature sensor** | Cold water temperature from the 3-week outdoor average | Learned monthly table | `sensor.…_outside_temperature` |
+| **Electricity used for hot water** (energy) | Learns the COP for the cost per shower | The COP you fill in | `sensor.…_electricity_used_dhw` |
+| **COP for hot water** | Used when the COP cannot be learned | 2.5 | heat pump ≈ 2–3.5, electric boiler 1.0 |
+| **Electricity price sensor** | Cost per shower and per day (use an all-in price) | Only kWh, no money | your supplier, Nord Pool, Tibber, evcc… |
+| **Shower-head flow** | *Water meter*, *type* or *fill in myself*: litres and the temperature you shower at | Litres at a 38 °C reference | *I don't know* |
+| **Flow, filled in yourself** | Only with *Fill in myself* (bucket method above) | — | `7.2` |
+| **Water meter or flow sensor** | Only with *Water meter*: measures the shower-head flow | — | — |
+
+### Change it later
+
+**Settings → Devices & services → Hot Water Shower Time → Configure** lets you change everything except the name,
+the top sensor and the starting knowledge, plus the **"Almost empty" threshold** (default 10 minutes). The model keeps what it learned.
+To start learning from scratch, remove the integration and add it again.
+
+### Good to know
+
+- The first estimate is there right away; the first learning run follows two minutes after setup and then every
+  night at 03:45 (or press **Learn now**).
+- The shower log is filled with the past week from your history on the first start.
+- The card is added from the dashboard editor: search for **Shower time**.
+
 ## Entities
 
 | Entity | |
@@ -212,6 +255,12 @@ de prijs op het moment van opwarmen telt), vulgraad, "weer vol om" en een dashbo
 Nederlandstalig in Home Assistant.
 
 <p align="center"><img src="assets/card-nl.png" alt="De kaart Douchetijd" width="420"></p>
+
+**Instellen:** alleen de **temperatuursensor bovenin** en de **inhoud van de boiler** zijn verplicht. Een **sensor
+onderin** is sterk aanbevolen (zonder ziet het model geen douches). Al het andere is optioneel en wordt bij Weheat
+automatisch voorgesteld: opwarmstand, warmte- en stroommeter voor warm water, buitentemperatuur, prijssensor en het
+debiet van de douchekop. Achteraf wijzigen kan via **Instellingen → Apparaten en diensten → Hot Water Shower Time →
+Configureren**.
 
 Debiet van je douchekop meten: zet de douche aan zoals je normaal doucht, houd een emmer eronder en kijk
 hoeveel seconden het duurt tot er 10 liter in zit. Debiet = 600 ÷ seconden (75 s = 8 L/min).
