@@ -9,11 +9,13 @@
           "top_sensor": "Temperatuursensor boven",
           "bottom_sensor": "Temperatuursensor onder (aanbevolen)",
           "tank_volume": "Inhoud boiler",
-          "shower_temperature": "Douchetemperatuur"
+          "shower_temperature": "Vaste douchetemperatuur (alleen bij 'Zelf instellen')",
+          "temperature_mode": "Douchetemperatuur"
         },
         "data_description": {
           "tank_volume": "Staat op het typeplaatje van de boiler.",
-          "shower_temperature": "De temperatuur waarop je doucht; 38 °C is gebruikelijk."
+          "shower_temperature": "Wordt genegeerd in de automatische modus.",
+          "temperature_mode": "Automatisch: het model leert hoeveel warmte een minuut douchen kost; je hoeft niets te weten. Geef je bij de volgende stap ook het debiet van de douchekop op, dan berekent het jullie douchetemperatuur."
         }
       },
       "extras": {
@@ -23,17 +25,25 @@
           "profile": "Startkennis",
           "heating_entity": "Entiteit die laat zien dat de boiler opwarmt",
           "heating_states": "Standen die 'opwarmen' betekenen",
-          "energy_sensor": "Warmte geleverd aan warm water (energiesensor)"
+          "energy_sensor": "Warmte geleverd aan warm water (energiesensor)",
+          "flow_source": "Debiet douchekop",
+          "head_flow": "Debiet zelf invullen",
+          "water_sensor": "Watermeter of flowsensor"
         },
         "data_description": {
           "profile": "Waar het model mee begint voordat het van jullie eigen douches heeft geleerd.",
           "heating_entity": "Zonder deze herkent het model opwarmen aan de stijgende temperatuur.",
-          "energy_sensor": "Warmte-afgifte voor warm water (niet het stroomverbruik). Daarmee leert het model hoe je boiler gelaagd is."
+          "energy_sensor": "Warmte-afgifte voor warm water (niet het stroomverbruik). Daarmee leert het model hoe je boiler gelaagd is.",
+          "flow_source": "Optioneel. Met het debiet berekent de integratie op welke temperatuur jullie douchen en hoeveel liter dat is. Een watermeter meet het tijdens het douchen.",
+          "head_flow": "Alleen bij 'Zelf invullen', bijvoorbeeld 7,2 L/min.",
+          "water_sensor": "Alleen bij 'Watermeter'. Een sensor in L/min, of een teller in liter of m³."
         }
       }
     },
     "error": {
-      "same_sensor": "Boven en onder moeten verschillende sensoren zijn."
+      "same_sensor": "Boven en onder moeten verschillende sensoren zijn.",
+      "head_flow_missing": "Vul het debiet in.",
+      "water_missing": "Kies de watermeter."
     },
     "abort": {
       "already_configured": "Deze boiler is al ingesteld."
@@ -45,14 +55,23 @@
         "title": "Instellingen warm water",
         "data": {
           "tank_volume": "Inhoud boiler",
-          "shower_temperature": "Douchetemperatuur",
+          "shower_temperature": "Vaste douchetemperatuur (alleen bij 'Zelf instellen')",
           "low_minutes": "'Bijna op' onder",
           "bottom_sensor": "Temperatuursensor onder",
           "heating_entity": "Entiteit opwarmen",
           "heating_states": "Standen opwarmen",
-          "energy_sensor": "Warmte warm water (energiesensor)"
+          "energy_sensor": "Warmte warm water (energiesensor)",
+          "temperature_mode": "Douchetemperatuur",
+          "flow_source": "Debiet douchekop",
+          "head_flow": "Debiet zelf invullen",
+          "water_sensor": "Watermeter of flowsensor"
         }
       }
+    },
+    "error": {
+      "same_sensor": "Boven en onder moeten verschillende sensoren zijn.",
+      "head_flow_missing": "Vul het debiet in.",
+      "water_missing": "Kies de watermeter."
     }
   },
   "selector": {
@@ -60,6 +79,22 @@
       "options": {
         "generic": "Algemene boiler",
         "weheat_200": "Weheat-boiler 200 L (geleerd uit 471 douches)"
+      }
+    },
+    "temperature_mode": {
+      "options": {
+        "auto": "Automatisch (aanbevolen)",
+        "fixed": "Zelf instellen"
+      }
+    },
+    "flow_source": {
+      "options": {
+        "unknown": "Weet ik niet",
+        "water_meter": "Watermeter meet het",
+        "eco": "Waterbesparend (≈ 6 L/min)",
+        "normal": "Normaal (≈ 8 L/min)",
+        "rain": "Regendouche (≈ 12 L/min)",
+        "manual": "Zelf invullen"
       }
     }
   },
@@ -76,6 +111,9 @@
       },
       "model": {
         "name": "Geleerd model"
+      },
+      "shower_temperature": {
+        "name": "Douchetemperatuur"
       }
     },
     "binary_sensor": {

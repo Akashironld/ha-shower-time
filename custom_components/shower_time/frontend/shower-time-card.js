@@ -1,17 +1,21 @@
 /* Hot Water Shower Time card — served by the shower_time integration. */
-const CARD_VERSION = "0.1.1";
+const CARD_VERSION = "0.2.0";
 
 const T = {
   en: { title: "Shower time", min: "min", shower: "of showering", empty: "empty", full: "full",
         showers: "showers", water: "hot water", cold: "cold water", reheating: "REHEATING",
         low: "ALMOST GONE", learned: "Learned", updated: "updated", learning: "learning from your showers",
         selflearning: "self-learning", last24: "last 24 h", unavailable: "Not available",
-        pick: "Pick the 'Shower time' sensor of the Hot Water Shower Time integration." },
+        pick: "Pick the 'Shower time' sensor of the Hot Water Shower Time integration.",
+        sensed: "sensed", set: "set", head: "shower head", you: "you shower at",
+        src: { water_meter: "water meter", manual: "set", eco: "water-saving", normal: "normal", rain: "rain shower" } },
   nl: { title: "Douchetijd", min: "min", shower: "douchen", empty: "leeg", full: "vol",
         showers: "douchebeurten", water: "warm water", cold: "koud water", reheating: "WORDT OPGEWARMD",
         low: "BIJNA OP", learned: "Geleerd", updated: "bijgewerkt", learning: "leert van jullie douches",
         selflearning: "zelflerend", last24: "laatste 24 u", unavailable: "Niet beschikbaar",
-        pick: "Kies de sensor 'Douchetijd' van de integratie Hot Water Shower Time." },
+        pick: "Kies de sensor 'Douchetijd' van de integratie Hot Water Shower Time.",
+        sensed: "gemeten", set: "ingesteld", head: "douchekop", you: "jullie douchen op",
+        src: { water_meter: "watermeter", manual: "ingevuld", eco: "waterbesparend", normal: "normaal", rain: "regendouche" } },
 };
 
 const fmt = (v, d = 0) => (v === null || v === undefined || isNaN(v)) ? "—" : Number(v).toFixed(d);
@@ -150,18 +154,29 @@ class ShowerTimeCard extends HTMLElement {
         </div>
         <div class="chips">
           <div class="chip"><ha-icon icon="mdi:shower"></ha-icon><b>${fmt(a.showers)} × ${fmt(typical)} ${this._t("min")}</b><span>${this._t("showers")}</span></div>
-          <div class="chip"><ha-icon icon="mdi:water"></ha-icon><b>≈ ${fmt(a.litres)} L</b><span>${this._t("water")} ${fmt(a.shower_temperature)}°</span></div>
+          <div class="chip"><ha-icon icon="mdi:water"></ha-icon><b>≈ ${fmt(a.litres)} L</b><span>${this._t("water")} ${a.shower_temperature_mode === "reference" ? "≈" : ""}${fmt(a.shower_temperature, a.shower_temperature_mode === "sensed" ? 1 : 0)}°</span></div>
           <div class="chip"><ha-icon icon="mdi:snowflake-thermometer"></ha-icon><b>${fmt(a.cold_water)}°</b><span>${this._t("cold")}</span></div>
         </div>
         ${this._config.show_history && this._hist && this._hist.length > 2 ? `
           <div class="hist"><div class="hl">${this._t("last24")}</div>${this._sparkline(300, 44, color)}</div>` : ""}
-        <div class="foot">${this._t("learned")}: ≈ ${fmt(a.flow, 1)} L/min · ${fmt(a.observations)} obs.</div>
+        <div class="foot">${this._foot(a)}</div>
       </ha-card>`;
     this.shadowRoot.querySelector("ha-card").onclick = () => {
       const ev = new Event("hass-more-info", { bubbles: true, composed: true });
       ev.detail = { entityId: this._config.entity };
       this.dispatchEvent(ev);
     };
+  }
+
+  _foot(a) {
+    const src = (this._t("src") || {})[a.head_flow_source];
+    if (a.shower_temperature_mode === "sensed") {
+      return `${this._t("you")} ≈ ${fmt(a.shower_temperature, 1)} °C (${this._t("sensed")}) · ${this._t("head")} ${fmt(a.flow, 1)} L/min${src ? ` (${src})` : ""}`;
+    }
+    if (a.shower_temperature_mode === "fixed") {
+      return `${this._t("learned")}: ≈ ${fmt(a.flow, 1)} L/min · ${fmt(a.shower_temperature)} °C (${this._t("set")}) · ${fmt(a.observations)} obs.`;
+    }
+    return `${this._t("learned")}: ≈ ${fmt(a.flow, 1)} L/min ${this._t("water")} ≈ 38 °C · ${fmt(a.observations)} obs.`;
   }
 
   _style() {

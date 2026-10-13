@@ -13,6 +13,12 @@ from homeassistant.helpers import entity_registry as er, selector
 from .const import (
     CONF_BOTTOM,
     CONF_ENERGY,
+    CONF_FLOW_SOURCE,
+    CONF_HEAD_FLOW,
+    CONF_TEMP_MODE,
+    CONF_WATER,
+    FLOW_SOURCES,
+    TEMP_MODES,
     CONF_HEATING,
     CONF_HEATING_STATES,
     CONF_LOW,
@@ -35,6 +41,10 @@ ANY = selector.EntitySelector(selector.EntitySelectorConfig(domain=["sensor", "b
 VOLUME = selector.NumberSelector(selector.NumberSelectorConfig(min=30, max=1000, step=10, unit_of_measurement="L", mode=selector.NumberSelectorMode.BOX))
 SHOWER = selector.NumberSelector(selector.NumberSelectorConfig(min=30, max=45, step=0.5, unit_of_measurement="°C", mode=selector.NumberSelectorMode.BOX))
 LOW = selector.NumberSelector(selector.NumberSelectorConfig(min=0, max=60, step=1, unit_of_measurement="min", mode=selector.NumberSelectorMode.BOX))
+TEMP_MODE = selector.SelectSelector(selector.SelectSelectorConfig(options=TEMP_MODES, translation_key="temperature_mode", mode=selector.SelectSelectorMode.LIST))
+FLOW_SOURCE = selector.SelectSelector(selector.SelectSelectorConfig(options=FLOW_SOURCES, translation_key="flow_source", mode=selector.SelectSelectorMode.DROPDOWN))
+HEAD_FLOW = selector.NumberSelector(selector.NumberSelectorConfig(min=2, max=25, step=0.1, unit_of_measurement="L/min", mode=selector.NumberSelectorMode.BOX))
+WATER = selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor", device_class=["water", "volume_flow_rate", "volume"]))
 PROFILE = selector.SelectSelector(selector.SelectSelectorConfig(options=PROFILES, translation_key="profile", mode=selector.SelectSelectorMode.DROPDOWN))
 
 
@@ -86,24 +96,32 @@ class ShowerTimeConfigFlow(ConfigFlow, domain=DOMAIN):
             vol.Required(CONF_TOP): TEMP,
             vol.Optional(CONF_BOTTOM): TEMP,
             vol.Required(CONF_VOLUME, default=DEFAULT_VOLUME): VOLUME,
-            vol.Required(CONF_SHOWER_TEMP, default=DEFAULT_SHOWER_TEMP): SHOWER,
+            vol.Required(CONF_TEMP_MODE, default="auto"): TEMP_MODE,
+            vol.Optional(CONF_SHOWER_TEMP, default=DEFAULT_SHOWER_TEMP): SHOWER,
         })
         return self.async_show_form(step_id="user", data_schema=self.add_suggested_values_to_schema(schema, user_input or {}),
                                     errors=errors)
 
     async def async_step_extras(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        errors: dict[str, str] = {}
         if user_input is not None:
-            data = {**self._data, **user_input}
-            title = data.pop(CONF_NAME)
-            return self.async_create_entry(title=title, data=data)
+            errors = _check_flow(user_input)
+            if not errors:
+                data = {**self._data, **user_input}
+                title = data.pop(CONF_NAME)
+                return self.async_create_entry(title=title, data=data)
         sug = suggest(self.hass, self._data[CONF_TOP], float(self._data[CONF_VOLUME]))
         schema = vol.Schema({
             vol.Required(CONF_PROFILE, default=sug[CONF_PROFILE]): PROFILE,
             vol.Optional(CONF_HEATING): ANY,
             vol.Optional(CONF_HEATING_STATES, default=DEFAULT_HEATING_STATES): selector.TextSelector(),
             vol.Optional(CONF_ENERGY): ENERGY,
+            vol.Required(CONF_FLOW_SOURCE, default="unknown"): FLOW_SOURCE,
+            vol.Optional(CONF_HEAD_FLOW): HEAD_FLOW,
+            vol.Optional(CONF_WATER): WATER,
         })
-        return self.async_show_form(step_id="extras", data_schema=self.add_suggested_values_to_schema(schema, sug))
+        return self.async_show_form(step_id="extras", data_schema=self.add_suggested_values_to_schema(schema, user_input or sug),
+                                    errors=errors)
 
     @staticmethod
     @callback
@@ -113,17 +131,36 @@ class ShowerTimeConfigFlow(ConfigFlow, domain=DOMAIN):
 
 class ShowerTimeOptionsFlow(OptionsFlow):
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        errors: dict[str, str] = {}
         if user_input is not None:
-            return self.async_create_entry(data=user_input)
+            errors = _check_flow(user_input)
+            if not errors:
+                return self.async_create_entry(data=user_input)
         cur = {**self.config_entry.data, **self.config_entry.options}
+        cur.setdefault(CONF_TEMP_MODE, "fixed" if CONF_SHOWER_TEMP in cur else "auto")
+        cur.setdefault(CONF_FLOW_SOURCE, "unknown")
         cur.setdefault(CONF_LOW, DEFAULT_LOW)
         schema = vol.Schema({
             vol.Required(CONF_VOLUME): VOLUME,
-            vol.Required(CONF_SHOWER_TEMP): SHOWER,
+            vol.Required(CONF_TEMP_MODE): TEMP_MODE,
+            vol.Optional(CONF_SHOWER_TEMP, default=DEFAULT_SHOWER_TEMP): SHOWER,
+            vol.Required(CONF_FLOW_SOURCE): FLOW_SOURCE,
+            vol.Optional(CONF_HEAD_FLOW): HEAD_FLOW,
+            vol.Optional(CONF_WATER): WATER,
             vol.Required(CONF_LOW): LOW,
             vol.Optional(CONF_BOTTOM): TEMP,
             vol.Optional(CONF_HEATING): ANY,
             vol.Optional(CONF_HEATING_STATES, default=DEFAULT_HEATING_STATES): selector.TextSelector(),
             vol.Optional(CONF_ENERGY): ENERGY,
         })
-        return self.async_show_form(step_id="init", data_schema=self.add_suggested_values_to_schema(schema, cur))
+        return self.async_show_form(step_id="init", data_schema=self.add_suggested_values_to_schema(schema, user_input or cur),
+                                    errors=errors)
+
+
+def _check_flow(user_input: dict[str, Any]) -> dict[str, str]:
+    source = user_input.get(CONF_FLOW_SOURCE, "unknown")
+    if source == "manual" and not user_input.get(CONF_HEAD_FLOW):
+        return {CONF_HEAD_FLOW: "head_flow_missing"}
+    if source == "water_meter" and not user_input.get(CONF_WATER):
+        return {CONF_WATER: "water_missing"}
+    return {}

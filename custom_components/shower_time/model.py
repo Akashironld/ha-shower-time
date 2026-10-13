@@ -61,7 +61,7 @@ PROFILES: dict[str, dict] = {
     },
 }
 
-LIMITS = {"flow": (2.0, 20.0), "phi": (0.35, 0.95), "loss": (0.05, 1.0), "duration": (3.0, 30.0),
+LIMITS = {"head_flow": (2.0, 25.0), "flow": (2.0, 20.0), "phi": (0.35, 0.95), "loss": (0.05, 1.0), "duration": (3.0, 30.0),
           "veff_factor": (0.6, 2.2), "w": (0.15, 0.95)}
 
 
@@ -69,6 +69,12 @@ def new_params(profile: str) -> dict:
     p = copy.deepcopy(PROFILES.get(profile, PROFILES["generic"]))
     p["profile"] = profile
     p["full_temp"] = None
+    return ensure_params(p)
+
+
+def ensure_params(p: dict) -> dict:
+    """Add fields introduced in later versions to stored parameters."""
+    p.setdefault("head_flow", {"v": 8.0, "n": 0})     # measured shower-head flow (water meter), L/min
     return p
 
 
@@ -107,10 +113,26 @@ class Estimate:
     full_minutes: float | None   # minutes for a tank at the usual full temperature
     cold: float
     per_minute: float
+    shower_temp: float           # temperature the litres refer to (set, sensed or the 38 °C reference)
+    shower_temp_sensed: bool     # True when derived from a known shower-head flow
+    flow: float                  # L/min the litres are based on
+
+
+def sensed_shower_temp(params: dict, cold: float, ref_temp: float, head_flow: float) -> float:
+    """Shower temperature from the learned heat per minute and a known shower-head flow.
+
+    The tank only sees heat per minute = flow x (shower temp - cold). The model learns that as
+    ``flow`` at ``ref_temp``; with the real flow known the temperature follows.
+    """
+    heat = params["flow"]["v"] * (ref_temp - cold)
+    return min(46.0, max(30.0, cold + heat / head_flow))
 
 
 def estimate(params: dict, top: float, bottom: float | None, *, volume: float, shower_temp: float,
-             month: int) -> Estimate:
+             month: int, head_flow: float | None = None) -> Estimate:
+    """``shower_temp`` is the fixed temperature or the 38 °C reference in auto mode.
+    ``head_flow`` (L/min) is the known shower-head flow, if any: it only changes the litres and the
+    reported shower temperature, never the minutes (those come from the learned heat per minute)."""
     cold = cold_for(params, month)
     flow = params["flow"]["v"]
     per_minute = flow * max(shower_temp - cold, 5.0) / volume
@@ -124,9 +146,12 @@ def estimate(params: dict, top: float, bottom: float | None, *, volume: float, s
     full = params.get("full_temp")
     full_minutes = max(0.0, (full - empty) / per_minute) if full else None
     duration = params["duration"]["v"]
-    return Estimate(minutes=minutes, liters=minutes * flow, showers=int(minutes // duration), average=avg,
+    temp, sensed, litre_flow = shower_temp, False, flow
+    if head_flow:
+        temp, sensed, litre_flow = sensed_shower_temp(params, cold, shower_temp, head_flow), True, head_flow
+    return Estimate(minutes=minutes, liters=minutes * litre_flow, showers=int(minutes // duration), average=avg,
                     empty_at=empty, hot_fraction=hot, full_minutes=full_minutes, cold=cold,
-                    per_minute=per_minute)
+                    per_minute=per_minute, shower_temp=temp, shower_temp_sensed=sensed, flow=litre_flow)
 
 
 # --------------------------------------------------------------------------- learning
@@ -253,20 +278,21 @@ class LearnResult:
 
 def learn(params: dict, rows: list[Row], *, volume: float, shower_temp: float, since: int,
           energy_by_hour: dict[int, float] | None, previous_cycle: Cycle | None,
-          month_of) -> tuple[LearnResult, Cycle | None]:
+          month_of, water: tuple[str, list[tuple[int, float]]] | None = None) -> tuple[LearnResult, Cycle | None]:
     """Update ``params`` with everything that happened after minute ``since``.
 
     ``month_of(minute) -> int`` maps a minute to the local month (1-12).
+    ``water`` is an optional water meter: ("rate", [(minute, L/min)]) or ("total", [(minute, litres)]).
     Returns the result and the last complete cycle (kept for the next run).
     """
-    p = copy.deepcopy(params)
+    p = ensure_params(copy.deepcopy(params))
     if not any(r.heating for r in rows):
         mark_heating_from_temperature(rows)
     has_bottom = any(r.bottom is not None for r in rows)
     cycles = find_cycles(rows, energy_by_hour)
     draws = find_draws(rows)
     s: dict[str, list] = {"w20": [], "w30": [], "w45": [], "veff_factor": [], "phi": [], "flow": [],
-                          "loss": [], "duration": [], "cold": {}}
+                          "loss": [], "duration": [], "head_flow": [], "cold": {}}
     full = lambda c: c.bottom_after is None or c.top_after - c.bottom_after <= 2.5
     veff = volume * p["veff_factor"]["v"]
     # An energy meter is only trusted for stratification and flow once its scale against the tank is known;
@@ -343,9 +369,12 @@ def learn(params: dict, rows: list[Row], *, volume: float, shower_temp: float, s
             m = "%02d" % month_of(d.start)
             s["cold"][m] = min(s["cold"].get(m, 99.0), d.bottom_low - 1)
 
+    if water:
+        s["head_flow"] = water_flow_samples(water, [d for d in draws if d.start >= since])
+
     for key in W_POINTS:
         p["w"][key] = _blend(p["w"][key], s["w" + key], LIMITS["w"])
-    for key in ("veff_factor", "phi", "flow", "loss", "duration"):
+    for key in ("veff_factor", "phi", "flow", "loss", "duration", "head_flow"):
         p[key] = _blend(p[key], s[key], LIMITS[key])
     for m, low in s["cold"].items():                 # cold water only moves towards what was seen
         p["cold"][m] = round(min(max(4.0, 0.7 * p["cold"][m] + 0.3 * low), 25.0), 1)
@@ -358,3 +387,32 @@ def learn(params: dict, rows: list[Row], *, volume: float, shower_temp: float, s
     last = next((c for c in reversed(cycles) if full(c)), previous_cycle)
     counts = {k: (len(v) if isinstance(v, list) else len(v)) for k, v in s.items()}
     return LearnResult(params=p, samples=counts, cycles=len(cycles), draws=len(draws)), last
+
+
+def water_flow_samples(water: tuple[str, list[tuple[int, float]]], draws: list[Draw]) -> list[float]:
+    """Shower-head flow (L/min) seen by a water meter during each detected shower."""
+    kind, series = water
+    series = sorted(series)
+    out = []
+
+    def value_at(minute: int) -> float | None:
+        v = None
+        for m, x in series:
+            if m > minute:
+                break
+            v = x
+        return v
+
+    for d in draws:
+        if d.minutes < 4:
+            continue
+        a, b = d.start + 1, d.start + d.minutes          # skip the first minute: the tank reacts a bit late
+        if kind == "rate":
+            vals = [x for m, x in series if a <= m <= b and x > 0.5]
+            if len(vals) >= 2:
+                out.append(statistics.median(vals))
+        else:
+            v0, v1 = value_at(a), value_at(b)
+            if v0 is not None and v1 is not None and v1 > v0:
+                out.append((v1 - v0) / (b - a))
+    return [x for x in out if 2.0 <= x <= 25.0]

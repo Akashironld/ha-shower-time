@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
-from homeassistant.const import EntityCategory, UnitOfTime, UnitOfVolume
+from homeassistant.const import EntityCategory, UnitOfTemperature, UnitOfTime, UnitOfVolume
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
@@ -13,7 +13,7 @@ from .entity import ShowerTimeEntity
 async def async_setup_entry(hass: HomeAssistant, entry: ShowerTimeConfigEntry,
                             async_add_entities: AddEntitiesCallback) -> None:
     m = entry.runtime_data
-    async_add_entities([MinutesSensor(m), ShowersSensor(m), LitresSensor(m), ModelSensor(m)])
+    async_add_entities([MinutesSensor(m), ShowersSensor(m), LitresSensor(m), ShowerTemperatureSensor(m), ModelSensor(m)])
 
 
 class MinutesSensor(ShowerTimeEntity, SensorEntity):
@@ -49,8 +49,10 @@ class MinutesSensor(ShowerTimeEntity, SensorEntity):
             "top_temperature": m.top_value,
             "bottom_temperature": m.bottom_value,
             "cold_water": round(e.cold, 1),
-            "flow": round(p["flow"]["v"], 1),
-            "shower_temperature": m.shower_temp,
+            "flow": round(e.flow, 1),
+            "shower_temperature": round(e.shower_temp, 1),
+            "shower_temperature_mode": ("fixed" if m.temp_mode == "fixed" else ("sensed" if e.shower_temp_sensed else "reference")),
+            "head_flow_source": m.head_flow()[1],
             "reheating": m.reheating,
             "low_threshold": m.low_minutes,
             "learned_at": m.last_learn,
@@ -87,6 +89,34 @@ class LitresSensor(ShowerTimeEntity, SensorEntity):
         return round(e.liters) if e else None
 
 
+class ShowerTemperatureSensor(ShowerTimeEntity, SensorEntity):
+    """The temperature you shower at: set by you, or sensed from the learned heat and a known shower-head flow."""
+
+    _attr_device_class = SensorDeviceClass.TEMPERATURE
+    _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 1
+    _attr_icon = "mdi:thermometer-water"
+
+    def __init__(self, manager) -> None:
+        super().__init__(manager, "shower_temperature")
+
+    @property
+    def available(self) -> bool:
+        e = self.manager.estimate
+        return e is not None and (self.manager.temp_mode == "fixed" or e.shower_temp_sensed)
+
+    @property
+    def native_value(self):
+        e = self.manager.estimate
+        return round(e.shower_temp, 1) if e else None
+
+    @property
+    def extra_state_attributes(self):
+        flow, source = self.manager.head_flow()
+        return {"mode": "fixed" if self.manager.temp_mode == "fixed" else "sensed", "head_flow": flow, "head_flow_source": source}
+
+
 class ModelSensor(ShowerTimeEntity, SensorEntity):
     """What has been learned so far (state: shower flow in L/min)."""
 
@@ -112,6 +142,10 @@ class ModelSensor(ShowerTimeEntity, SensorEntity):
         return {
             "profile": m.profile,
             "flow_l_min": p["flow"]["v"],
+            "temperature_mode": m.temp_mode,
+            "reference_temperature": m.shower_temp,
+            "head_flow_learned": p["head_flow"]["v"] if p["head_flow"]["n"] else None,
+            "head_flow_observations": p["head_flow"]["n"],
             "typical_shower_minutes": p["duration"]["v"],
             "empty_factor_phi": p["phi"]["v"],
             "standing_loss_k_per_h": p["loss"]["v"],

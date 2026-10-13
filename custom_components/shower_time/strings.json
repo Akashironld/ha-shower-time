@@ -9,11 +9,13 @@
           "top_sensor": "Top temperature sensor",
           "bottom_sensor": "Bottom temperature sensor (recommended)",
           "tank_volume": "Tank volume",
-          "shower_temperature": "Shower temperature"
+          "shower_temperature": "Fixed shower temperature (only with 'Set it myself')",
+          "temperature_mode": "Shower temperature"
         },
         "data_description": {
           "tank_volume": "Look on the type plate of the tank.",
-          "shower_temperature": "The temperature you shower at; 38 °C is typical."
+          "shower_temperature": "Ignored in automatic mode.",
+          "temperature_mode": "Automatic: the model learns how much heat a minute of showering takes — nothing to fill in. Add your shower-head flow in the next step and it works out the temperature you shower at."
         }
       },
       "extras": {
@@ -23,17 +25,25 @@
           "profile": "Starting knowledge",
           "heating_entity": "Entity that shows the tank is being reheated",
           "heating_states": "States that mean 'reheating'",
-          "energy_sensor": "Heat delivered to the hot water (energy sensor)"
+          "energy_sensor": "Heat delivered to the hot water (energy sensor)",
+          "flow_source": "Shower-head flow",
+          "head_flow": "Flow, filled in yourself",
+          "water_sensor": "Water meter or flow sensor"
         },
         "data_description": {
           "profile": "Where the model starts before it has learned from your own showers.",
           "heating_entity": "Without it, reheating is recognised from the temperature rising.",
-          "energy_sensor": "Heat output for hot water (not electricity used). Lets the model learn how your tank layers."
+          "energy_sensor": "Heat output for hot water (not electricity used). Lets the model learn how your tank layers.",
+          "flow_source": "Optional. With the flow the integration works out the temperature you shower at and the litres. A water meter measures it while you shower.",
+          "head_flow": "Only with 'Fill in myself', e.g. 7.2 L/min.",
+          "water_sensor": "Only with 'Water meter'. A sensor in L/min, or a counter in litres or m³."
         }
       }
     },
     "error": {
-      "same_sensor": "Top and bottom must be different sensors."
+      "same_sensor": "Top and bottom must be different sensors.",
+      "head_flow_missing": "Fill in the flow.",
+      "water_missing": "Pick the water meter."
     },
     "abort": {
       "already_configured": "This tank is already set up."
@@ -45,14 +55,23 @@
         "title": "Hot water settings",
         "data": {
           "tank_volume": "Tank volume",
-          "shower_temperature": "Shower temperature",
+          "shower_temperature": "Fixed shower temperature (only with 'Set it myself')",
           "low_minutes": "'Almost empty' below",
           "bottom_sensor": "Bottom temperature sensor",
           "heating_entity": "Reheating entity",
           "heating_states": "Reheating states",
-          "energy_sensor": "Hot water heat (energy) sensor"
+          "energy_sensor": "Hot water heat (energy) sensor",
+          "temperature_mode": "Shower temperature",
+          "flow_source": "Shower-head flow",
+          "head_flow": "Flow, filled in yourself",
+          "water_sensor": "Water meter or flow sensor"
         }
       }
+    },
+    "error": {
+      "same_sensor": "Top and bottom must be different sensors.",
+      "head_flow_missing": "Fill in the flow.",
+      "water_missing": "Pick the water meter."
     }
   },
   "selector": {
@@ -60,6 +79,22 @@
       "options": {
         "generic": "Generic tank",
         "weheat_200": "Weheat 200 L tank (learned from 471 showers)"
+      }
+    },
+    "temperature_mode": {
+      "options": {
+        "auto": "Automatic (recommended)",
+        "fixed": "Set it myself"
+      }
+    },
+    "flow_source": {
+      "options": {
+        "unknown": "I don't know",
+        "water_meter": "Measured by a water meter",
+        "eco": "Water-saving (≈ 6 L/min)",
+        "normal": "Normal (≈ 8 L/min)",
+        "rain": "Rain shower (≈ 12 L/min)",
+        "manual": "Fill in myself"
       }
     }
   },
@@ -76,6 +111,9 @@
       },
       "model": {
         "name": "Learned model"
+      },
+      "shower_temperature": {
+        "name": "Shower temperature"
       }
     },
     "binary_sensor": {

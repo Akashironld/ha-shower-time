@@ -22,6 +22,13 @@ from . import model
 from .const import (
     CONF_BOTTOM,
     CONF_ENERGY,
+    CONF_FLOW_SOURCE,
+    CONF_HEAD_FLOW,
+    CONF_TEMP_MODE,
+    CONF_WATER,
+    HEAD_PRESETS,
+    REF_TEMP,
+    WATER_MIN_OBSERVATIONS,
     CONF_HEATING,
     CONF_HEATING_STATES,
     CONF_LOW,
@@ -62,7 +69,13 @@ class ShowerTimeManager:
         self.top: str = cfg[CONF_TOP]
         self.bottom: str | None = cfg.get(CONF_BOTTOM) or None
         self.volume: float = float(cfg.get(CONF_VOLUME, DEFAULT_VOLUME))
-        self.shower_temp: float = float(cfg.get(CONF_SHOWER_TEMP, DEFAULT_SHOWER_TEMP))
+        # entries created before the auto mode existed had a fixed shower temperature
+        self.temp_mode: str = cfg.get(CONF_TEMP_MODE, "fixed" if CONF_SHOWER_TEMP in cfg else "auto")
+        self.shower_temp: float = (float(cfg.get(CONF_SHOWER_TEMP, DEFAULT_SHOWER_TEMP)) if self.temp_mode == "fixed"
+                                   else REF_TEMP)
+        self.flow_source: str = cfg.get(CONF_FLOW_SOURCE, "unknown")
+        self.head_flow_manual: float | None = float(cfg[CONF_HEAD_FLOW]) if cfg.get(CONF_HEAD_FLOW) else None
+        self.water: str | None = cfg.get(CONF_WATER) or None
         self.heating: str | None = cfg.get(CONF_HEATING) or None
         self.heating_states = {s.strip().lower() for s in str(cfg.get(CONF_HEATING_STATES, DEFAULT_HEATING_STATES)).split(",") if s.strip()}
         self.energy: str | None = cfg.get(CONF_ENERGY) or None
@@ -88,13 +101,13 @@ class ShowerTimeManager:
     async def async_start(self) -> None:
         stored = await self._store.async_load()
         if stored and stored.get("profile") == self.profile:
-            self.params = stored["params"]
+            self.params = model.ensure_params(stored["params"])
             self.processed_until = stored.get("processed_until", 0)
             lc = stored.get("last_cycle")
             self.last_cycle = model.Cycle(**lc) if lc else None
             self.last_learn = stored.get("last_learn")
             self.last_samples = stored.get("last_samples", {})
-        watch = [e for e in (self.top, self.bottom, self.heating) if e]
+        watch = [e for e in (self.top, self.bottom, self.heating) if e]   # the water meter is only used for learning
         self._unsubs.append(async_track_state_change_event(self.hass, watch, self._state_changed))
         self._unsubs.append(async_track_time_change(self.hass, self._nightly, hour=LEARN_HOUR, minute=LEARN_MINUTE, second=0))
         if not self.last_learn:                 # first install: learn from what the recorder already has
@@ -111,6 +124,20 @@ class ShowerTimeManager:
         self._listeners.append(cb)
         return lambda: self._listeners.remove(cb)
 
+    # ------------------------------------------------------------------ shower-head flow
+    def head_flow(self) -> tuple[float | None, str]:
+        """Known shower-head flow (L/min) and where it comes from."""
+        if self.flow_source == "manual" and self.head_flow_manual:
+            return self.head_flow_manual, "manual"
+        if self.flow_source in HEAD_PRESETS:
+            return HEAD_PRESETS[self.flow_source], self.flow_source
+        if self.flow_source == "water_meter":
+            hf = self.params["head_flow"]
+            if hf["n"] >= WATER_MIN_OBSERVATIONS:
+                return hf["v"], "water_meter"
+            return None, "water_meter_learning"
+        return None, "unknown"
+
     # ------------------------------------------------------------------ live estimate
     @callback
     def _state_changed(self, _event: Event) -> None:
@@ -126,8 +153,9 @@ class ShowerTimeManager:
         if self.top_value is None:
             self.estimate = None
         else:
+            head = self.head_flow()[0] if self.temp_mode == "auto" else None
             self.estimate = model.estimate(self.params, self.top_value, self.bottom_value, volume=self.volume,
-                                           shower_temp=self.shower_temp, month=dt_util.now().month)
+                                           shower_temp=self.shower_temp, month=dt_util.now().month, head_flow=head)
         for cb in list(self._listeners):
             cb()
 
@@ -158,7 +186,7 @@ class ShowerTimeManager:
             start = max(start, datetime.fromtimestamp(self.processed_until * 60, timezone.utc) - timedelta(hours=6))
         recorder = get_instance(self.hass)
         series: dict[str, list] = {}
-        for ent in (self.top, self.bottom, self.heating):
+        for ent in (self.top, self.bottom, self.heating, self.water if self.flow_source == "water_meter" else None):
             if not ent:
                 continue
             res = await recorder.async_add_executor_job(
@@ -179,13 +207,15 @@ class ShowerTimeManager:
                 ts = ts.timestamp() if isinstance(ts, datetime) else float(ts)
                 energy[int(ts // 60)] = float(row.get("change") or 0.0)
 
+        water = self._water_series(series.get(self.water, [])) if self.water and self.flow_source == "water_meter" else None
+
         def month_of(minute: int) -> int:
             return dt_util.as_local(datetime.fromtimestamp(minute * 60, timezone.utc)).month
 
         result, last = await self.hass.async_add_executor_job(
             lambda: model.learn(self.params, rows, volume=self.volume, shower_temp=self.shower_temp,
                                 since=self.processed_until, energy_by_hour=energy,
-                                previous_cycle=self.last_cycle, month_of=month_of))
+                                previous_cycle=self.last_cycle, month_of=month_of, water=water))
         self.params = result.params
         self.last_cycle = last
         self.processed_until = int(end.timestamp() // 60)
@@ -197,6 +227,26 @@ class ShowerTimeManager:
             "last_samples": self.last_samples,
         })
         _LOGGER.debug("Learned from %d cycles / %d draws: %s", result.cycles, result.draws, result.samples)
+
+    def _water_series(self, states: list) -> tuple[str, list[tuple[int, float]]] | None:
+        """Water meter history as ("rate", L/min) or ("total", litres), whatever the meter reports."""
+        st = self.hass.states.get(self.water)
+        unit = str((st.attributes.get("unit_of_measurement") if st else "") or "").replace(" ", "").lower()
+        rates = {"l/min": 1.0, "l/h": 1 / 60, "m³/h": 1000 / 60, "m3/h": 1000 / 60, "gal/min": 3.785}
+        totals = {"l": 1.0, "m³": 1000.0, "m3": 1000.0, "gal": 3.785}
+        if unit in rates:
+            kind, factor = "rate", rates[unit]
+        elif unit in totals:
+            kind, factor = "total", totals[unit]
+        else:
+            _LOGGER.warning("Water meter %s has unit %r; expected a flow (L/min) or a volume (L, m³)", self.water, unit)
+            return None
+        out = []
+        for s in states:
+            v = _num(s)
+            if v is not None:
+                out.append((int(s.last_changed.timestamp() // 60), v * factor))
+        return kind, out
 
     def _rows(self, series: dict[str, list], start: datetime, end: datetime) -> list[model.Row]:
         """Forward-fill all series onto a one-minute grid."""

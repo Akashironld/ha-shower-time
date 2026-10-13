@@ -64,7 +64,7 @@ class Tank:
         self.t = [x - k_per_min for x in self.t]
 
 
-def simulate(days=21, flow=6.0, seed=1, cold=15.0):
+def simulate(days=21, flow=6.0, seed=1, cold=15.0, shower_temp=38.0, water=None):
     rnd = random.Random(seed)
     tank = Tank(cold=cold)
     rows, energy = [], {}
@@ -92,8 +92,14 @@ def simulate(days=21, flow=6.0, seed=1, cold=15.0):
                 heating_until = None
         if m in plan:
             busy_until = m + plan[m]
+        use = 0.0
         if m < busy_until and not heating:
-            tank.shower(flow)
+            tank.shower(flow, shower_temp)
+            use = flow
+        if water is not None:
+            if rnd.random() < 0.004:
+                use += 9.0                              # toilet flush or a tap somewhere else
+            water.append((minute, round(use + rnd.uniform(-0.2, 0.2), 2) if use else 0.0))
         tank.lose(0.25 / 60)
         top, bottom = tank.sensors()
         rows.append(model.Row(minute=minute, top=round(top, 1), bottom=round(bottom, 1), heating=heating))
@@ -166,6 +172,43 @@ def test_single_sensor_mode():
     assert e.minutes > 10 and e.hot_fraction == 1.0
     e = model.estimate(p, 39.0, None, volume=200, shower_temp=38, month=1)
     assert e.minutes == 0
+
+
+def test_senses_shower_temperature_from_known_head_flow():
+    """Shower at 40 °C, learn in auto mode (38 °C reference), then a known 6 L/min head gives ≈ 40 °C."""
+    rows, energy, tank = simulate(flow=6.0, shower_temp=40.0, seed=5, days=28)
+    p = model.new_params("generic")
+    for k in p["cold"]:
+        p["cold"][k] = 15.0
+    res, _ = model.learn(p, rows, volume=200, shower_temp=38, since=0, energy_by_hour=energy,
+                         previous_cycle=None, month_of=month_of)
+    e = model.estimate(res.params, 55.0, 55.0, volume=200, shower_temp=38, month=10, head_flow=6.0)
+    assert e.shower_temp_sensed
+    assert 37.5 <= e.shower_temp <= 43.0, (e.shower_temp, res.params["flow"])
+    # minutes do not depend on the head flow, litres do
+    e2 = model.estimate(res.params, 55.0, 55.0, volume=200, shower_temp=38, month=10)
+    assert abs(e.minutes - e2.minutes) < 1e-9 and abs(e.liters - e.minutes * 6.0) < 1e-9
+
+
+def test_water_meter_learns_head_flow():
+    water = []
+    rows, energy, _ = simulate(flow=7.2, seed=7, water=water)
+    p = model.new_params("generic")
+    for k in p["cold"]:
+        p["cold"][k] = 15.0
+    res, _ = model.learn(p, rows, volume=200, shower_temp=38, since=0, energy_by_hour=energy,
+                         previous_cycle=None, month_of=month_of, water=("rate", water))
+    hf = res.params["head_flow"]
+    assert hf["n"] >= 10, hf
+    assert 6.6 <= hf["v"] <= 7.8, hf
+    # the same from a cumulative meter (litres)
+    total, acc = [], 0.0
+    for m, r in water:
+        acc += max(r, 0.0)
+        total.append((m, round(acc, 1)))
+    res2, _ = model.learn(model.new_params("generic"), rows, volume=200, shower_temp=38, since=0, energy_by_hour=energy,
+                          previous_cycle=None, month_of=month_of, water=("total", total))
+    assert 6.6 <= res2.params["head_flow"]["v"] <= 7.8, res2.params["head_flow"]
 
 
 if __name__ == "__main__":

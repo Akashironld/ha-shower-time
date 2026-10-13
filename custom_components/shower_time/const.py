@@ -23,3 +23,16 @@ HISTORY_DAYS = 10
 STORAGE_VERSION = 1
 
 CARD_URL = "/shower_time/shower-time-card.js"
+
+# Shower temperature: learned automatically (heat per minute) or set by the user.
+CONF_TEMP_MODE = "temperature_mode"
+TEMP_MODES = ["auto", "fixed"]
+REF_TEMP = 38.0                      # reference temperature for the litres in auto mode
+
+# Optional shower-head flow, to turn the learned heat per minute into a real shower temperature.
+CONF_FLOW_SOURCE = "flow_source"
+FLOW_SOURCES = ["unknown", "water_meter", "eco", "normal", "rain", "manual"]
+HEAD_PRESETS = {"eco": 6.0, "normal": 8.0, "rain": 12.0}
+CONF_HEAD_FLOW = "head_flow"
+CONF_WATER = "water_sensor"
+WATER_MIN_OBSERVATIONS = 3
