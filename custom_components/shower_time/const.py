@@ -40,3 +40,11 @@ WATER_MIN_OBSERVATIONS = 3
 # Optional outdoor temperature: mains water follows a ~3-week running average of it
 CONF_OUTDOOR = "outdoor_sensor"
 COLD_TAU_DAYS = 21
+
+# Shower log, cost and reheat forecast
+CONF_PRICE = "price_sensor"          # electricity price (any unit like €/kWh); chosen by the user
+CONF_ELEC = "electricity_sensor"     # electricity used for hot water (kWh), to learn the COP
+CONF_COP = "cop"                     # fallback COP for hot water when it cannot be learned
+DEFAULT_COP = 2.5
+LOG_DAYS = 14
+MIN_SHOWER_MINUTES = 3

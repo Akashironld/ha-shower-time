@@ -1,16 +1,16 @@
 /* Hot Water Shower Time card — served by the shower_time integration. */
-const CARD_VERSION = "0.6.0";
+const CARD_VERSION = "0.7.0";
 
 const T = {
   en: { title: "Shower time", min: "min", shower: "of showering", empty: "empty", full: "full",
-        showers: "showers", water: "hot water", cold: "cold water", reheating: "REHEATING", inuse: "IN USE",
+        showers: "showers", water: "hot water", cold: "cold water", reheating: "REHEATING", inuse: "IN USE", fullat: "full", today: "Today", shower1: "shower", showersN: "showers", last: "last",
         low: "ALMOST GONE", learned: "Learned", updated: "updated", learning: "learning from your showers",
         selflearning: "self-learning", last24: "last 24 h", ago24: "-24 h", now: "now", yesterday: "yesterday", nohist: "no history yet — fills in by itself", unavailable: "Not available",
         pick: "Pick the 'Shower time' sensor of the Hot Water Shower Time integration.",
         sensed: "sensed", set: "set", head: "shower head", you: "you shower at",
         src: { water_meter: "water meter", manual: "set", eco: "water-saving", normal: "normal", rain: "rain shower" } },
   nl: { title: "Douchetijd", min: "min", shower: "douchen", empty: "leeg", full: "vol",
-        showers: "douchebeurten", water: "warm water", cold: "koud water", reheating: "WORDT OPGEWARMD", inuse: "DOUCHT NU",
+        showers: "douchebeurten", water: "warm water", cold: "koud water", reheating: "WORDT OPGEWARMD", inuse: "DOUCHT NU", fullat: "vol", today: "Vandaag", shower1: "douche", showersN: "douches", last: "laatste",
         low: "BIJNA OP", learned: "Geleerd", updated: "bijgewerkt", learning: "leert van jullie douches",
         selflearning: "zelflerend", last24: "laatste 24 u", ago24: "-24 u", now: "nu", yesterday: "gisteren", nohist: "nog geen historie — vult zich vanzelf", unavailable: "Niet beschikbaar",
         pick: "Kies de sensor 'Douchetijd' van de integratie Hot Water Shower Time.",
@@ -148,7 +148,10 @@ class ShowerTimeCard extends HTMLElement {
     const pctNum = a.fill_percent !== undefined && a.fill_percent !== null ? a.fill_percent : Math.round((m / full) * 100);
     const pct = Math.max(0, Math.min(100, pctNum));
     const pctUsual = pct;
-    const pill = a.reheating ? `<span class="pill heat">${this._t("reheating")}</span>`
+    const lang = hass.locale?.language || hass.language || undefined;
+    const hhmm = (iso) => iso ? new Date(iso).toLocaleTimeString(lang, { hour: "2-digit", minute: "2-digit" }) : null;
+    const fullAt = hhmm(a.reheat_full_at);
+    const pill = a.reheating ? `<span class="pill heat">${this._t("reheating")}${fullAt ? ` · ${this._t("fullat")} ${fullAt}` : ""}</span>`
       : (m < low ? `<span class="pill low">${this._t("low")}</span>`
         : (a.showering ? `<span class="pill use">${this._t("inuse")}</span>` : ""));
     const title = this._config.title || this._t("title");
@@ -179,6 +182,7 @@ class ShowerTimeCard extends HTMLElement {
         </div>
         ${this._config.show_history ? `
           <div class="hist"><div class="hl">${this._t("last24")}</div>${this._sparkline(300, 44, color)}</div>` : ""}
+        ${this._today(a, lang)}
         <div class="foot">${this._foot(a)}</div>
       </ha-card>`;
     this._bindHover();
@@ -225,6 +229,23 @@ class ShowerTimeCard extends HTMLElement {
     wrap.addEventListener("pointerleave", hide);
     wrap.addEventListener("pointerup", (ev) => { if (ev.pointerType !== "mouse") setTimeout(hide, 1500); });
     wrap.addEventListener("click", (ev) => ev.stopPropagation());   // looking at the graph should not open the dialog
+  }
+
+  _today(a, lang) {
+    if (a.today_showers === undefined) return "";
+    const cur = a.currency || "€";
+    const money = (v) => v === null || v === undefined ? null :
+      `${cur} ${Number(v).toLocaleString(lang, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    const parts = [`${a.today_showers} ${a.today_showers === 1 ? this._t("shower1") : this._t("showersN")}`,
+      `${a.today_minutes} ${this._t("min")}`];
+    if (money(a.today_cost)) parts.push(money(a.today_cost));
+    let last = "";
+    if (a.last) {
+      const when = new Date(a.last.start);
+      const day = when.toDateString() === new Date().toDateString() ? "" : `${when.toLocaleDateString(lang, { weekday: "short" })} `;
+      last = ` <span class="dim">· ${this._t("last")} ${day}${when.toLocaleTimeString(lang, { hour: "2-digit", minute: "2-digit" })}: ${Math.round(a.last.minutes)} ${this._t("min")}${money(a.last.cost) ? ` · ${money(a.last.cost)}` : ""}</span>`;
+    }
+    return `<div class="today"><ha-icon icon="mdi:calendar-today"></ha-icon><span><b>${this._t("today")}</b> ${parts.join(" · ")}${last}</span></div>`;
   }
 
   _foot(a) {
@@ -286,6 +307,9 @@ class ShowerTimeCard extends HTMLElement {
       .spark { width: 100%; height: 44px; display: block; }
       .nohist { position: absolute; inset: 0; display: grid; place-items: center; font-size: 11px; color: var(--secondary-text-color); }
       .axis { display: flex; justify-content: space-between; font-size: 10px; color: var(--secondary-text-color); margin-top: 2px; }
+      .today { display: flex; gap: 6px; align-items: center; margin-top: 10px; font-size: 12px; color: var(--primary-text-color); }
+      .today ha-icon { --mdc-icon-size: 16px; color: var(--secondary-text-color); flex: none; }
+      .today .dim { color: var(--secondary-text-color); }
       .foot { font-size: 11px; color: var(--secondary-text-color); margin-top: 10px; }
     </style>`;
   }

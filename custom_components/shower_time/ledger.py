@@ -1,0 +1,228 @@
+"""Shower log, cost per shower and the reheat forecast.
+
+Cost with dynamic tariffs: electricity is bought when the tank is *reheated*, not when you shower. The
+ledger therefore keeps a price for the hot water in the tank (currency per kWh of heat): every bit of heat a
+reheat adds is booked at the electricity price of that moment divided by the COP, blended with the heat that
+was already in the tank. A shower costs the heat it takes out times that blended price.
+"""
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+import logging
+from typing import TYPE_CHECKING
+
+from homeassistant.components.recorder import get_instance, statistics
+from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
+from homeassistant.util import dt as dt_util
+
+from . import model
+from .const import LOG_DAYS, MIN_SHOWER_MINUTES
+
+if TYPE_CHECKING:
+    from .manager import ShowerTimeManager
+
+_LOGGER = logging.getLogger(__name__)
+
+
+def parse_price(state) -> tuple[float | None, str]:
+    """Electricity price per kWh in main currency units, and the currency symbol."""
+    if state is None or state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
+        return None, ""
+    try:
+        value = float(state.state)
+    except (TypeError, ValueError):
+        return None, ""
+    unit = str(state.attributes.get("unit_of_measurement") or "")
+    cur = unit.split("/")[0].strip()
+    low = cur.lower()
+    if low in ("ct", "c", "cent", "cents", "¢"):         # cents per kWh
+        return value / 100, "€"
+    if low in ("eur", "euro"):
+        cur = "€"
+    if "mwh" in unit.lower():
+        value /= 1000
+    return value, cur
+
+
+class ShowerLedger:
+    def __init__(self) -> None:
+        self.log: list[dict] = []
+        self.tank_price: float | None = None        # currency per kWh of heat in the tank
+        self.currency: str = ""
+        self.cop_learned: float | None = None
+        self.backfilled = False
+        self.session_start: datetime | None = None
+        self._avg_prev: float | None = None
+        self.eta_full: datetime | None = None
+        self.eta_one: datetime | None = None
+
+    # ------------------------------------------------------------------ persistence
+    def to_dict(self) -> dict:
+        return {"log": self.log, "tank_price": self.tank_price, "currency": self.currency,
+                "cop_learned": self.cop_learned, "backfilled": self.backfilled}
+
+    def load(self, d: dict | None) -> None:
+        if not d:
+            return
+        self.log = d.get("log", [])
+        self.tank_price = d.get("tank_price")
+        self.currency = d.get("currency", "")
+        self.cop_learned = d.get("cop_learned")
+        self.backfilled = d.get("backfilled", False)
+
+    # ------------------------------------------------------------------ COP and price
+    def cop(self, m: ShowerTimeManager) -> float:
+        return self.cop_learned or m.cop_manual
+
+    def price_now(self, m: ShowerTimeManager) -> tuple[float | None, str]:
+        if not m.price:
+            return None, ""
+        return parse_price(m.hass.states.get(m.price))
+
+    async def async_refresh_cop(self, m: ShowerTimeManager) -> None:
+        """COP for hot water from the heat and electricity meters over 30 days.
+
+        The heat meter of many heat pumps reports more heat than reaches the tank (piping, coil); the model
+        learned that ratio (veff_factor), so the COP is expressed per kWh of heat actually in the tank."""
+        if not (m.elec and m.energy):
+            return
+        end = dt_util.utcnow()
+        start = end - timedelta(days=30)
+        try:
+            stats = await get_instance(m.hass).async_add_executor_job(
+                statistics.statistics_during_period, m.hass, start, end, {m.elec, m.energy}, "day",
+                {"energy": "kWh"}, {"change"})
+            heat = sum(float(r.get("change") or 0) for r in stats.get(m.energy, []))
+            elec = sum(float(r.get("change") or 0) for r in stats.get(m.elec, []))
+            if elec > 3 and heat > elec:
+                self.cop_learned = round(heat / elec / m.params["veff_factor"]["v"], 2)
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception("Could not compute the hot water COP")
+
+    # ------------------------------------------------------------------ live hooks
+    def on_estimate(self, m: ShowerTimeManager, est: model.Estimate) -> None:
+        """Book heat added by a reheat at the current price; update the reheat forecast."""
+        avg = est.average
+        prev = self._avg_prev
+        self._avg_prev = avg
+        heating = m.reheating or (prev is not None and avg - prev >= 0.3 and not m.showering)
+        if heating and prev is not None and avg > prev:
+            price, cur = self.price_now(m)
+            if price is not None:
+                add = (avg - prev) * m.volume * model.CP
+                held = max(0.0, prev - est.empty_at) * m.volume * model.CP
+                heat_price = price / self.cop(m)
+                if self.tank_price is None or held <= 0:
+                    self.tank_price = heat_price
+                else:
+                    self.tank_price = (held * self.tank_price + add * heat_price) / (held + add)
+                self.currency = cur or self.currency
+                m.request_save()
+        self._forecast(m, est, heating)
+
+    def _forecast(self, m: ShowerTimeManager, est: model.Estimate, heating: bool) -> None:
+        self.eta_full = self.eta_one = None
+        rate = m.params["reheat_rate"]
+        if not heating or rate["n"] < 2 or rate["v"] <= 0:
+            return
+        now = dt_util.now()
+        target = m.params.get("full_temp") or m.full_ref_avg
+        if target and target > est.average:
+            self.eta_full = now + timedelta(minutes=(target - est.average) / rate["v"])
+        need = est.empty_at + m.params["duration"]["v"] * est.per_minute
+        self.eta_one = now if est.average >= need else now + timedelta(minutes=(need - est.average) / rate["v"])
+
+    def shower_ended(self, m: ShowerTimeManager, start: datetime, end: datetime, est: model.Estimate | None) -> None:
+        minutes = (end - start).total_seconds() / 60
+        if minutes < MIN_SHOWER_MINUTES or est is None:
+            return
+        self._add(m, start, minutes, est.per_minute, self.tank_price, "live")
+
+    def _add(self, m: ShowerTimeManager, start: datetime, minutes: float, per_minute: float,
+             heat_price: float | None, source: str) -> None:
+        heat = model.shower_heat_kwh(per_minute, minutes, m.volume)
+        cop = self.cop(m)
+        if heat_price is None:
+            price, cur = self.price_now(m)
+            heat_price = price / cop if price is not None else None
+            self.currency = cur or self.currency
+        entry = {"start": dt_util.as_local(start).isoformat(timespec="minutes"), "minutes": round(minutes, 1),
+                 "heat_kwh": round(heat, 2), "electricity_kwh": round(heat / cop, 2),
+                 "cost": round(heat * heat_price, 2) if heat_price is not None else None, "source": source}
+        self.log.append(entry)
+        self.log.sort(key=lambda e: e["start"])
+        cutoff = (dt_util.now() - timedelta(days=LOG_DAYS)).isoformat()
+        self.log = [e for e in self.log if e["start"] >= cutoff]
+        m.request_save()
+
+    # ------------------------------------------------------------------ summaries
+    def _since(self, since: datetime) -> list[dict]:
+        key = since.isoformat(timespec="minutes")
+        return [e for e in self.log if e["start"] >= key]
+
+    def summary(self) -> dict:
+        now = dt_util.now()
+        today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        week = today - timedelta(days=today.weekday())
+        t, w = self._since(today), self._since(week)
+        costs_t = [e["cost"] for e in t if e.get("cost") is not None]
+        costs_w = [e["cost"] for e in w if e.get("cost") is not None]
+        return {
+            "today_showers": len(t), "today_minutes": round(sum(e["minutes"] for e in t)),
+            "today_cost": round(sum(costs_t), 2) if costs_t else (0.0 if not t else None),
+            "today_electricity_kwh": round(sum(e["electricity_kwh"] for e in t), 2),
+            "week_showers": len(w), "week_minutes": round(sum(e["minutes"] for e in w)),
+            "week_cost": round(sum(costs_w), 2) if costs_w else (0.0 if not w else None),
+            "last": self.log[-1] if self.log else None,
+        }
+
+    # ------------------------------------------------------------------ first run: fill from the history
+    async def async_backfill(self, m: ShowerTimeManager, rows: list[model.Row]) -> None:
+        """Showers of the past week from the recorder, priced at the last reheat before each shower."""
+        if self.backfilled or not rows:
+            return
+        cycles = model.find_cycles(rows, None)
+        draws = [d for d in model.find_draws(rows) if d.minutes >= MIN_SHOWER_MINUTES]
+        price_by_hour: dict[int, float] = {}
+        cur = ""
+        if m.price:
+            st = m.hass.states.get(m.price)
+            _, cur = parse_price(st)
+            factor = 1.0
+            if st is not None:
+                unit = str(st.attributes.get("unit_of_measurement") or "").split("/")[0].strip().lower()
+                factor = 0.01 if unit in ("ct", "c", "cent", "cents", "¢") else 1.0
+            start = datetime.fromtimestamp(rows[0].minute * 60, timezone.utc)
+            end = datetime.fromtimestamp(rows[-1].minute * 60, timezone.utc)
+            try:
+                stats = await get_instance(m.hass).async_add_executor_job(
+                    statistics.statistics_during_period, m.hass, start, end, {m.price}, "hour", None, {"mean"})
+                for r in stats.get(m.price, []):
+                    ts = r["start"]
+                    ts = ts.timestamp() if isinstance(ts, datetime) else float(ts)
+                    if r.get("mean") is not None:
+                        price_by_hour[int(ts // 60) // 60 * 60] = float(r["mean"]) * factor
+            except Exception:  # noqa: BLE001
+                _LOGGER.debug("No price statistics for the backfill")
+        cop = self.cop(m)
+        known = {e["start"] for e in self.log}
+        for d in draws:
+            before = [c for c in cycles if c.end < d.start]
+            prices = []
+            if before:
+                c = before[-1]
+                prices = [price_by_hour[h] for h in range(c.start // 60 * 60, c.end // 60 * 60 + 1, 60) if h in price_by_hour]
+            if not prices and (d.start // 60 * 60) in price_by_hour:
+                prices = [price_by_hour[d.start // 60 * 60]]
+            heat_price = (sum(prices) / len(prices)) / cop if prices else None
+            start = datetime.fromtimestamp(d.start * 60, timezone.utc)
+            if dt_util.as_local(start).isoformat(timespec="minutes") in known:
+                continue
+            local = dt_util.as_local(start)
+            est = model.estimate(m.params, d.top_start, d.bottom_start, volume=m.volume, shower_temp=m.shower_temp,
+                                 month=local.month, doy=local.timetuple().tm_yday,
+                                 ema=m._ema_on(local.date().isoformat()))
+            self._add(m, start, d.minutes, est.per_minute, heat_price, "history")
+        self.currency = cur or self.currency
+        self.backfilled = True
+        m.request_save()

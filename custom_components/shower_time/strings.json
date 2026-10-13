@@ -29,7 +29,10 @@
           "flow_source": "Shower-head flow",
           "head_flow": "Flow, filled in yourself",
           "water_sensor": "Water meter or flow sensor",
-          "outdoor_sensor": "Outdoor temperature sensor"
+          "outdoor_sensor": "Outdoor temperature sensor",
+          "electricity_sensor": "Electricity used for hot water (energy sensor)",
+          "cop": "COP for hot water",
+          "price_sensor": "Electricity price sensor"
         },
         "data_description": {
           "profile": "Where the model starts before it has learned from your own showers.",
@@ -38,7 +41,10 @@
           "flow_source": "Optional. With the flow the integration works out the temperature you shower at and the litres. A water meter measures it while you shower. Don't know it? Choose 'Fill in myself' and measure it in a minute with a bucket (see below), or pick the type of shower head.",
           "head_flow": "Only with 'Fill in myself'. How to measure: turn the shower on the way you normally shower (same temperature and tap position), hold a bucket under the shower head and time how long it takes to fill 10 litres. Flow = 600 ÷ seconds: 50 s = 12 L/min, 75 s = 8 L/min, 100 s = 6 L/min. No marked bucket? Catch the water for 10 seconds, measure the litres with a measuring jug and multiply by 6. Measure twice and take the average.",
           "water_sensor": "Only with 'Water meter'. A sensor in L/min, or a counter in litres or m³.",
-          "outdoor_sensor": "Optional. Mains water follows the outdoor temperature with a delay of weeks; the model uses a 3-week average of it to estimate the cold water temperature. Without it, a monthly table is used."
+          "outdoor_sensor": "Optional. Mains water follows the outdoor temperature with a delay of weeks; the model uses a 3-week average of it to estimate the cold water temperature. Without it, a monthly table is used.",
+          "electricity_sensor": "Optional. Together with the heat sensor this lets the integration learn the COP for hot water.",
+          "cop": "Used when the COP cannot be learned: heat pump about 2–3.5, electric boiler 1.0.",
+          "price_sensor": "Optional, choose your own (e.g. from your energy supplier or evcc). With dynamic tariffs the price at the moment the tank is reheated is used, not when you shower."
         }
       }
     },
@@ -67,12 +73,18 @@
           "flow_source": "Shower-head flow",
           "head_flow": "Flow, filled in yourself",
           "water_sensor": "Water meter or flow sensor",
-          "outdoor_sensor": "Outdoor temperature sensor"
+          "outdoor_sensor": "Outdoor temperature sensor",
+          "electricity_sensor": "Electricity used for hot water (energy sensor)",
+          "cop": "COP for hot water",
+          "price_sensor": "Electricity price sensor"
         },
         "data_description": {
           "flow_source": "Optional. With the flow the integration works out the temperature you shower at and the litres. A water meter measures it while you shower. Don't know it? Choose 'Fill in myself' and measure it in a minute with a bucket (see below), or pick the type of shower head.",
           "head_flow": "Only with 'Fill in myself'. How to measure: turn the shower on the way you normally shower (same temperature and tap position), hold a bucket under the shower head and time how long it takes to fill 10 litres. Flow = 600 ÷ seconds: 50 s = 12 L/min, 75 s = 8 L/min, 100 s = 6 L/min. No marked bucket? Catch the water for 10 seconds, measure the litres with a measuring jug and multiply by 6. Measure twice and take the average.",
-          "outdoor_sensor": "Optional. Mains water follows the outdoor temperature with a delay of weeks; the model uses a 3-week average of it to estimate the cold water temperature. Without it, a monthly table is used."
+          "outdoor_sensor": "Optional. Mains water follows the outdoor temperature with a delay of weeks; the model uses a 3-week average of it to estimate the cold water temperature. Without it, a monthly table is used.",
+          "electricity_sensor": "Optional. Together with the heat sensor this lets the integration learn the COP for hot water.",
+          "cop": "Used when the COP cannot be learned: heat pump about 2–3.5, electric boiler 1.0.",
+          "price_sensor": "Optional, choose your own (e.g. from your energy supplier or evcc). With dynamic tariffs the price at the moment the tank is reheated is used, not when you shower."
         }
       }
     },
@@ -125,6 +137,24 @@
       },
       "fill_level": {
         "name": "Tank charge"
+      },
+      "showers_today": {
+        "name": "Showers today"
+      },
+      "shower_time_today": {
+        "name": "Shower time today"
+      },
+      "shower_time_week": {
+        "name": "Shower time this week"
+      },
+      "last_shower": {
+        "name": "Last shower"
+      },
+      "shower_cost_today": {
+        "name": "Shower cost today"
+      },
+      "reheat_ready": {
+        "name": "Full again at"
       }
     },
     "binary_sensor": {

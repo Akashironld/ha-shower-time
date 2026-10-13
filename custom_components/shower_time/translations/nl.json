@@ -29,7 +29,10 @@
           "flow_source": "Debiet douchekop",
           "head_flow": "Debiet zelf invullen",
           "water_sensor": "Watermeter of flowsensor",
-          "outdoor_sensor": "Buitentemperatuursensor"
+          "outdoor_sensor": "Buitentemperatuursensor",
+          "electricity_sensor": "Stroomverbruik voor warm water (energiesensor)",
+          "cop": "COP voor warm water",
+          "price_sensor": "Stroomprijs-sensor"
         },
         "data_description": {
           "profile": "Waar het model mee begint voordat het van jullie eigen douches heeft geleerd.",
@@ -38,7 +41,10 @@
           "flow_source": "Optioneel. Met het debiet berekent de integratie op welke temperatuur jullie douchen en hoeveel liter dat is. Een watermeter meet het tijdens het douchen. Weet je het niet? Kies 'Zelf invullen' en meet het in een minuut met een emmer (zie hieronder), of kies het type douchekop.",
           "head_flow": "Alleen bij 'Zelf invullen'. Zo meet je het: zet de douche aan zoals je normaal doucht (zelfde temperatuur en kraanstand), houd een emmer onder de douchekop en kijk hoeveel seconden het duurt tot er 10 liter in zit. Debiet = 600 ÷ seconden: 50 s = 12 L/min, 75 s = 8 L/min, 100 s = 6 L/min. Geen emmer met maatstreepjes? Vang 10 seconden water op, meet de liters met een maatbeker en doe × 6. Meet twee keer en neem het gemiddelde.",
           "water_sensor": "Alleen bij 'Watermeter'. Een sensor in L/min, of een teller in liter of m³.",
-          "outdoor_sensor": "Optioneel. Leidingwater volgt de buitentemperatuur met weken vertraging; het model gebruikt het gemiddelde van de afgelopen 3 weken om de koudwatertemperatuur te schatten. Zonder deze sensor gebruikt het een tabel per maand."
+          "outdoor_sensor": "Optioneel. Leidingwater volgt de buitentemperatuur met weken vertraging; het model gebruikt het gemiddelde van de afgelopen 3 weken om de koudwatertemperatuur te schatten. Zonder deze sensor gebruikt het een tabel per maand.",
+          "electricity_sensor": "Optioneel. Samen met de warmtesensor leert de integratie hiermee de COP voor warm water.",
+          "cop": "Gebruikt als de COP niet geleerd kan worden: warmtepomp ongeveer 2–3,5, elektrische boiler 1,0.",
+          "price_sensor": "Optioneel, kies je eigen sensor (bijvoorbeeld van je energieleverancier of evcc). Bij een dynamisch tarief telt de prijs op het moment dat het vat opwarmt, niet als je doucht."
         }
       }
     },
@@ -67,12 +73,18 @@
           "flow_source": "Debiet douchekop",
           "head_flow": "Debiet zelf invullen",
           "water_sensor": "Watermeter of flowsensor",
-          "outdoor_sensor": "Buitentemperatuursensor"
+          "outdoor_sensor": "Buitentemperatuursensor",
+          "electricity_sensor": "Stroomverbruik voor warm water (energiesensor)",
+          "cop": "COP voor warm water",
+          "price_sensor": "Stroomprijs-sensor"
         },
         "data_description": {
           "flow_source": "Optioneel. Met het debiet berekent de integratie op welke temperatuur jullie douchen en hoeveel liter dat is. Een watermeter meet het tijdens het douchen. Weet je het niet? Kies 'Zelf invullen' en meet het in een minuut met een emmer (zie hieronder), of kies het type douchekop.",
           "head_flow": "Alleen bij 'Zelf invullen'. Zo meet je het: zet de douche aan zoals je normaal doucht (zelfde temperatuur en kraanstand), houd een emmer onder de douchekop en kijk hoeveel seconden het duurt tot er 10 liter in zit. Debiet = 600 ÷ seconden: 50 s = 12 L/min, 75 s = 8 L/min, 100 s = 6 L/min. Geen emmer met maatstreepjes? Vang 10 seconden water op, meet de liters met een maatbeker en doe × 6. Meet twee keer en neem het gemiddelde.",
-          "outdoor_sensor": "Optioneel. Leidingwater volgt de buitentemperatuur met weken vertraging; het model gebruikt het gemiddelde van de afgelopen 3 weken om de koudwatertemperatuur te schatten. Zonder deze sensor gebruikt het een tabel per maand."
+          "outdoor_sensor": "Optioneel. Leidingwater volgt de buitentemperatuur met weken vertraging; het model gebruikt het gemiddelde van de afgelopen 3 weken om de koudwatertemperatuur te schatten. Zonder deze sensor gebruikt het een tabel per maand.",
+          "electricity_sensor": "Optioneel. Samen met de warmtesensor leert de integratie hiermee de COP voor warm water.",
+          "cop": "Gebruikt als de COP niet geleerd kan worden: warmtepomp ongeveer 2–3,5, elektrische boiler 1,0.",
+          "price_sensor": "Optioneel, kies je eigen sensor (bijvoorbeeld van je energieleverancier of evcc). Bij een dynamisch tarief telt de prijs op het moment dat het vat opwarmt, niet als je doucht."
         }
       }
     },
@@ -125,6 +137,24 @@
       },
       "fill_level": {
         "name": "Vulgraad"
+      },
+      "showers_today": {
+        "name": "Douches vandaag"
+      },
+      "shower_time_today": {
+        "name": "Douchetijd vandaag"
+      },
+      "shower_time_week": {
+        "name": "Douchetijd deze week"
+      },
+      "last_shower": {
+        "name": "Laatste douche"
+      },
+      "shower_cost_today": {
+        "name": "Douchekosten vandaag"
+      },
+      "reheat_ready": {
+        "name": "Weer vol om"
       }
     },
     "binary_sensor": {

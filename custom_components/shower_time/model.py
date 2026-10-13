@@ -65,7 +65,7 @@ PROFILES: dict[str, dict] = {
     },
 }
 
-LIMITS = {"head_flow": (2.0, 25.0), "flow": (2.0, 20.0), "phi": (0.35, 0.95), "loss": (0.05, 1.0), "duration": (3.0, 30.0),
+LIMITS = {"reheat_rate": (0.02, 3.0), "head_flow": (2.0, 25.0), "flow": (2.0, 20.0), "phi": (0.35, 0.95), "loss": (0.05, 1.0), "duration": (3.0, 30.0),
           "veff_factor": (0.6, 2.2), "w": (0.15, 0.95)}
 
 
@@ -82,6 +82,7 @@ def ensure_params(p: dict) -> dict:
     # cold water = a + b * outdoor running average (°C); default from the profile the model started with
     p.setdefault("cold_model", copy.deepcopy(PROFILES.get(p.get("profile"), PROFILES["generic"])["cold_model"]))
     p.setdefault("cold_samples", [])                  # [outdoor running average, measured cold] pairs
+    p.setdefault("reheat_rate", {"v": 0.3, "n": 0})   # tank average °C per minute while reheating
     return p
 
 
@@ -327,12 +328,18 @@ def learn(params: dict, rows: list[Row], *, volume: float, shower_temp: float, s
     cycles = find_cycles(rows, energy_by_hour)
     draws = find_draws(rows)
     s: dict[str, list] = {"w20": [], "w30": [], "w45": [], "veff_factor": [], "phi": [], "flow": [],
-                          "loss": [], "duration": [], "head_flow": [], "cold": {}, "cold_pairs": []}
+                          "loss": [], "duration": [], "head_flow": [], "cold": {}, "cold_pairs": [], "reheat_rate": []}
     full = lambda c: c.bottom_after is None or c.top_after - c.bottom_after <= 2.5
     veff = volume * p["veff_factor"]["v"]
     # An energy meter is only trusted for stratification and flow once its scale against the tank is known;
     # many heat pumps report more heat than reaches the tank (piping, coil, meter).
     energy_ok = p["veff_factor"]["n"] >= 15
+
+    for c in cycles:                              # how fast a reheat raises the tank average (any reheat)
+        if c.start >= since and c.end - c.start >= 10 and c.bottom_before is not None:
+            rise = tank_average(p, c.top_after, c.bottom_after) - tank_average(p, c.top_before, c.bottom_before)
+            if rise > 2:
+                s["reheat_rate"].append(rise / (c.end - c.start))
 
     for c in cycles:
         if c.start < since or not full(c):
@@ -414,7 +421,7 @@ def learn(params: dict, rows: list[Row], *, volume: float, shower_temp: float, s
 
     for key in W_POINTS:
         p["w"][key] = _blend(p["w"][key], s["w" + key], LIMITS["w"])
-    for key in ("veff_factor", "phi", "flow", "loss", "duration", "head_flow"):
+    for key in ("veff_factor", "phi", "flow", "loss", "duration", "head_flow", "reheat_rate"):
         p[key] = _blend(p[key], s[key], LIMITS[key])
     for m, low in s["cold"].items():                 # cold water only moves towards what was seen
         p["cold"][m] = round(min(max(4.0, 0.7 * p["cold"][m] + 0.3 * low), 25.0), 1)
@@ -486,3 +493,8 @@ def fit_cold_model(prior: dict, samples: list[list[float]]) -> dict:
     blend = lambda old, new: (w0 * old + n * new) / (w0 + n)
     return {"a": {"v": round(blend(a0, a), 3), "n": prior["a"]["n"]},
             "b": {"v": round(blend(b0, b), 3), "n": prior["b"]["n"]}}
+
+
+def shower_heat_kwh(per_minute: float, minutes: float, volume: float) -> float:
+    """Heat taken from the tank by a shower: minutes x tank-average drop per minute x volume."""
+    return max(0.0, minutes) * per_minute * volume * CP

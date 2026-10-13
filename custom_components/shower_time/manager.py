@@ -21,9 +21,14 @@ from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from . import model
+from .ledger import ShowerLedger
 from .const import (
     CONF_BOTTOM,
+    CONF_COP,
+    CONF_ELEC,
     CONF_ENERGY,
+    CONF_PRICE,
+    DEFAULT_COP,
     CONF_FLOW_SOURCE,
     CONF_HEAD_FLOW,
     CONF_OUTDOOR,
@@ -90,6 +95,10 @@ class ShowerTimeManager:
         self.head_flow_manual: float | None = float(cfg[CONF_HEAD_FLOW]) if cfg.get(CONF_HEAD_FLOW) else None
         self.water: str | None = cfg.get(CONF_WATER) or None
         self.outdoor: str | None = cfg.get(CONF_OUTDOOR) or None
+        self.price: str | None = cfg.get(CONF_PRICE) or None
+        self.elec: str | None = cfg.get(CONF_ELEC) or None
+        self.cop_manual: float = float(cfg.get(CONF_COP) or DEFAULT_COP)
+        self.ledger = ShowerLedger()
         self._ema_by_day: dict[str, float] = {}       # local date -> outdoor running average
         self.ema_now: float | None = None
         self.heating: str | None = cfg.get(CONF_HEATING) or None
@@ -136,6 +145,7 @@ class ShowerTimeManager:
             self.last_learn = stored.get("last_learn")
             self.last_samples = stored.get("last_samples", {})
         if stored:
+            self.ledger.load(stored.get("ledger"))
             self.full_ref_avg = stored.get("full_ref_avg")
             self.full_ref_at = stored.get("full_ref_at")
             # a reference in minutes only (before 0.5.1) depends on the model it was computed with: rebuild it
@@ -144,6 +154,8 @@ class ShowerTimeManager:
         self._unsubs.append(async_track_state_change_event(self.hass, watch, self._state_changed))
         self._unsubs.append(async_track_time_change(self.hass, self._nightly, hour=LEARN_HOUR, minute=LEARN_MINUTE, second=0))
         self._unsubs.append(async_track_time_interval(self.hass, self._tick, timedelta(seconds=15)))
+        self._unsubs.append(async_track_time_change(self.hass, self._midnight, hour=0, minute=0, second=5))
+        self.entry.async_create_background_task(self.hass, self._start_ledger(), f"{DOMAIN}_ledger")
         if not self.last_learn:                 # first install: learn from what the recorder already has
             self._unsubs.append(async_call_later(self.hass, 120, self._first_learn))
         if self.outdoor:
@@ -198,6 +210,7 @@ class ShowerTimeManager:
                                            shower_temp=self.shower_temp, month=now.month, head_flow=head,
                                            doy=now.timetuple().tm_yday, ema=self.ema_now)
             self._track_full(self.estimate.minutes)
+            self.ledger.on_estimate(self, self.estimate)
         for cb in list(self._listeners):
             cb()
 
@@ -209,7 +222,7 @@ class ShowerTimeManager:
     def _detect_use(self) -> None:
         """A new tank reading that falls fast (cold water coming in) while not reheating = hot water in use."""
         now = dt_util.utcnow()
-        changed, falling = False, False
+        changed, falling, fall_from = False, False, None
         for ent, val in ((self.top, self.top_value), (self.bottom, self.bottom_value)):
             if not ent or val is None:
                 continue
@@ -220,14 +233,17 @@ class ShowerTimeManager:
                     minutes = max((now - prev[1]).total_seconds() / 60, 0.5)
                     if (prev[0] - val) / minutes >= 0.3:
                         falling = True
+                        fall_from = prev[1] if fall_from is None else min(fall_from, prev[1])
                 self._prev[ent] = (val, now)
         if not changed:
             return
         self._sensor_at, self.live_offset = now, 0.0       # a real reading: start from the sensors again
         if falling and not self.reheating:
+            if not self.showering:
+                self.ledger.session_start = fall_from or now        # the shower began after the previous reading
             self.showering, self._last_fall_at = True, now
         elif self.showering and (self.reheating or self._last_fall_at is None or now - self._last_fall_at > self.USE_TIMEOUT):
-            self.showering = False
+            self._end_shower()
 
     @callback
     def _tick(self, _now) -> None:
@@ -235,11 +251,39 @@ class ShowerTimeManager:
             return
         now = dt_util.utcnow()
         if self.reheating or (self._last_fall_at and now - self._last_fall_at > self.USE_TIMEOUT):
-            self.showering, self.live_offset = False, 0.0
+            self._end_shower()
+            self.live_offset = 0.0
         elif self._sensor_at is not None:
             self.live_offset = min(self.LIVE_MAX_MINUTES, (now - self._sensor_at).total_seconds() / 60)
         for cb in list(self._listeners):
             cb()
+
+    @callback
+    def _end_shower(self) -> None:
+        self.showering = False
+        if self.ledger.session_start and self._last_fall_at:
+            self.ledger.shower_ended(self, self.ledger.session_start, self._last_fall_at, self.estimate)
+        self.ledger.session_start = None
+
+    @callback
+    def _midnight(self, _now) -> None:
+        for cb in list(self._listeners):              # "today" counters start again
+            cb()
+
+    @callback
+    def request_save(self) -> None:
+        self._store.async_delay_save(self._data, 30)
+
+    async def _start_ledger(self) -> None:
+        await self.ledger.async_refresh_cop(self)
+        if not self.ledger.backfilled:
+            end = dt_util.utcnow()
+            try:
+                rows = await self._fetch_rows(end - timedelta(days=8), end)
+                await self.ledger.async_backfill(self, rows)
+            except Exception:  # noqa: BLE001
+                _LOGGER.exception("Could not fill the shower log from the history")
+        self.update()
 
     @property
     def current(self) -> model.Estimate | None:
@@ -439,7 +483,7 @@ class ShowerTimeManager:
             "profile": self.profile, "params": self.params, "processed_until": self.processed_until,
             "last_cycle": asdict(self.last_cycle) if self.last_cycle else None, "last_learn": self.last_learn,
             "last_samples": self.last_samples, "full_ref": self.full_ref, "full_ref_avg": self.full_ref_avg,
-            "full_ref_at": self.full_ref_at,
+            "full_ref_at": self.full_ref_at, "ledger": self.ledger.to_dict(),
         }
 
     async def _first_learn(self, _now) -> None:
@@ -463,19 +507,14 @@ class ShowerTimeManager:
     async def _learn(self) -> None:
         if self.outdoor:
             await self._refresh_ema()
+        await self.ledger.async_refresh_cop(self)
         now = dt_util.utcnow()
         end = now - timedelta(minutes=30)
         start = now - timedelta(days=HISTORY_DAYS)
         if self.processed_until:
             start = max(start, datetime.fromtimestamp(self.processed_until * 60, timezone.utc) - timedelta(hours=6))
         recorder = get_instance(self.hass)
-        series: dict[str, list] = {}
-        for ent in (self.top, self.bottom, self.heating, self.water if self.flow_source == "water_meter" else None):
-            if not ent:
-                continue
-            res = await recorder.async_add_executor_job(
-                history.state_changes_during_period, self.hass, start, end, ent, True, False, None, True)
-            series[ent] = res.get(ent, [])
+        series = await self._fetch_series(start, end)
         rows = await self.hass.async_add_executor_job(self._rows, series, start, end)
         if len(rows) < 600:
             _LOGGER.info("Not enough history to learn yet (%d minutes)", len(rows))
@@ -514,6 +553,24 @@ class ShowerTimeManager:
         self.last_samples = result.samples
         await self._store.async_save(self._data())
         _LOGGER.debug("Learned from %d cycles / %d draws: %s", result.cycles, result.draws, result.samples)
+
+    async def _fetch_series(self, start: datetime, end: datetime) -> dict[str, list]:
+        recorder = get_instance(self.hass)
+        series: dict[str, list] = {}
+        for ent in (self.top, self.bottom, self.heating, self.water if self.flow_source == "water_meter" else None):
+            if not ent:
+                continue
+            res = await recorder.async_add_executor_job(
+                history.state_changes_during_period, self.hass, start, end, ent, True, False, None, True)
+            series[ent] = res.get(ent, [])
+        return series
+
+    async def _fetch_rows(self, start: datetime, end: datetime) -> list[model.Row]:
+        series = await self._fetch_series(start, end)
+        rows = await self.hass.async_add_executor_job(self._rows, series, start, end)
+        if rows and not any(r.heating for r in rows):
+            model.mark_heating_from_temperature(rows)
+        return rows
 
     def _water_series(self, states: list) -> tuple[str, list[tuple[int, float]]] | None:
         """Water meter history as ("rate", L/min) or ("total", litres), whatever the meter reports."""

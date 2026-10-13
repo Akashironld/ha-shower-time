@@ -14,8 +14,12 @@ from .const import (
     CONF_BOTTOM,
     CONF_ENERGY,
     CONF_FLOW_SOURCE,
+    CONF_COP,
+    CONF_ELEC,
     CONF_HEAD_FLOW,
     CONF_OUTDOOR,
+    CONF_PRICE,
+    DEFAULT_COP,
     CONF_TEMP_MODE,
     CONF_WATER,
     FLOW_SOURCES,
@@ -46,6 +50,8 @@ TEMP_MODE = selector.SelectSelector(selector.SelectSelectorConfig(options=TEMP_M
 FLOW_SOURCE = selector.SelectSelector(selector.SelectSelectorConfig(options=FLOW_SOURCES, translation_key="flow_source", mode=selector.SelectSelectorMode.DROPDOWN))
 HEAD_FLOW = selector.NumberSelector(selector.NumberSelectorConfig(min=2, max=25, step=0.1, unit_of_measurement="L/min", mode=selector.NumberSelectorMode.BOX))
 WATER = selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor", device_class=["water", "volume_flow_rate", "volume"]))
+PRICE = selector.EntitySelector(selector.EntitySelectorConfig(domain=["sensor", "input_number"]))
+COP = selector.NumberSelector(selector.NumberSelectorConfig(min=0.8, max=6, step=0.1, mode=selector.NumberSelectorMode.BOX))
 PROFILE = selector.SelectSelector(selector.SelectSelectorConfig(options=PROFILES, translation_key="profile", mode=selector.SelectSelectorMode.DROPDOWN))
 
 
@@ -76,6 +82,9 @@ def suggest(hass: HomeAssistant, top: str, volume: float) -> dict[str, Any]:
         if (st.attributes.get("device_class") == "energy" and "dhw" in eid and "defrost" not in eid
                 and ("output" in eid or "out_" in eid or "produced" in eid)):
             out.setdefault(CONF_ENERGY, e.entity_id)
+        if (st.attributes.get("device_class") == "energy" and "dhw" in eid and "defrost" not in eid
+                and any(k in eid for k in ("electricity", "used", "consum", "input", "power_in"))):
+            out.setdefault(CONF_ELEC, e.entity_id)
     return out
 
 
@@ -121,6 +130,9 @@ class ShowerTimeConfigFlow(ConfigFlow, domain=DOMAIN):
             vol.Optional(CONF_HEATING_STATES, default=DEFAULT_HEATING_STATES): selector.TextSelector(),
             vol.Optional(CONF_ENERGY): ENERGY,
             vol.Optional(CONF_OUTDOOR): TEMP,
+            vol.Optional(CONF_ELEC): ENERGY,
+            vol.Optional(CONF_COP, default=DEFAULT_COP): COP,
+            vol.Optional(CONF_PRICE): PRICE,
             vol.Required(CONF_FLOW_SOURCE, default="unknown"): FLOW_SOURCE,
             vol.Optional(CONF_HEAD_FLOW): HEAD_FLOW,
             vol.Optional(CONF_WATER): WATER,
@@ -158,6 +170,9 @@ class ShowerTimeOptionsFlow(OptionsFlow):
             vol.Optional(CONF_HEATING_STATES, default=DEFAULT_HEATING_STATES): selector.TextSelector(),
             vol.Optional(CONF_ENERGY): ENERGY,
             vol.Optional(CONF_OUTDOOR): TEMP,
+            vol.Optional(CONF_ELEC): ENERGY,
+            vol.Optional(CONF_COP, default=DEFAULT_COP): COP,
+            vol.Optional(CONF_PRICE): PRICE,
         })
         return self.async_show_form(step_id="init", data_schema=self.add_suggested_values_to_schema(schema, user_input or cur),
                                     errors=errors)

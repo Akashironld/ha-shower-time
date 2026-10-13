@@ -13,7 +13,9 @@ from .entity import ShowerTimeEntity
 async def async_setup_entry(hass: HomeAssistant, entry: ShowerTimeConfigEntry,
                             async_add_entities: AddEntitiesCallback) -> None:
     m = entry.runtime_data
-    async_add_entities([MinutesSensor(m), ShowersSensor(m), LitresSensor(m), ShowerTemperatureSensor(m), FillSensor(m), ModelSensor(m)])
+    async_add_entities([MinutesSensor(m), ShowersSensor(m), LitresSensor(m), ShowerTemperatureSensor(m), FillSensor(m), ModelSensor(m),
+                        ShowersTodaySensor(m), ShowerTimeTodaySensor(m), ShowerTimeWeekSensor(m), LastShowerSensor(m),
+                        ReheatReadySensor(m)] + ([ShowerCostTodaySensor(m)] if m.price else []))
 
 
 class MinutesSensor(ShowerTimeEntity, SensorEntity):
@@ -60,6 +62,12 @@ class MinutesSensor(ShowerTimeEntity, SensorEntity):
             "head_flow_source": m.head_flow()[1],
             "reheating": m.reheating,
             "showering": m.showering,
+            **{k: v for k, v in m.ledger.summary().items()},
+            "currency": m.ledger.currency or None,
+            "hot_water_price_per_kwh": round(m.ledger.tank_price, 3) if m.ledger.tank_price is not None else None,
+            "cop": m.ledger.cop(m),
+            "reheat_full_at": m.ledger.eta_full.isoformat(timespec="minutes") if m.ledger.eta_full else None,
+            "reheat_one_shower_at": m.ledger.eta_one.isoformat(timespec="minutes") if m.ledger.eta_one else None,
             "live_countdown": m.live_offset > 0,
             "low_threshold": m.low_minutes,
             "learned_at": m.last_learn,
@@ -188,3 +196,117 @@ class ModelSensor(ShowerTimeEntity, SensorEntity):
             "last_learn": m.last_learn,
             "last_learn_samples": m.last_samples,
         }
+
+
+
+class _LogSensor(ShowerTimeEntity, SensorEntity):
+    """Counters from the shower log; always available (zero when nothing happened yet)."""
+
+    @property
+    def available(self) -> bool:
+        return True
+
+
+class ShowersTodaySensor(_LogSensor):
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:counter"
+
+    def __init__(self, manager) -> None:
+        super().__init__(manager, "showers_today")
+
+    @property
+    def native_value(self):
+        return self.manager.ledger.summary()["today_showers"]
+
+
+class ShowerTimeTodaySensor(_LogSensor):
+    _attr_device_class = SensorDeviceClass.DURATION
+    _attr_native_unit_of_measurement = UnitOfTime.MINUTES
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:timer-outline"
+
+    def __init__(self, manager) -> None:
+        super().__init__(manager, "shower_time_today")
+
+    @property
+    def native_value(self):
+        return self.manager.ledger.summary()["today_minutes"]
+
+
+class ShowerTimeWeekSensor(_LogSensor):
+    _attr_device_class = SensorDeviceClass.DURATION
+    _attr_native_unit_of_measurement = UnitOfTime.MINUTES
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:calendar-week"
+
+    def __init__(self, manager) -> None:
+        super().__init__(manager, "shower_time_week")
+
+    @property
+    def native_value(self):
+        return self.manager.ledger.summary()["week_minutes"]
+
+    @property
+    def extra_state_attributes(self):
+        s = self.manager.ledger.summary()
+        return {"showers": s["week_showers"], "cost": s["week_cost"], "currency": self.manager.ledger.currency or None}
+
+
+class LastShowerSensor(_LogSensor):
+    _attr_device_class = SensorDeviceClass.DURATION
+    _attr_native_unit_of_measurement = UnitOfTime.MINUTES
+    _attr_icon = "mdi:shower-head"
+
+    def __init__(self, manager) -> None:
+        super().__init__(manager, "last_shower")
+
+    @property
+    def native_value(self):
+        last = self.manager.ledger.summary()["last"]
+        return round(last["minutes"]) if last else None
+
+    @property
+    def extra_state_attributes(self):
+        last = self.manager.ledger.summary()["last"]
+        if not last:
+            return None
+        return {**last, "currency": self.manager.ledger.currency or None,
+                "log": self.manager.ledger.log[-20:]}
+
+
+class ShowerCostTodaySensor(_LogSensor):
+    """Cost of today's showers, at the price of the electricity that heated the water."""
+
+    _attr_device_class = SensorDeviceClass.MONETARY
+    _attr_icon = "mdi:cash"
+    _attr_suggested_display_precision = 2
+
+    def __init__(self, manager) -> None:
+        super().__init__(manager, "shower_cost_today")
+
+    @property
+    def native_unit_of_measurement(self):
+        return self.manager.ledger.currency or "€"
+
+    @property
+    def native_value(self):
+        return self.manager.ledger.summary()["today_cost"]
+
+
+class ReheatReadySensor(_LogSensor):
+    """While the tank reheats: when it is full again (attribute: when there is enough for one shower)."""
+
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+    _attr_icon = "mdi:clock-check-outline"
+
+    def __init__(self, manager) -> None:
+        super().__init__(manager, "reheat_ready")
+
+    @property
+    def native_value(self):
+        return self.manager.ledger.eta_full
+
+    @property
+    def extra_state_attributes(self):
+        eta = self.manager.ledger.eta_one
+        return {"one_shower_at": eta.isoformat(timespec="minutes") if eta else None}
