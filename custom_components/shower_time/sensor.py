@@ -45,7 +45,7 @@ class MinutesSensor(ShowerTimeEntity, SensorEntity):
             "litres": round(e.liters, -1),
             "full_tank_minutes": round(e.full_minutes) if e.full_minutes is not None else None,
             "fill_percent": m.fill_percent(),
-            "full_reference_minutes": round(m.full_ref) if m.full_ref is not None else None,
+            "full_reference_minutes": round(m.ref_minutes()) if m.ref_minutes() is not None else None,
             "full_reference_at": m.full_ref_at,
             "hot_fraction": round(e.hot_fraction, 2),
             "tank_average": round(e.average, 1),
@@ -111,7 +111,8 @@ class FillSensor(ShowerTimeEntity, SensorEntity):
     @property
     def extra_state_attributes(self):
         m = self.manager
-        return {"full_reference_minutes": round(m.full_ref) if m.full_ref is not None else None,
+        return {"full_reference_minutes": round(m.ref_minutes()) if m.ref_minutes() is not None else None,
+                "full_reference_tank_average": round(m.full_ref_avg, 1) if m.full_ref_avg is not None else None,
                 "full_reference_at": m.full_ref_at}
 
 

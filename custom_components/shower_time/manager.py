@@ -110,7 +110,8 @@ class ShowerTimeManager:
         self.bottom_value: float | None = None
         self.reheating = False
         # 100 % = the shower minutes right after the last reheat; the fill level drops with use and standing loss
-        self.full_ref: float | None = None
+        self.full_ref: float | None = None          # minutes at the last reheat (kept for display/compat)
+        self.full_ref_avg: float | None = None      # tank average temperature right after the last reheat
         self.full_ref_at: str | None = None
         self._ref_low: float | None = None
         self._last_minutes: float | None = None
@@ -128,8 +129,10 @@ class ShowerTimeManager:
             self.last_learn = stored.get("last_learn")
             self.last_samples = stored.get("last_samples", {})
         if stored:
-            self.full_ref = stored.get("full_ref")
+            self.full_ref_avg = stored.get("full_ref_avg")
             self.full_ref_at = stored.get("full_ref_at")
+            # a reference in minutes only (before 0.5.1) depends on the model it was computed with: rebuild it
+            self.full_ref = stored.get("full_ref") if self.full_ref_avg is not None else None
         watch = [e for e in (self.top, self.bottom, self.heating) if e]   # the water meter is only used for learning
         self._unsubs.append(async_track_state_change_event(self.hass, watch, self._state_changed))
         self._unsubs.append(async_track_time_change(self.hass, self._nightly, hour=LEARN_HOUR, minute=LEARN_MINUTE, second=0))
@@ -237,6 +240,8 @@ class ShowerTimeManager:
     # ------------------------------------------------------------------ fill level
     def _set_ref(self, minutes: float) -> None:
         self.full_ref = minutes
+        if self.estimate is not None:
+            self.full_ref_avg = self.estimate.average
         self.full_ref_at = dt_util.now().isoformat(timespec="seconds")
         self._ref_low = minutes
         self._store.async_delay_save(self._data, 60)
@@ -255,6 +260,7 @@ class ShowerTimeManager:
         self._last_minutes = m
         if self.full_ref is None:
             return                              # still being initialised from the history
+        ref_now = self.ref_minutes() or self.full_ref
         if self._ref_low is None or m < self._ref_low:
             self._ref_low = m
         if self.heating:
@@ -268,39 +274,51 @@ class ShowerTimeManager:
         self._was_heating = heating
         if was and not heating:                 # a reheat just finished
             even = self.bottom_value is None or (self.top_value is not None and self.top_value - self.bottom_value <= 2.5)
-            if even or m > self.full_ref:
+            if even or m > ref_now:
                 self._set_ref(m)
             self._rise_at = None
             return
-        if not heating and m > self.full_ref:   # sensors still settling after the reheat state switched off
+        if not heating and m > ref_now + 0.3:   # sensors still settling after the reheat state switched off
             self._set_ref(m)
 
-    def fill_percent(self) -> int | None:
+    def ref_minutes(self) -> float | None:
+        """Minutes the tank held right after the last reheat, with the *current* model (so the fill level does
+        not jump when the model learns or the cold water estimate changes)."""
         e = self.estimate
-        if e is None or not self.full_ref or self.full_ref <= 0:
+        if e is None:
+            return self.full_ref
+        if self.full_ref_avg is not None:
+            return max(0.0, (self.full_ref_avg - e.empty_at) / e.per_minute)
+        return self.full_ref
+
+    def fill_percent(self) -> int | None:
+        e, ref = self.estimate, self.ref_minutes()
+        if e is None or not ref or ref <= 0:
             return None
-        return int(round(max(0.0, min(100.0, 100 * e.minutes / self.full_ref))))
+        return int(round(max(0.0, min(100.0, 100 * e.minutes / ref))))
 
     async def _init_full_ref(self) -> None:
         """First run: the minutes at the end of the last reheat in the past two days."""
         try:
-            points = await self.async_history(48)
+            points = await self.async_history(48, with_average=True)
         except Exception:  # noqa: BLE001
             points = []
-        ref = low = prev = ts = None
-        for t, v in points:                     # same rules as _track_full, replayed over the history
+        ref = low = prev = ts = avg = None
+        for t, v, a in points:                  # same rules as _track_full, replayed over the history
             if ref is None:
                 ref = low = prev = v
-                ts = t
+                ts, avg = t, a
                 continue
             low = min(low, v)
             if (v > prev and v >= low + 3) or v > ref:
-                ref, ts, low = v, t, v
+                ref, ts, low, avg = v, t, v, a
             prev = v
         if ref is None and self.estimate:
             ref = self.estimate.minutes
         if ref is not None:
             self.full_ref = float(ref)
+            self.full_ref_avg = avg if avg is not None else (
+                self.estimate.empty_at + float(ref) * self.estimate.per_minute if self.estimate else None)
             self.full_ref_at = (dt_util.as_local(datetime.fromtimestamp(ts / 1000, timezone.utc)).isoformat(timespec="seconds")
                                 if ts else dt_util.now().isoformat(timespec="seconds"))
             self._ref_low = self.estimate.minutes if self.estimate else ref
@@ -308,7 +326,7 @@ class ShowerTimeManager:
             self.update()
 
     # ------------------------------------------------------------------ history for the card
-    async def async_history(self, hours: int = 24) -> list[list[float]]:
+    async def async_history(self, hours: int = 24, with_average: bool = False) -> list[list[float]]:
         """Shower minutes over the last ``hours``, recomputed with the current model from the tank sensors.
 
         Works from day one: the tank sensors usually have far more history than this integration.
@@ -317,7 +335,7 @@ class ShowerTimeManager:
         now = dt_util.utcnow()
         cached = getattr(self, "_hist_cache", None)
         if cached and cached[0] == hours and (now - cached[1]).total_seconds() < 300:
-            return cached[2]
+            return cached[2] if with_average else [[t, v] for t, v, _ in cached[2]]
         start = now - timedelta(hours=hours)
         recorder = get_instance(self.hass)
         series = {}
@@ -346,23 +364,24 @@ class ShowerTimeManager:
                                        ema=self._ema_on(local.date().isoformat()))
                     v = round(e.minutes)
                     if v != last:
-                        out.append([int(t * 1000), v])
+                        out.append([int(t * 1000), v, round(e.average, 2)])
                         last = v
                 t += 300
             if out and out[-1][0] < int(now.timestamp() * 1000):
-                out.append([int(now.timestamp() * 1000), last])
+                out.append([int(now.timestamp() * 1000), last, out[-1][2]])
             return out
 
         result = await self.hass.async_add_executor_job(compute)
         self._hist_cache = (hours, now, result)
-        return result
+        return result if with_average else [[t, v] for t, v, _ in result]
 
     # ------------------------------------------------------------------ learning
     def _data(self) -> dict:
         return {
             "profile": self.profile, "params": self.params, "processed_until": self.processed_until,
             "last_cycle": asdict(self.last_cycle) if self.last_cycle else None, "last_learn": self.last_learn,
-            "last_samples": self.last_samples, "full_ref": self.full_ref, "full_ref_at": self.full_ref_at,
+            "last_samples": self.last_samples, "full_ref": self.full_ref, "full_ref_avg": self.full_ref_avg,
+            "full_ref_at": self.full_ref_at,
         }
 
     async def _first_learn(self, _now) -> None:
