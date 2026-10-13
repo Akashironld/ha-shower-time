@@ -107,7 +107,7 @@ class ShowersSensor(ShowerTimeEntity, SensorEntity):
 
 
 class LitresSensor(ShowerTimeEntity, SensorEntity):
-    _attr_device_class = SensorDeviceClass.VOLUME
+    _attr_device_class = SensorDeviceClass.VOLUME_STORAGE      # a stock that goes up and down, not a meter
     _attr_native_unit_of_measurement = UnitOfVolume.LITERS
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_suggested_display_precision = 0

@@ -2,6 +2,11 @@
 
 ## v0.10.0
 
+- **Card on iPhone/iPad and in the mobile apps**: the card could be missing ("configuration error", not in the card
+  picker) when an app showed a cached start page. The integration now also adds the card to the dashboard
+  resources, like cards installed through HACS, so dashboards load it every time they open (same URL, loaded once;
+  removed again with the integration). Dashboards whose resources are in YAML are unchanged
+- *Hot water* (litres) uses the device class for a stored volume, so Home Assistant no longer warns about it
 - **Enough for today?** Learns when the household showers (per hour, per weekday) and, after a week, compares the
   minutes still expected today with what the tank holds: *Enough for today*, *Shower time expected today* (runs out
   at, next shower) and **EMPTY BY 21:30** on the card

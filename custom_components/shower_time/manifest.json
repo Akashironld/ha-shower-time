@@ -9,6 +9,7 @@
     "recorder",
     "http",
     "frontend",
+    "lovelace",
     "websocket_api"
   ],
   "documentation": "https://github.com/Akashironld/ha-shower-time",
