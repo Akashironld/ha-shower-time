@@ -60,11 +60,19 @@ class Tank:
         self.t = [avg + dk] * self.n
         return dk * CP * self.v
 
+    def heat_lower(self, kwh):
+        """Partial top-up: the coil warms the lower half only, so the tank stays layered."""
+        half = self.n // 2
+        avg = sum(self.t[:half]) / half
+        dk = kwh / (CP * self.v / 2)
+        self.t[:half] = [min(avg + dk, self.t[-1])] * half
+        return kwh
+
     def lose(self, k_per_min):
         self.t = [x - k_per_min for x in self.t]
 
 
-def simulate(days=21, flow=6.0, seed=1, cold=15.0, shower_temp=38.0, water=None):
+def simulate(days=21, flow=6.0, seed=1, cold=15.0, shower_temp=38.0, water=None, smart=False):
     rnd = random.Random(seed)
     tank = Tank(cold=cold)
     rows, energy = [], {}
@@ -83,8 +91,15 @@ def simulate(days=21, flow=6.0, seed=1, cold=15.0, shower_temp=38.0, water=None)
         heating = False
         if m % 1440 == 13 * 60:
             heating_until = minute + 120
+            target = rnd.choice([50.0, 56.0, 65.0]) if smart else 55.0
+        if smart and m % 1440 in (9 * 60, 17 * 60) and rnd.random() < 0.6 and not heating_until:
+            for k in range(12):                         # smart controller: a short top-up of the lower half
+                e = tank.heat_lower(0.08)
+                energy[(minute + k) // 60 * 60] = energy.get((minute + k) // 60 * 60, 0.0) + e
+            rows.append(model.Row(minute=minute, top=round(tank.sensors()[0], 1), bottom=round(tank.sensors()[1], 1), heating=True))
+            continue
         if heating_until and minute <= heating_until:
-            e = tank.heat(55.0)
+            e = tank.heat(target)
             if e > 0:
                 heating = True
                 energy[minute // 60 * 60] = energy.get(minute // 60 * 60, 0.0) + e
@@ -209,6 +224,27 @@ def test_water_meter_learns_head_flow():
     res2, _ = model.learn(model.new_params("generic"), rows, volume=200, shower_temp=38, since=0, energy_by_hour=energy,
                           previous_cycle=None, month_of=month_of, water=("total", total))
     assert 6.6 <= res2.params["head_flow"]["v"] <= 7.8, res2.params["head_flow"]
+
+
+def test_smart_controller_varying_targets_and_top_ups():
+    """Reheats to 50/56/65 °C and partial midday top-ups (tank left layered) must not bias the learned flow.
+
+    The heat of a top-up is not in the sum between two full reheats, so such intervals are skipped;
+    without that the flow came out ~15 % low. Compared with a fixed-schedule tank, same seed."""
+    out = []
+    for smart in (False, True):
+        rows, energy, _ = simulate(flow=6.0, seed=11, days=28, smart=smart)
+        p = model.new_params("generic")
+        for k in p["cold"]:
+            p["cold"][k] = 15.0
+        p["flow"] = {"v": 7.5, "n": 0}                   # no prior: look at what the data says
+        p["veff_factor"] = {"v": 1.0, "n": 20}           # heat meter scale known
+        res, _ = model.learn(p, rows, volume=200, shower_temp=38, since=0, energy_by_hour=energy,
+                             previous_cycle=None, month_of=month_of)
+        assert res.samples["flow"] >= 4, res.samples
+        out.append(res.params["flow"]["v"])
+    assert abs(out[1] - out[0]) < 0.5, out
+    assert 5.0 <= out[1] <= 7.0, out
 
 
 if __name__ == "__main__":

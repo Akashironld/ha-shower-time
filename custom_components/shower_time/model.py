@@ -325,6 +325,8 @@ def learn(params: dict, rows: list[Row], *, volume: float, shower_temp: float, s
         hours = (b.start - a.end - 20) / 60
         if not 3 <= hours <= 40:
             continue
+        if any(a.end < c.start < b.start for c in cycles):
+            continue                              # a partial top-up in between: its heat is not in the sum
         inside = [d for d in draws if a.end + 20 <= d.start < b.start]
         cold_b = cold_for(p, month_of(b.start))
         if not inside or any(d.bottom_low is not None and d.bottom_low < 30 for d in inside[:-1]):

@@ -188,19 +188,36 @@ class ShowerTimeManager:
 
     @callback
     def _track_full(self, m: float) -> None:
-        """Keep the reference at the end of the latest reheat.
+        """Keep 100 % at the end of the latest *complete* reheat.
 
-        With a reheat entity: follow the minutes while it is on (the last value is the new 100 %).
-        Without one: a rise of 3+ minutes above the lowest point since the last reheat is a reheat.
-        Sensor values that keep rising just after the reheat state switched off are still followed."""
+        A reheat that leaves the tank evenly hot (top and bottom within 2.5 °C) sets a new 100 %, also when it
+        heats to a lower temperature than last time (smart controllers vary the target). A partial top-up only
+        raises the fill level; it never becomes the new 100 % unless it beats the old one.
+        Reheating is taken from the reheat entity, or recognised from the minutes rising 3+ above the lowest
+        point since the last reheat; it ends when the entity switches off or the rise stops for 20 minutes."""
+        now = dt_util.utcnow()
         prev = self._last_minutes
         self._last_minutes = m
         if self.full_ref is None:
             return                              # still being initialised from the history
         if self._ref_low is None or m < self._ref_low:
             self._ref_low = m
-        rising = prev is not None and m > prev
-        if (self.heating and self.reheating) or (rising and m >= self._ref_low + 3) or m > self.full_ref:
+        if self.heating:
+            heating = self.reheating
+        else:
+            rising = prev is not None and m > prev + 0.2
+            if rising and m >= self._ref_low + 3:
+                self._rise_at = now
+            heating = getattr(self, "_rise_at", None) is not None and (now - self._rise_at).total_seconds() < 1200
+        was = getattr(self, "_was_heating", False)
+        self._was_heating = heating
+        if was and not heating:                 # a reheat just finished
+            even = self.bottom_value is None or (self.top_value is not None and self.top_value - self.bottom_value <= 2.5)
+            if even or m > self.full_ref:
+                self._set_ref(m)
+            self._rise_at = None
+            return
+        if not heating and m > self.full_ref:   # sensors still settling after the reheat state switched off
             self._set_ref(m)
 
     def fill_percent(self) -> int | None:
