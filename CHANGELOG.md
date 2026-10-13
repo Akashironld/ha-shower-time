@@ -15,7 +15,8 @@
   signal** (humidity, the power of the bathroom fan, a fan/light/motion that switches on; suggested automatically).
   A bath or bucket filled with hot water only is FILLING. Heat leaving without water (a heat pump starting a reheat,
   heat taken out through the coil) is not counted. Only showers go in the log; the rest is *Other hot water today*.
-  Checked on 11 days of a real tank: all 8 logged showers recognised, washing up and three heat-pump events not
+  Checked on 11 days of a real tank: all 8 logged showers recognised; washing up and three heat-pump events were
+  not counted as showers
 - **The shower going on now**: *Showering* (recognised showers only), *Current shower* (minutes and cost so far, also
   in the card's label) and a **Shower** event entity (`shower_started`, `shower_ended` with minutes, kWh and cost,
   `hot_water_used` for other use)
