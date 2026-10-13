@@ -1,0 +1,60 @@
+name: Bug report
+description: Something does not work or the estimate looks wrong
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! The **diagnostics file** is the most useful thing you can add: it lets the
+        situation be replayed exactly. Get it at **Settings → Devices & services → Hot Water Shower Time →
+        ⋮ → Download diagnostics** and drag it into the field below. It contains no passwords or personal data.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happens, and what did you expect?
+      placeholder: "E.g. after a 10 minute shower the shower time only dropped 2 minutes"
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics file
+      description: Drag the downloaded .json file here.
+    validations:
+      required: true
+  - type: input
+    id: ha_version
+    attributes:
+      label: Home Assistant version
+      placeholder: "2026.10.1"
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Hot Water Shower Time version
+      placeholder: "0.9.1"
+    validations:
+      required: true
+  - type: input
+    id: setup
+    attributes:
+      label: Heat pump / boiler and tank size
+      placeholder: "Weheat Blackbird P80 with Weheat 200 L tank"
+    validations:
+      required: true
+  - type: dropdown
+    id: sensors
+    attributes:
+      label: Which tank sensors do you use?
+      options:
+        - Top and bottom
+        - Top only
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log lines (optional)
+      description: Settings → System → Logs, search for "shower_time".
+      render: text

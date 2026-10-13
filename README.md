@@ -177,6 +177,13 @@ actions:
 mode: single
 ```
 
+## Reporting a problem
+
+Open an [issue](https://github.com/Akashironld/ha-shower-time/issues/new/choose) and attach the **diagnostics
+file**: *Settings → Devices & services → Hot Water Shower Time → ⋮ → Download diagnostics*. It contains the
+settings, what has been learned and the tank readings of the last 24 hours (no passwords or personal data), so
+your situation can be replayed exactly.
+
 ## Limitations
 
 - Without a bottom sensor showers are hard to see: no live countdown or log, little learning.
