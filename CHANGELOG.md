@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.9.1 — first release
+## v0.9.2 — first release
 
 How long can I still shower? A self-learning hot water model for Home Assistant, with its own dashboard card.
 
@@ -37,6 +37,7 @@ How long can I still shower? A self-learning hot water model for Home Assistant,
 - Easy setup: reheat state, heat and electricity meters and outdoor sensor are suggested from the same device
 - Robust against missing readings (e.g. −1 °C during outages) and °F sensors
 - Logo (light and dark) served from the integration (Home Assistant 2026+)
+- **Diagnostics download** and GitHub issue forms, so problems can be replayed exactly
 
 ---
 Like it? Support the project on [Ko-fi](https://ko-fi.com/akashironl) ☕
