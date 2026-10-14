@@ -129,9 +129,10 @@ def habits_ready(habits: dict) -> bool:
 class Forecast:
     expected_minutes: float          # shower minutes still expected today
     available_minutes: float         # what the tank holds by the end of the day without a reheat
-    enough: bool
-    runs_out_at: float | None        # hour of the day (e.g. 21.4) the hot water is expected to run out
+    enough: bool                     # enough as it is, or a reheat before the shortage is likely
+    runs_out_at: float | None        # hour of the day (e.g. 21.4) the hot water would run out without a reheat
     next_shower_at: float | None     # hours from now until the next likely shower (today or tomorrow)
+    reheat_chance: float | None = None   # chance of a reheat before it runs out (None: not learned yet)
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -140,7 +141,11 @@ class Forecast:
 def forecast(habits: dict, *, weekday: int, hour: float, minutes_now: float, per_minute: float, loss_k_h: float,
              typical: float) -> Forecast:
     """``hour`` is the current local time as a float (21.5 = 21:30); ``per_minute`` the tank average drop per
-    shower minute (K/min) and ``loss_k_h`` the standing loss (K/h), both from the model."""
+    shower minute (K/min) and ``loss_k_h`` the standing loss (K/h), both from the model.
+
+    Most heat pumps and boilers reheat on their own (on a schedule, or when the tank runs low). When this
+    household's tank is usually reheated in the hours before the shortage, it is not one: ``enough`` stays True
+    and ``reheat_chance`` says how likely that reheat is."""
     today = expected_by_hour(habits, weekday)
     tomorrow = expected_by_hour(habits, (weekday + 1) % 7)
     lost_per_hour = loss_k_h / per_minute if per_minute > 0 else 0.0     # shower minutes lost per hour of waiting
@@ -160,9 +165,55 @@ def forecast(habits: dict, *, weekday: int, hour: float, minutes_now: float, per
         if minutes >= threshold:
             nxt = round(int(hour) + 1 + i - hour, 2)
             break
+    chance = reheat_chance(habits, hour, runs_out) if runs_out is not None else None
+    enough = runs_out is None or (chance is not None and chance >= REHEAT_LIKELY)
     return Forecast(expected_minutes=round(need, 1), available_minutes=round(max(0.0, available), 1),
-                    enough=runs_out is None, runs_out_at=round(runs_out, 2) if runs_out is not None else None,
-                    next_shower_at=nxt)
+                    enough=enough, runs_out_at=round(runs_out, 2) if runs_out is not None else None,
+                    next_shower_at=nxt, reheat_chance=round(chance, 2) if chance is not None else None)
+
+
+# --------------------------------------------------------------------------- reheat habits
+
+REHEAT_READY_DAYS = 7
+REHEAT_LIKELY = 0.6           # a reheat this likely before the shortage: no shortage
+
+
+def add_reheat_day(habits: dict, started: list[int]) -> None:
+    """One completed day: the hours (0-23) in which a reheat started. Per hour the share of days with one,
+    averaged over roughly the last three weeks."""
+    r = habits.setdefault("reheat", {"days": 0, "hours": [0.0] * HOURS})
+    a = 1 / min(r["days"] + 1, 21)
+    hit = set(started)
+    r["hours"] = [round(o + a * ((1.0 if h in hit else 0.0) - o), 3) for h, o in enumerate(r["hours"])]
+    r["days"] += 1
+
+
+def reheat_chance(habits: dict, hour: float, until: float) -> float | None:
+    """Chance that the tank is reheated between now (hour of the day) and ``until``, or None while there are
+    too few days to tell."""
+    r = habits.get("reheat")
+    if not r or r["days"] < REHEAT_READY_DAYS:
+        return None
+    none = 1.0
+    for h in range(int(hour), min(HOURS, int(until) + 1)):
+        begin = max(hour, float(h))
+        end = min(until, h + 1.0)
+        if end > begin:
+            none *= 1 - min(1.0, r["hours"][h]) * (end - begin)
+    return 1 - none
+
+
+def reheat_starts(rows: list[model.Row], *, local_of) -> dict[str, list[int]]:
+    """Per local day the hours in which a reheat started (reheats within an hour of each other count once)."""
+    out: dict[str, list[int]] = {}
+    prev, last = False, None
+    for r in rows:
+        if r.heating and not prev and (last is None or r.minute - last > 60):
+            t = local_of(r.minute)
+            out.setdefault(t.date().isoformat(), []).append(t.hour)
+            last = r.minute
+        prev = r.heating
+    return out
 
 
 # --------------------------------------------------------------------------- what kind of hot water use

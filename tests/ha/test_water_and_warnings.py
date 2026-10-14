@@ -84,3 +84,17 @@ async def test_days_with_home_assistant_off_are_left_out_of_the_habits(hass: Hom
     m.habits = {**m.habits, "days": 0, "last_day": None}
     m._update_habits()
     assert m.habits["days"] == 3                               # 5 complete days back, 2 of them skipped
+
+
+async def test_reheats_are_learned_per_day(hass: HomeAssistant, entry) -> None:
+    m = entry.runtime_data
+    today = dt_util.now().date()
+    m.reheat_since = (today - timedelta(days=8)).isoformat()
+    for d in range(1, 9):                                     # a reheat at 13:00 on each of the last 8 days
+        m.reheat_log[(today - timedelta(days=d)).isoformat()] = [13]
+    m._update_reheat_habits()
+    r = m.habits["reheat"]
+    assert r["days"] == 8 and r["hours"][13] > 0.9 and r["last_day"] == (today - timedelta(days=1)).isoformat()
+    m._log_reheat(dt_util.utcnow())                           # live: a reheat starts now
+    m._log_reheat(dt_util.utcnow() + timedelta(minutes=20))   # the same reheat resuming: not a second one
+    assert m.reheat_log[today.isoformat()] == [dt_util.now().hour]

@@ -364,3 +364,38 @@ def test_loss_from_the_measured_coefficient():
     # 2 W/K, tank at 55 °C in a 20 °C room: 70 W out of 200 L = 0.30 K/h
     assert abs(insights.loss_k_per_h(2.0, 55.0, 200) - 70 / (200 * 1.163)) < 1e-9
     assert insights.loss_k_per_h(None, 55.0, 200) is None
+
+
+# --------------------------------------------------------------------------- reheat habits
+
+def test_reheat_starts_count_once_per_reheat():
+    m0 = int(datetime(2026, 10, 1, 13, 0, tzinfo=UTC).timestamp() // 60)
+    rows = [model.Row(minute=m0 + i, top=50, bottom=40, heating=(10 <= i < 40) or (50 <= i < 55) or (200 <= i < 230))
+            for i in range(300)]
+    starts = insights.reheat_starts(rows, local_of=local_of)
+    assert starts == {"2026-10-01": [13, 16]}             # 13:10 and a restart at 13:50 are one reheat; 16:20 another
+
+
+def daily_reheats(days: int, hour: int) -> dict:
+    h = insights.new_habits()
+    for _ in range(days):
+        insights.add_reheat_day(h, [hour])
+    return h
+
+
+def test_shortage_is_no_shortage_when_a_reheat_usually_comes_first():
+    h = evening_habits(14)
+    h["reheat"] = daily_reheats(14, 13)["reheat"]         # the heat pump reheats every day around 13:00
+    wd = datetime(2026, 9, 15).weekday()
+    morning = insights.forecast(h, weekday=wd, hour=8.0, minutes_now=12, per_minute=0.15, loss_k_h=0.27, typical=10)
+    assert morning.runs_out_at is not None                # without a reheat it would run out ...
+    assert morning.enough and morning.reheat_chance > 0.9  # ... but the usual 13:00 reheat comes first
+    afternoon = insights.forecast(h, weekday=wd, hour=15.0, minutes_now=12, per_minute=0.15, loss_k_h=0.27, typical=10)
+    assert not afternoon.enough and afternoon.reheat_chance < 0.1   # past the usual reheat and still low: warn
+
+
+def test_reheat_habits_need_a_week():
+    h = evening_habits(14)
+    h["reheat"] = daily_reheats(5, 13)["reheat"]
+    f = insights.forecast(h, weekday=1, hour=8.0, minutes_now=12, per_minute=0.15, loss_k_h=0.27, typical=10)
+    assert f.reheat_chance is None and not f.enough       # too little known: warn as before

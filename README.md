@@ -142,8 +142,9 @@ Every day the integration adds the minutes you showered per hour to a profile of
 so a Saturday morning shower is expected on Saturdays only. After a week it compares the shower minutes still
 expected today with what the tank holds now, minus the standing loss until then:
 **Enough for today** turns off and the card shows **EMPTY BY 21:30** when the hot water will not last — in time
-to reheat. It assumes no reheat in between; if your heat pump reheats on its own when the tank runs low, use it
-as advice. *Shower time expected today* gives the minutes and the next likely shower.
+to reheat. It also learns **when your tank is usually reheated** (most heat pumps and boilers reheat on a schedule
+or when the tank runs low): when a reheat is likely before the shortage, there is no warning (attribute
+`reheat_chance`). *Shower time expected today* gives the minutes and the next likely shower.
 
 ### The shower going on now
 
@@ -396,7 +397,8 @@ is published from the changelog.
   local values, but starts a few degrees off.
 - Live updates follow your sensors: with readings every few minutes the countdown runs on its own for up to
   4 minutes between readings.
-- *Enough for today* does not know when your heat pump will reheat on its own; treat it as advice.
+- *Enough for today* learns when the tank is usually reheated, but cannot know about a reheat that is out of the
+  ordinary; treat it as advice.
 - The heat-loss watts assume the tank stands in a room of about 20 °C; the trend (and the alarm) does not depend
   on that. A tank that is never evenly hot (no full reheats) gives no heat-loss measurements.
 - The legionella watch only sees the two sensors; it cannot tell whether the pipes were flushed hot.

@@ -153,6 +153,9 @@ class ShowerTimeManager:
         self.loss_samples: list[dict] = []
         self.drip_nights: list[dict] = []
         self.loss_backfilled = False                # the full history was searched once for heat-loss measurements
+        self.reheat_log: dict[str, list[int]] = {}  # local day -> hours in which a reheat started
+        self.reheat_since: str | None = None        # first day the reheat log is complete from
+        self._last_reheat_start: datetime | None = None
         self.loss: dict = self._loss_status()
         self.legionella_temp = float(cfg.get(CONF_LEGIONELLA_TEMP, DEFAULT_LEGIONELLA_TEMP))
         self.legionella_days = float(cfg.get(CONF_LEGIONELLA_DAYS, DEFAULT_LEGIONELLA_DAYS))
@@ -186,6 +189,8 @@ class ShowerTimeManager:
             self.loss_samples = stored.get("loss_samples") or []
             self.drip_nights = stored.get("drip_nights") or []
             self.loss_backfilled = stored.get("loss_backfilled", False)
+            self.reheat_log = stored.get("reheat_log") or {}
+            self.reheat_since = stored.get("reheat_since")
             self.loss = self._loss_status()
             self.legionella_at = stored.get("legionella_at")
             self.learn_failures = stored.get("learn_failures", 0)
@@ -509,6 +514,47 @@ class ShowerTimeManager:
             changed = True
         if changed:
             self.request_save()
+        self._update_reheat_habits()
+
+    # ------------------------------------------------------------------ reheat habits
+    @callback
+    def _log_reheat(self, now: datetime) -> None:
+        if self._last_reheat_start is not None and now - self._last_reheat_start < timedelta(hours=1):
+            return                                          # one reheat in pieces counts once
+        self._last_reheat_start = now
+        local = dt_util.as_local(now)
+        day = local.date().isoformat()
+        self.reheat_log[day] = sorted(set(self.reheat_log.get(day, [])) | {local.hour})
+        if self.reheat_since is None:
+            self.reheat_since = (local.date() + timedelta(days=1)).isoformat()
+        self._prune_reheat_log()
+        self.request_save()
+
+    def _prune_reheat_log(self) -> None:
+        cutoff = (dt_util.now().date() - timedelta(days=LOG_DAYS + 6)).isoformat()
+        self.reheat_log = {d: h for d, h in self.reheat_log.items() if d >= cutoff}
+
+    @callback
+    def _update_reheat_habits(self) -> None:
+        """Add every completed day since the reheat log is complete to the reheat profile."""
+        if not self.reheat_since:
+            return
+        today = dt_util.now().date()
+        r = self.habits.get("reheat") or {}
+        day = date.fromisoformat(self.reheat_since)
+        if r.get("last_day"):
+            day = max(day, date.fromisoformat(r["last_day"]) + timedelta(days=1))
+        day = max(day, today - timedelta(days=LOG_DAYS + 5))
+        changed = False
+        while day < today:
+            iso = day.isoformat()
+            if not insights.is_incomplete(self.habits, iso):
+                insights.add_reheat_day(self.habits, self.reheat_log.get(iso, []))
+            self.habits.setdefault("reheat", {"days": 0, "hours": [0.0] * 24})["last_day"] = iso
+            day += timedelta(days=1)
+            changed = True
+        if changed:
+            self.request_save()
 
     def forecast(self) -> insights.Forecast | None:
         """Will the hot water last today (without a reheat in between)? None until a week of habits is known."""
@@ -539,6 +585,7 @@ class ShowerTimeManager:
         now = dt_util.now()
         day = now.replace(hour=0, minute=0, second=0, microsecond=0)
         return {"enough": f.enough, "expected_minutes": f.expected_minutes, "available_minutes": f.available_minutes,
+                "reheat_chance": f.reheat_chance,
                 "runs_out_at": (day + timedelta(hours=f.runs_out_at)).isoformat(timespec="minutes")
                 if f.runs_out_at is not None else None,
                 "next_shower_at": (now + timedelta(hours=f.next_shower_at)).replace(second=0, microsecond=0)
@@ -791,6 +838,8 @@ class ShowerTimeManager:
             heating = getattr(self, "_rise_at", None) is not None and (now - self._rise_at).total_seconds() < 1200
         was = getattr(self, "_was_heating", False)
         self._was_heating = heating
+        if heating and not was:
+            self._log_reheat(now)
         if was and not heating:                 # a reheat just finished
             even = self.bottom_value is None or (self.top_value is not None and self.top_value - self.bottom_value <= 2.5)
             if even or m > ref_now:
@@ -955,6 +1004,7 @@ class ShowerTimeManager:
             "full_ref_at": self.full_ref_at, "ledger": self.ledger.to_dict(),
             "habits": self.habits, "loss_samples": self.loss_samples, "drip_nights": self.drip_nights,
             "use_stats": self.use_stats, "loss_backfilled": self.loss_backfilled,
+            "reheat_log": self.reheat_log, "reheat_since": self.reheat_since,
             "legionella_at": self.legionella_at,
             "learn_failures": self.learn_failures, "alive_at": self.alive_at,
         }
@@ -1046,14 +1096,22 @@ class ShowerTimeManager:
     async def _update_heat_loss(self, rows: list[model.Row], end: datetime) -> None:
         """Heat-loss measurements and night drips from the rows just read. The first time (also after an
         update) from all the history there is, so the baseline is there right away."""
-        if not self.loss_backfilled:
+        first = not self.loss_backfilled or self.reheat_since is None
+        if first:
             rows = await self._fetch_rows(end - timedelta(days=HISTORY_DAYS), end)
 
         def local_of(minute: int) -> datetime:
             return dt_util.as_local(datetime.fromtimestamp(minute * 60, timezone.utc))
-        samples, drips = await self.hass.async_add_executor_job(
+        samples, drips, reheats = await self.hass.async_add_executor_job(
             lambda: (insights.loss_samples(rows, volume=self.volume, local_of=local_of),
-                     insights.night_drips(rows, local_of=local_of)))
+                     insights.night_drips(rows, local_of=local_of),
+                     insights.reheat_starts(rows, local_of=local_of)))
+        for day, hours in reheats.items():                  # the reheats the history shows, with the live ones
+            self.reheat_log[day] = sorted(set(self.reheat_log.get(day, [])) | set(hours))
+        if first and rows:
+            self.reheat_since = (local_of(rows[0].minute).date() + timedelta(days=1)).isoformat()
+        self._prune_reheat_log()
+        self._update_reheat_habits()
         self.loss_samples = insights.merge_samples(self.loss_samples, samples)
         self.drip_nights = insights.merge_drips(self.drip_nights, drips)
         self.loss_backfilled = True

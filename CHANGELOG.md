@@ -18,6 +18,9 @@
 - **Language and clock on the card**: times follow the 24/12-hour setting of your Home Assistant profile (an English
   account showed 01:45 PM), and two new card options set them per card: `language` (`en`, `nl`) — e.g. a Dutch wall
   tablet on an English account — and `time_format` (`24`, `12`). Both are in the visual editor
+- **Enough for today knows your reheats**: it learns per hour when the tank is usually reheated (from the history
+  on the first run, then live) and only warns when no reheat is likely before the shortage. Before, a tank that
+  the heat pump reheats every afternoon showed "EMPTY BY 21:30" all morning (new attribute `reheat_chance`)
 - **Enough for today** uses the tank's measured heat loss (W/K, at its current temperature) when it is known
 - **Days with Home Assistant off** (or the tank sensors silent for two hours) are left out of the shower habits
   instead of counting as days without showers
