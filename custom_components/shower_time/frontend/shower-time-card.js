@@ -1,6 +1,6 @@
 /* Hot Water Shower Time card - served by the shower_time integration. */
 (() => {   // own scope: safe if the file is loaded twice as a classic script (legacy frontend + a manual resource)
-const CARD_VERSION = "0.11.2";
+const CARD_VERSION = "0.11.3";
 
 // Plain ES2017 on purpose (no ?. / ??): wall tablets often run an older browser that gets Home Assistant's
 // legacy frontend. "a ?? b" is written as nn(a, b).
@@ -83,7 +83,19 @@ class ShowerTimeCard extends HTMLElement {
     return 1 + (this._show("tank") || this._show("temps") ? 1 : 0) + (this._show("split") ? 1 : 0) +
       (this._show("tiles") ? 1 : 0) + (this._show("history") ? 1 : 0);
   }
-  getGridOptions() { return { columns: 6, min_columns: 4 }; }
+  // Sections views: the height follows the content ("auto"). min_rows keeps a fixed height set in the editor
+  // (grid_options: rows) from cutting the card off, with the next card drawn over it (#7). Heights measured on a
+  // 360 px wide card; a narrow card (half a section or less) wraps more.
+  getGridOptions() {
+    let px = 200;
+    if (this._config) {
+      px += (this._show("tank") || this._show("temps") ? 60 : 0) + (this._show("split") ? 35 : 0) +
+        (this._show("tiles") ? 85 : 0) + (this._show("history") ? 100 : 0) + (this._show("footer") ? 30 : 0);
+      const cols = this._config.grid_options && this._config.grid_options.columns;
+      if (typeof cols === "number" && cols <= 6) px *= 1.25;
+    }
+    return { columns: 6, min_columns: 4, rows: "auto", min_rows: Math.ceil((px + 8) / 64) };
+  }
 
   // Language of the card: its own setting (e.g. a Dutch wall tablet on an English account), else the user's.
   _lang() {

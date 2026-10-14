@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.11.3 — The card keeps its height in sections
+
+**Recommended if the card sits in a sections dashboard with a card below it** — a fixed height on the card let the
+next card draw over it.
+
+### Fixes
+- **A card below no longer covers this one** (#7). A fixed height for the card in a sections view (`grid_options:
+  rows`, for example 1 after resizing it in the editor) cut the card off, and the card below was drawn over it. The
+  card now asks for an automatic height and tells Home Assistant how many rows it needs at least, from the parts
+  it shows (more when it is half a section wide or less), so a smaller height can no longer be set
+
+### After updating
+Update in HACS and restart Home Assistant, then refresh the dashboard. A card with a fixed height grows to what it
+needs; set its height to automatic in the card's *Layout* tab (or remove `rows:` from `grid_options`) to let it
+follow the content exactly.
+
 ## v0.11.2 — Your COP, a better "full again at"
 
 **Recommended if you filled in a COP, or the time until the tank is full looks too long** — a COP filled in was
