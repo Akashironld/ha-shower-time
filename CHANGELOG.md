@@ -31,35 +31,39 @@ dashboard once to load the new card.
 
 ## v0.11.0 — Card in the mobile apps, water meter live, warnings
 
-- **Fix: "Custom element doesn't exist: shower-time-card" in the mobile apps and on tablets** (#4). Since Home
-  Assistant 2026.9 the frontend swaps in a scoped element registry while it starts; a card loaded early from the
-  start page could register before that swap and stay invisible to dashboards (mostly in the apps, whose cache
-  makes the card load early). The card now comes only as a dashboard resource when dashboards are managed in the
-  UI (like every HACS card), and it registers again in the new registry if it was loaded early anyway. Dashboards
-  with resources in YAML keep the start-page module
-- **Water meter followed live**: a steady, shower-like flow (4–16 L/min for two minutes) while heat leaves the tank
-  recognises a shower in about half the time, and the meter's start and stop make the shower length exact. Cold
-  water alone (a toilet, the washing machine) is never a shower. Works with a meter total (L, m³) or a flow
-  sensor (L/min); the water meter option is no longer only for measuring the shower-head flow
-- **Warnings on the card**: a possible dripping tap or leak, raised heat loss, a late legionella heat-up or a tank
-  sensor that is not reporting show as a line under the title, also in compact mode (`show_problems: false` hides
-  them)
-- **Language and clock on the card**: times follow the 24/12-hour setting of your Home Assistant profile (an English
-  account showed 01:45 PM), and two new card options set them per card: `language` (`en`, `nl`) — e.g. a Dutch wall
-  tablet on an English account — and `time_format` (`24`, `12`). Both are in the visual editor
-- **Enough for today knows your reheats**: it learns per hour when the tank is usually reheated (from the history
-  on the first run, then live) and only warns when no reheat is likely before the shortage. Before, a tank that
-  the heat pump reheats every afternoon showed "EMPTY BY 21:30" all morning (new attribute `reheat_chance`)
-- **Enough for today** uses the tank's measured heat loss (W/K, at its current temperature) when it is known
-- **Days with Home Assistant off** (or the tank sensors silent for two hours) are left out of the shower habits
-  instead of counting as days without showers
-- **Fewer entities for a new installation**: *Showers left*, *Hot water*, *Shower temperature*, *Shower time this
-  week*, *Shower time expected today*, *Showers total* and *Shower time total* start switched off (Settings →
-  Entities to switch them on). Existing installations keep them as they are
+**Recommended for everyone** — fixes the card missing in the Home Assistant apps (*Custom element doesn't exist*).
+
+### Fixes
+- **"Custom element doesn't exist: shower-time-card" in the mobile apps and on tablets** (#4). Since Home Assistant
+  2026.9 the frontend swaps in a new element registry while it starts, and a card loaded too early stayed
+  invisible. The card is now a dashboard resource when dashboards are managed in the UI (like every HACS card),
+  and registers again if it was loaded early anyway. Dashboards with resources in YAML keep working as before
+- **Enough for today knows your reheats:** it learns per hour when the tank is usually reheated and only warns when
+  no reheat is likely before the shortage. Before, a tank reheated every afternoon showed "EMPTY BY 21:30" all
+  morning (new attribute `reheat_chance`)
+- **Days with Home Assistant off** (or the tank sensors silent for two hours) no longer count as days without
+  showers
 - The dashboard resource is left alone when it is up to date (it was rewritten on every start)
-- **New logo**: a glossy hot-and-cold tank with a shower head, in Home Assistant, HACS and the README
-- Development: tests that run the integration inside a real test Home Assistant, Dependabot for the test Home
-  Assistant and the CI actions, and releases published automatically from this changelog when a tag is pushed
+
+### Improvements
+- **Water meter followed live:** a steady, shower-like flow (4–16 L/min for two minutes) recognises a shower in about
+  half the time, and the meter's start and stop make the shower length exact. Cold water alone (a toilet, the
+  washing machine) is never a shower. Works with a meter total (L, m³) or a flow sensor (L/min)
+- **Warnings on the card:** a possible dripping tap or leak, raised heat loss, a late legionella heat-up or a tank
+  sensor that is not reporting show as a line under the title (`show_problems: false` hides them)
+- **Language and clock on the card:** times follow the 24/12-hour setting of your profile, and two new card options
+  set them per card — `language` (`en`, `nl`) and `time_format` (`24`, `12`), also in the visual editor
+- **Enough for today** uses the tank's measured heat loss when it is known
+- **Fewer entities for a new installation:** *Showers left*, *Hot water*, *Shower temperature*, *Shower time this
+  week*, *Shower time expected today*, *Showers total* and *Shower time total* start switched off (Settings →
+  Entities). Existing installations keep them as they are
+- **New logo:** a glossy hot-and-cold tank with a shower head, in Home Assistant, HACS and the README
+- Development: tests that run the integration inside a real test Home Assistant, Dependabot, and releases
+  published automatically from this changelog
+
+### After updating
+Update in HACS and restart Home Assistant. If the card was missing in the app: close the app fully and open it
+again (or clear its cache) once.
 
 ## v0.10.1
 
