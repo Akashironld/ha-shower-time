@@ -18,6 +18,7 @@ const T = {
         e_entity: "Sensor", e_title: "Title", e_compact: "Compact (e.g. a wall tablet)", e_tank: "Tank",
         e_temps: "Temperatures", e_split: "Since reheat", e_tiles: "Today / last shower / standing loss",
         e_history: "Last 24 hours", e_footer: "Footer (flow, cold water, COP)", e_problems: "Warnings (leak, legionella)",
+        e_language: "Language", e_time_format: "Time format", e_auto: "Like Home Assistant",
         p_leak: "Possible dripping hot tap or leak", p_heat_loss: "The tank loses more heat than it used to",
         p_legionella: "No legionella heat-up for {days} days", p_legionella_never: "No legionella heat-up seen",
         p_sensor: "A tank sensor is not reporting" },
@@ -32,6 +33,7 @@ const T = {
         e_entity: "Sensor", e_title: "Titel", e_compact: "Compact (bijv. een wandtablet)", e_tank: "Vat",
         e_temps: "Temperaturen", e_split: "Sinds opwarmen", e_tiles: "Vandaag / laatste douche / afkoeling",
         e_history: "Laatste 24 uur", e_footer: "Onderregel (debiet, koud water, COP)", e_problems: "Waarschuwingen (lek, legionella)",
+        e_language: "Taal", e_time_format: "Tijdnotatie", e_auto: "Zoals Home Assistant",
         p_leak: "Mogelijk druppelende warmwaterkraan of lek", p_heat_loss: "Het vat verliest meer warmte dan vroeger",
         p_legionella: "Al {days} dagen geen legionella-opwarming", p_legionella_never: "Geen legionella-opwarming gezien",
         p_sensor: "Een vatsensor geeft geen waarde" },
@@ -83,8 +85,33 @@ class ShowerTimeCard extends HTMLElement {
   }
   getGridOptions() { return { columns: 6, min_columns: 4 }; }
 
+  // Language of the card: its own setting (e.g. a Dutch wall tablet on an English account), else the user's.
+  _lang() {
+    const own = this._config && this._config.language;
+    return own && T[own] ? own : lang2(this._hass);
+  }
+
+  // Locale for numbers and dates: the user's, unless the card is set to another language.
+  _locale() {
+    const user = (this._hass && ((this._hass.locale && this._hass.locale.language) || this._hass.language)) || undefined;
+    const own = this._config && this._config.language;
+    if (own && T[own]) return user && user.slice(0, 2) === own ? user : own;
+    return user;
+  }
+
+  // Clock times: 24 or 12 hours from the card's setting, else the user's profile (Profile -> Time format).
+  _time(date) {
+    const opts = { hour: "2-digit", minute: "2-digit" };
+    const own = this._config && this._config.time_format;
+    const profile = this._hass && this._hass.locale && this._hass.locale.time_format;
+    const choice = own === "24" || own === "12" ? own : profile;
+    if (choice === "24") opts.hour12 = false;
+    if (choice === "12") opts.hour12 = true;
+    return date.toLocaleTimeString(choice === "system" ? undefined : this._locale(), opts);
+  }
+
   _t(k) {
-    return (T[lang2(this._hass)] || T.en)[k];
+    return (T[this._lang()] || T.en)[k];
   }
 
   async _maybeFetchHistory() {
@@ -220,8 +247,8 @@ class ShowerTimeCard extends HTMLElement {
     const s = a.since_reheat;
     if (!s || !s.reference_minutes) return "";
     const tot = s.reference_minutes, p = (v) => Math.max(0, Math.min(100, (v / tot) * 100));
-    const lang = (this._hass.locale && this._hass.locale.language) || undefined;
-    const t = new Date(s.since).toLocaleTimeString(lang, { hour: "2-digit", minute: "2-digit" });
+    const lang = this._locale();
+    const t = this._time(new Date(s.since));
     const day = new Date(s.since).toDateString() === new Date().toDateString() ? "" :
       `${new Date(s.since).toLocaleDateString(lang, { weekday: "short" })} `;
     return `<div class="split">
@@ -242,7 +269,7 @@ class ShowerTimeCard extends HTMLElement {
       const when = new Date(a.last.start);
       const day = when.toDateString() === new Date().toDateString() ? "" : `${when.toLocaleDateString(lang, { weekday: "short" })} `;
       last = `<div class="tv">${Math.round(a.last.minutes)} ${this._t("min")}${this._money(a.last.cost, a, lang) ? ` \u00b7 ${this._money(a.last.cost, a, lang)}` : ""}</div>
-        <div class="ts">${day}${when.toLocaleTimeString(lang, { hour: "2-digit", minute: "2-digit" })}</div>`;
+        <div class="ts">${day}${this._time(when)}</div>`;
     }
     const loss = a.standing_loss_per_day;
     const cool = loss ? `<div class="tile">
@@ -278,12 +305,12 @@ class ShowerTimeCard extends HTMLElement {
       return;
     }
     const a = st.attributes, m = parseFloat(st.state);
-    const lang = (hass.locale && hass.locale.language) || hass.language || undefined;
+    const lang = this._locale();
     const typical = a.typical_shower_minutes || 10;
     const low = nn(a.low_threshold, 10);
     const color = m < low ? "var(--error-color, #e5484d)" : (m < 2 * typical ? "var(--warning-color, #f5a524)" : "var(--success-color, #30a46c)");
     const pct = nn(a.fill_percent, a.full_reference_minutes ? Math.round((m / a.full_reference_minutes) * 100) : null);
-    const hhmm = (iso) => iso ? new Date(iso).toLocaleTimeString(lang, { hour: "2-digit", minute: "2-digit" }) : null;
+    const hhmm = (iso) => iso ? this._time(new Date(iso)) : null;
     const fullAt = hhmm(a.reheat_full_at);
     const pill = a.reheating ? `<span class="pill heat"><ha-icon icon="mdi:fire"></ha-icon>${this._t("reheating")}${fullAt ? ` \u00b7 ${this._t("fullat")} ${fullAt}` : ""}</span>`
       : (m < low ? `<span class="pill low"><ha-icon icon="mdi:alert"></ha-icon>${this._t("low")}</span>`
@@ -328,7 +355,7 @@ class ShowerTimeCard extends HTMLElement {
     if (!wrap || !d) return;
     const svg = wrap.querySelector(".spark"), cur = wrap.querySelector(".cursor"),
       dot = wrap.querySelector(".dot"), tip = wrap.querySelector(".tip");
-    const lang = (this._hass.locale && this._hass.locale.language) || this._hass.language || undefined;
+    const lang = this._locale();
     const valueAt = (t) => {                     // step series: the last point at or before t
       let v = null;
       for (const p of d.series) { if (p[0] <= t) v = p[1]; else break; }
@@ -345,7 +372,7 @@ class ShowerTimeCard extends HTMLElement {
       const day = when.toDateString() === today.toDateString() ? "" :
         (new Date(today.getTime() - 86400000).toDateString() === when.toDateString() ? this._t("yesterday") + " " :
           when.toLocaleDateString(lang, { weekday: "short" }) + " ");
-      tip.textContent = `${day}${when.toLocaleTimeString(lang, { hour: "2-digit", minute: "2-digit" })} \u00b7 ${Math.round(v)} ${this._t("min")}`;
+      tip.textContent = `${day}${this._time(when)} \u00b7 ${Math.round(v)} ${this._t("min")}`;
       cur.style.left = `${px}px`; dot.style.left = `${px}px`; dot.style.top = `${py}px`;
       dot.style.background = d.color;
       wrap.classList.add("on");
@@ -445,6 +472,8 @@ class ShowerTimeCardEditor extends HTMLElement {
     else SECTIONS.forEach((p) => { if (v["show_" + p] === showDefault(v, p)) delete v["show_" + p]; });
     if (!v.compact) delete v.compact;
     if (!v.title) delete v.title;
+    if (!v.language || v.language === "auto") delete v.language;
+    if (!v.time_format || v.time_format === "auto") delete v.time_format;
     this._config = v;
     this.dispatchEvent(new CustomEvent("config-changed", { detail: { config: v }, bubbles: true, composed: true }));
   }
@@ -458,7 +487,8 @@ class ShowerTimeCardEditor extends HTMLElement {
       this._form.addEventListener("value-changed", (ev) => this._changed(ev.detail.value));
       this.appendChild(this._form);
     }
-    const data = Object.assign({}, this._config, { compact: !!this._config.compact });
+    const data = Object.assign({}, this._config, { compact: !!this._config.compact,
+      language: this._config.language || "auto", time_format: this._config.time_format || "auto" });
     SECTIONS.forEach((p) => { data["show_" + p] = shows(this._config, p); });
     this._form.hass = this._hass;
     this._form.data = data;
@@ -466,6 +496,11 @@ class ShowerTimeCardEditor extends HTMLElement {
       { name: "entity", required: true, selector: { entity: { filter: { integration: "shower_time", domain: "sensor" } } } },
       { name: "title", selector: { text: {} } },
       { name: "compact", selector: { boolean: {} } },
+      { type: "grid", name: "", schema: [
+        { name: "language", selector: { select: { mode: "dropdown", options: [
+          { value: "auto", label: t.e_auto }, { value: "en", label: "English" }, { value: "nl", label: "Nederlands" }] } } },
+        { name: "time_format", selector: { select: { mode: "dropdown", options: [
+          { value: "auto", label: t.e_auto }, { value: "24", label: "24h (13:45)" }, { value: "12", label: "12h (1:45 PM)" }] } } }] },
       { type: "grid", name: "", schema: SECTIONS.map((p) => ({ name: "show_" + p, selector: { boolean: {} } })) },
     ];
   }

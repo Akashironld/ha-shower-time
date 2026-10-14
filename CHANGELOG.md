@@ -15,6 +15,9 @@
 - **Warnings on the card**: a possible dripping tap or leak, raised heat loss, a late legionella heat-up or a tank
   sensor that is not reporting show as a line under the title, also in compact mode (`show_problems: false` hides
   them)
+- **Language and clock on the card**: times follow the 24/12-hour setting of your Home Assistant profile (an English
+  account showed 01:45 PM), and two new card options set them per card: `language` (`en`, `nl`) — e.g. a Dutch wall
+  tablet on an English account — and `time_format` (`24`, `12`). Both are in the visual editor
 - **Enough for today** uses the tank's measured heat loss (W/K, at its current temperature) when it is known
 - **Days with Home Assistant off** (or the tank sensors silent for two hours) are left out of the shower habits
   instead of counting as days without showers

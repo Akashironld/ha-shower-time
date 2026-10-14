@@ -304,6 +304,8 @@ Every part can be switched off, in the visual editor or in YAML:
 | `show_tiles` | tiles *Today*, *Last shower*, *Standing loss* | `true` |
 | `show_history` | last 24 hours (hover or touch to read values) | `true` |
 | `show_footer` | bottom line: flow, cold water, COP | `true` |
+| `language` | `en` or `nl`: the card's language, e.g. a Dutch wall tablet on an English account | your Home Assistant language |
+| `time_format` | `24` or `12`: the clock in the card | your profile's time format |
 | `show_problems` | warnings: possible leak, raised heat loss, late legionella heat-up, silent sensor (also in compact) | `true` |
 
 A `show_…` option you set yourself always wins, so you can start from `compact` and add a part back:
