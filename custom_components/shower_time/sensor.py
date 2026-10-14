@@ -43,7 +43,7 @@ class MinutesSensor(ShowerTimeEntity, SensorEntity):
         "typical_shower_minutes", "full_tank_minutes", "full_reference_minutes", "full_reference_at", "hot_fraction",
         "tank_average", "cold_water_source", "outdoor_average", "flow", "shower_temperature_mode", "head_flow_source",
         "today_showers", "today_minutes", "today_cost", "today_electricity_kwh", "week_showers", "week_minutes",
-        "week_cost", "last", "currency", "hot_water_price_per_kwh", "cop", "since_reheat", "standing_loss_per_day",
+        "week_cost", "last", "currency", "hot_water_price_per_kwh", "cop", "cop_heat_pump", "cop_source", "since_reheat", "standing_loss_per_day",
         "reheat_full_at", "reheat_one_shower_at", "live_countdown", "low_threshold", "current_shower",
         "hot_water_use", "other_today", "forecast", "learned_at", "observations"})
 
@@ -86,6 +86,7 @@ class MinutesSensor(ShowerTimeEntity, SensorEntity):
             "currency": m.ledger.currency or None,
             "hot_water_price_per_kwh": round(m.ledger.tank_price, 3) if m.ledger.tank_price is not None else None,
             "cop": m.ledger.cop(m),
+            "cop_heat_pump": m.ledger.cop_heat_pump(m)[0], "cop_source": m.ledger.cop_heat_pump(m)[1],
             "since_reheat": m.since_reheat(),
             "standing_loss_per_day": m.standing_loss_per_day(),
             "reheat_full_at": m.ledger.eta_full.isoformat(timespec="minutes") if m.ledger.eta_full else None,

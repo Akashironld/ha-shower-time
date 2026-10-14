@@ -111,7 +111,9 @@ class ShowerTimeManager:
         self.outdoor: str | None = cfg.get(CONF_OUTDOOR) or None
         self.price: str | None = cfg.get(CONF_PRICE) or None
         self.elec: str | None = cfg.get(CONF_ELEC) or None
-        self.cop_manual: float = float(cfg.get(CONF_COP) or DEFAULT_COP)
+        # a COP filled in is always used; empty (or the old default 2.5 that the form used to fill in) = learn it
+        cop = float(cfg.get(CONF_COP) or 0)
+        self.cop_manual: float | None = cop if cop and cop != DEFAULT_COP else None
         self.ledger = ShowerLedger()
         self._ema_by_day: dict[str, float] = {}       # local date -> outdoor running average
         self.ema_now: float | None = None

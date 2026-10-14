@@ -54,7 +54,7 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: ShowerT
         },
         "learned": {"params": m.params, "processed_until_minute": m.processed_until, "last_learn": m.last_learn,
                     "last_samples": m.last_samples, "last_cycle": asdict(m.last_cycle) if m.last_cycle else None},
-        "ledger": {"cop": m.ledger.cop(m), "cop_learned": m.ledger.cop_learned, "tank_price": m.ledger.tank_price,
+        "ledger": {"cop": m.ledger.cop(m), "cop_heat_pump": m.ledger.cop_heat_pump(m), "tank_price": m.ledger.tank_price,
                    "currency": m.ledger.currency, "summary": m.ledger.summary(), "log": m.ledger.log[-30:],
                    "totals": m.ledger.totals, "covered_from": m.ledger.covered_from},
         "habits": m.habits,

@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.11.2 — Your COP, a better "full again at"
+
+**Recommended if you filled in a COP, or the time until the tank is full looks too long** — a COP filled in was
+ignored once it could be learned, and "full again at" ran more than 10 minutes late on a steady reheat.
+
+### Fixes
+- **A COP you fill in is now always used.** It was only a fallback, so with heat and electricity meters a learned
+  value replaced it (reported on Tweakers: 3 filled in, 2.2 shown). Leave the field empty to learn it; the 2.5 the
+  form used to fill in by itself counts as empty
+- **The card shows the heat pump's own COP**, as its app shows it. It showed the COP per kWh that reaches the tank,
+  which is lower when the heat meter counts more than arrives (pipes, coil — on a Weheat about a third). The costs
+  still use that tank COP, now also for a COP you fill in (new attributes `cop_heat_pump`, `cop_source`)
+- **"Full again at" follows the reheat going on now.** After 20 minutes it uses the pace this reheat shows instead
+  of the learned average, which also holds slow and boosted reheats. It counts towards the usual tank average
+  after a complete reheat (the median, so the weekly legionella heat-up does not push it up), not towards the top
+  temperature
+
+### After updating
+Update in HACS and restart Home Assistant. Filled in a COP before? Check it under Settings → Devices & services →
+Hot Water Shower Time → Configure; empty it to let it be learned.
+
 ## v0.11.1 — A bath is not a shower, top-ups on the card
 
 **Recommended if you fill a bath, or use a bathroom signal or a water meter** — a bath could be counted as a

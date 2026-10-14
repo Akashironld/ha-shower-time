@@ -125,3 +125,49 @@ async def test_a_top_up_keeps_since_reheat_and_a_full_reheat_starts_it_again(has
     reheat(0.5 * ref, 0.95 * ref, 55.0, 54.0)            # back to full
     assert m.full_ref_at != since and m.top_ups == []
     assert m.since_reheat()["last_top_up_at"] is None
+
+
+async def test_full_again_follows_the_pace_of_this_reheat(hass: HomeAssistant, entry, freezer) -> None:
+    """A steady reheat that runs faster than the learned average: after 20 minutes its own pace counts."""
+    from types import SimpleNamespace
+    m = entry.runtime_data
+    m.params["reheat_rate"] = {"v": 0.2, "n": 10}
+    m.params["full_avg"] = 54.0
+    est = lambda avg: SimpleNamespace(average=avg, empty_at=30.0, per_minute=0.6)
+    avg = 34.0
+    m.ledger._forecast(m, est(avg), True)                     # the reheat starts: only the learned pace is known
+    first = (m.ledger.eta_full - dt_util.now()).total_seconds() / 60
+    assert abs(first - (54.0 - avg) / 0.2) < 0.5
+    for _ in range(20):                                       # 0.4 K/min, twice the learned pace
+        freezer.tick(timedelta(minutes=1))
+        avg += 0.4
+        m.ledger._forecast(m, est(avg), True)
+    left = (m.ledger.eta_full - dt_util.now()).total_seconds() / 60
+    assert abs(left - (54.0 - avg) / 0.4) < 0.5
+    m.ledger._forecast(m, est(avg), False)                    # done: no forecast, the next reheat starts fresh
+    assert m.ledger.eta_full is None and m.ledger._heat_start is None
+
+
+async def test_a_cop_filled_in_is_used_and_the_old_default_means_learn(hass: HomeAssistant, deps) -> None:
+    entry = await setup_entry(hass, {"cop": 3.0})
+    m = entry.runtime_data
+    m.ledger.cop_learned = 2.4
+    assert m.ledger.cop_heat_pump(m) == (3.0, "manual")
+    assert m.ledger.cop(m) == round(3.0 / m.params["veff_factor"]["v"], 2)
+    assert hass.states.get("sensor.hot_water_shower_time").attributes["cop_source"] in ("manual", "default")
+    entry2 = await setup_entry_named(hass, {"cop": 2.5})
+    m2 = entry2.runtime_data
+    m2.ledger.cop_learned = 2.4
+    assert m2.ledger.cop_heat_pump(m2) == (2.4, "learned")
+
+
+async def setup_entry_named(hass: HomeAssistant, options: dict):
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+    hass.states.async_set("sensor.other_top", "55", {"unit_of_measurement": "°C", "device_class": "temperature"})
+    e = MockConfigEntry(domain="shower_time", title="Other", unique_id="sensor.other_top",
+                        data={"top_sensor": "sensor.other_top", "tank_volume": 150, "temperature_mode": "auto",
+                              "profile": "generic", "flow_source": "unknown"}, options=options)
+    e.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(e.entry_id)
+    await hass.async_block_till_done()
+    return e

@@ -455,6 +455,12 @@ def learn(params: dict, rows: list[Row], *, volume: float, shower_temp: float, s
     if tops:
         usual = statistics.median(tops)
         p["full_temp"] = round(usual if p.get("full_temp") is None else 0.8 * p["full_temp"] + 0.2 * usual, 1)
+        # the tank average a complete reheat ends at (what "full again at" counts towards); the median leaves
+        # out the odd hotter legionella heat-up
+        avgs = [tank_average(p, c.top_after, c.bottom_after) for c in cycles if full(c) and c.bottom_after is not None]
+        if avgs:
+            usual = statistics.median(avgs)
+            p["full_avg"] = round(usual if p.get("full_avg") is None else 0.8 * p["full_avg"] + 0.2 * usual, 1)
 
     last = next((c for c in reversed(cycles) if full(c)), previous_cycle)
     counts = {k: (len(v) if isinstance(v, list) else len(v)) for k, v in s.items()}

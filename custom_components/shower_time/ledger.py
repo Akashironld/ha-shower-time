@@ -16,7 +16,7 @@ from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.util import dt as dt_util
 
 from . import insights, model
-from .const import LOG_DAYS, MAX_SHOWER_MINUTES, MIN_SHOWER_MINUTES
+from .const import DEFAULT_COP, LOG_DAYS, MAX_SHOWER_MINUTES, MIN_SHOWER_MINUTES
 
 if TYPE_CHECKING:
     from .manager import ShowerTimeManager
@@ -53,6 +53,7 @@ class ShowerLedger:
         self.backfilled = False
         self.session_start: datetime | None = None
         self._avg_prev: float | None = None
+        self._heat_start: tuple[datetime, float] | None = None   # when the reheat going on now began, tank average
         self.eta_full: datetime | None = None
         self.eta_one: datetime | None = None
         # running totals for Home Assistant's long-term statistics (showers logged live, never reset)
@@ -63,7 +64,7 @@ class ShowerLedger:
     # ------------------------------------------------------------------ persistence
     def to_dict(self) -> dict:
         return {"log": self.log, "tank_price": self.tank_price, "currency": self.currency,
-                "cop_learned": self.cop_learned, "backfilled": self.backfilled, "totals": self.totals,
+                "cop_heat_pump": self.cop_learned, "backfilled": self.backfilled, "totals": self.totals,
                 "covered_from": self.covered_from, "other": self.other}
 
     def load(self, d: dict | None) -> None:
@@ -72,7 +73,7 @@ class ShowerLedger:
         self.log = d.get("log", [])
         self.tank_price = d.get("tank_price")
         self.currency = d.get("currency", "")
-        self.cop_learned = d.get("cop_learned")
+        self.cop_learned = d.get("cop_heat_pump")     # (before 0.11.2 "cop_learned" held the tank COP)
         self.backfilled = d.get("backfilled", False)
         self.totals.update(d.get("totals") or {})
         self.covered_from = d.get("covered_from")
@@ -82,8 +83,20 @@ class ShowerLedger:
             self.covered_from = (first + timedelta(days=1)).isoformat()
 
     # ------------------------------------------------------------------ COP and price
+    def cop_heat_pump(self, m: ShowerTimeManager) -> tuple[float, str]:
+        """The heat pump's COP for hot water as its own meters (and app) see it, and where it comes from: filled
+        in by the user, learned from the heat and electricity meters, or the default."""
+        if m.cop_manual:
+            return m.cop_manual, "manual"
+        if self.cop_learned:
+            return self.cop_learned, "learned"
+        return DEFAULT_COP, "default"
+
     def cop(self, m: ShowerTimeManager) -> float:
-        return self.cop_learned or m.cop_manual
+        """COP per kWh of heat that reaches the tank: many heat pumps' heat meters count more than arrives (pipes,
+        coil); the model learned that ratio (veff_factor). This is what the cost of hot water is computed with."""
+        veff = m.params["veff_factor"]["v"]
+        return round(self.cop_heat_pump(m)[0] / (veff if veff > 0 else 1.0), 2)
 
     def price_now(self, m: ShowerTimeManager) -> tuple[float | None, str]:
         if not m.price:
@@ -91,10 +104,8 @@ class ShowerLedger:
         return parse_price(m.hass.states.get(m.price))
 
     async def async_refresh_cop(self, m: ShowerTimeManager) -> None:
-        """COP for hot water from the heat and electricity meters over 30 days.
-
-        The heat meter of many heat pumps reports more heat than reaches the tank (piping, coil); the model
-        learned that ratio (veff_factor), so the COP is expressed per kWh of heat actually in the tank."""
+        """The heat pump's COP for hot water from its heat and electricity meters over 30 days (as its app shows
+        it; ``cop`` turns it into a COP per kWh in the tank)."""
         if not (m.elec and m.energy):
             return
         end = dt_util.utcnow()
@@ -106,7 +117,7 @@ class ShowerLedger:
             heat = sum(float(r.get("change") or 0) for r in stats.get(m.energy, []))
             elec = sum(float(r.get("change") or 0) for r in stats.get(m.elec, []))
             if elec > 3 and heat > elec:
-                self.cop_learned = round(heat / elec / m.params["veff_factor"]["v"], 2)
+                self.cop_learned = round(heat / elec, 2)
         except Exception:  # noqa: BLE001
             _LOGGER.exception("Could not compute the hot water COP")
 
@@ -132,16 +143,34 @@ class ShowerLedger:
         self._forecast(m, est, heating)
 
     def _forecast(self, m: ShowerTimeManager, est: model.Estimate, heating: bool) -> None:
+        """When the tank is full again, and when it holds one shower, while a reheat runs.
+
+        The pace is the one this reheat shows, once it has run a while (a steady heat pump keeps its pace; the
+        learned average also holds slow and boosted reheats), blended with the learned pace in its first 20
+        minutes. The target is the usual tank average after a complete reheat."""
         self.eta_full = self.eta_one = None
-        rate = m.params["reheat_rate"]
-        if not heating or rate["n"] < 2 or rate["v"] <= 0:
-            return
         now = dt_util.now()
-        target = m.params.get("full_temp") or m.full_ref_avg
+        if not heating:
+            self._heat_start = None
+            return
+        if self._heat_start is None:
+            self._heat_start = (now, est.average)
+        rate = m.params["reheat_rate"]
+        learned = rate["v"] if rate["n"] >= 2 and rate["v"] > 0 else None
+        start, avg0 = self._heat_start
+        minutes = (now - start).total_seconds() / 60
+        live = (est.average - avg0) / minutes if minutes >= 8 and est.average > avg0 + 1 else None
+        if live is None and learned is None:
+            return
+        w = 1.0 if learned is None else (0.0 if live is None else min(1.0, minutes / 20))
+        pace = w * (live or 0.0) + (1 - w) * (learned or 0.0)
+        if pace <= 0:
+            return
+        target = m.params.get("full_avg") or (m.params["full_temp"] - 1.0 if m.params.get("full_temp") else m.full_ref_avg)
         if target and target > est.average:
-            self.eta_full = now + timedelta(minutes=(target - est.average) / rate["v"])
+            self.eta_full = now + timedelta(minutes=(target - est.average) / pace)
         need = est.empty_at + m.params["duration"]["v"] * est.per_minute
-        self.eta_one = now if est.average >= need else now + timedelta(minutes=(need - est.average) / rate["v"])
+        self.eta_one = now if est.average >= need else now + timedelta(minutes=(need - est.average) / pace)
 
     def shower_ended(self, m: ShowerTimeManager, start: datetime, end: datetime,
                      est: model.Estimate | None, min_minutes: float = MIN_SHOWER_MINUTES) -> dict | None:

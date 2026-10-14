@@ -1,6 +1,6 @@
 /* Hot Water Shower Time card - served by the shower_time integration. */
 (() => {   // own scope: safe if the file is loaded twice as a classic script (legacy frontend + a manual resource)
-const CARD_VERSION = "0.11.1";
+const CARD_VERSION = "0.11.2";
 
 // Plain ES2017 on purpose (no ?. / ??): wall tablets often run an older browser that gets Home Assistant's
 // legacy frontend. "a ?? b" is written as nn(a, b).
@@ -348,7 +348,7 @@ class ShowerTimeCard extends HTMLElement {
         </div>
         ${this._show("tiles") ? this._tiles(a, lang) : ""}
         ${this._show("history") ? `<div class="hist"><div class="hh"><span>${this._t("last24")}</span><span class="pk"></span></div>${this._sparkline(300, 52, color)}</div>` : ""}
-        ${this._show("footer") ? `<div class="foot">${this._flow(a.flow)}${sensed} \u00b7 ${this._t("cold")} \u2248 ${fmt(this._deg(a.cold_water))}\u00b0 \u00b7 ${this._t("cop")} ${fmt(a.cop, 1)}</div>` : ""}`;
+        ${this._show("footer") ? `<div class="foot">${this._flow(a.flow)}${sensed} \u00b7 ${this._t("cold")} \u2248 ${fmt(this._deg(a.cold_water))}\u00b0 \u00b7 ${this._t("cop")} ${fmt(a.cop_heat_pump != null ? a.cop_heat_pump : a.cop, 1)}</div>` : ""}`;
     const pk = this.shadowRoot.querySelector(".pk");
     if (pk && this._peak !== null && this._peak !== undefined) pk.textContent = `${this._t("max")} ${fmt(this._peak)} ${this._t("min")}`;
     this._bindHover();
