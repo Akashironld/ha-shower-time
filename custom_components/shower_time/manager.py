@@ -432,7 +432,15 @@ class ShowerTimeManager:
         return bool(self.bath_signal and self.bath_signal.active(dt_util.utcnow().timestamp() / 60))
 
     def water_active(self) -> bool:
-        return bool(self.water_signal and self.water_signal.active(dt_util.utcnow().timestamp() / 60))
+        return bool(self.water_signal and self.water_signal.active(dt_util.utcnow().timestamp() / 60)
+                    and not self.fast_flow())
+
+    def fast_flow(self) -> bool:
+        """The water meter shows far more than the shower head gives (a bath tap): not a shower."""
+        if self.water_signal is None or not self.water_signal.flowing(dt_util.utcnow().timestamp() / 60):
+            return False
+        head = self.head_flow()[0]
+        return bool(head) and self.water_signal.flow >= insights.FAST_FLOW_FACTOR * head
 
     def signal_active(self) -> bool:
         """Something besides the tank says a shower is going on: the bathroom, or a steady flow of water."""
@@ -477,7 +485,8 @@ class ShowerTimeManager:
                 self.ledger.session_start = began           # the water was running before the tank showed it
                 self.use.start = self.water_signal.rose_at
         if self.use.update(dt_util.utcnow().timestamp() / 60, self.estimate.average, self.signal_active(),
-                           self.confirm_k(), top=self.top_value, bottom=self.bottom_value, cold=self.estimate.cold):
+                           self.confirm_k(), top=self.top_value, bottom=self.bottom_value, cold=self.estimate.cold,
+                           fill_rate=insights.fill_rate(self.estimate.per_minute), fast_flow=self.fast_flow()):
             self._fire("shower_started", {"started": dt_util.as_local(self.ledger.session_start).isoformat(timespec="seconds"),
                                           "confirmed_after_minutes": self.use.confirmed_after,
                                           "bathroom_signal": self.use.bath_seen,
@@ -879,8 +888,11 @@ class ShowerTimeManager:
         # drop is cooling. One minute of showering takes about one minute off the estimate.
         key = dt_util.as_local(since).isoformat(timespec="minutes")
         logged = sum(x["minutes"] for x in self.ledger.log if x["start"] >= key)
-        if self.showering and self.ledger.session_start and self.use_kind() != "coil":
+        kind = self.use_kind()
+        if kind == "shower" and self.ledger.session_start:
             logged += max(0.0, (dt_util.utcnow() - self.ledger.session_start).total_seconds() / 60)
+        elif kind not in (None, "coil") and e.per_minute > 0:
+            logged += self.use.drawn / e.per_minute     # a bath or tap running now: the heat it took so far
         # other hot water (washing up, taps) is use too, not cooling: its heat in shower minutes
         per_min_kwh = e.per_minute * self.volume * model.CP
         if per_min_kwh > 0:
@@ -1072,12 +1084,13 @@ class ShowerTimeManager:
             return self._ema_on(dt_util.as_local(datetime.fromtimestamp(minute * 60, timezone.utc)).date().isoformat())
 
         confirm_k = self.confirm_k()
+        fill_rate = insights.fill_rate(self.estimate.per_minute if self.estimate else None)
 
         def draw_kind(d: model.Draw) -> str:            # only real showers teach shower length and flow
             local = dt_util.as_local(datetime.fromtimestamp(d.start * 60, timezone.utc))
             cold = model.cold_for(self.params, local.month, local.timetuple().tm_yday,
                                   ema_of(d.start) if self.outdoor else None)
-            return insights.draw_kind(self.params, rows, d.start, d.minutes, cold, confirm_k)
+            return insights.draw_kind(self.params, rows, d.start, d.minutes, cold, confirm_k, fill_rate)
 
         result, last = await self.hass.async_add_executor_job(
             lambda: model.learn(self.params, rows, volume=self.volume, shower_temp=self.shower_temp,

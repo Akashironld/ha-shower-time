@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.11.1 — A bath is not a shower
+
+- **Fix: filling a bath could count as a shower, and the rest of its heat as "cooled"** (reported on Tweakers). With
+  a bathroom signal or a water meter a bath was taken for a shower within a minute, and a shower is counted in
+  minutes: a bath tap runs about twice a shower head's flow, so half of its heat showed up as *cooled* in *Since
+  reheat*. A use that empties the tank at twice this tank's shower pace is now a bath or bucket being filled, also
+  when it looked like a shower at first; it is logged as *Other hot water* with the heat it really took
+- **Water meter**: a flow far above the shower head's (1.6 times or more, when the head flow is known) is a bath
+  tap and no longer counts as a shower signal
+- The bath test is now relative to this tank's shower pace instead of a fixed rate, so a normal shower in a small
+  tank (80–120 L) is no longer taken for a fill
+- *Since reheat* counts a bath or tap that is still running by the heat it has taken so far
+- Baths and other fills found in the history no longer teach the shower length, flow or shower-head flow
+
 ## v0.11.0 — Card in the mobile apps, water meter live, warnings
 
 - **Fix: "Custom element doesn't exist: shower-time-card" in the mobile apps and on tablets** (#4). Since Home

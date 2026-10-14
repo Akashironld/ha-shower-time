@@ -222,6 +222,8 @@ SHOWER_CONFIRM_K = 1.8        # tank average drop that makes a use a shower (unt
 BATH_CONFIRM_K = 0.6          # with a bathroom signal a much smaller drop is enough
 FILL_RATE = 1.2               # K/min, far faster than any shower: a bath or bucket filled with hot water only
 FILL_MIN_K = 2.0
+FILL_FACTOR = 2.0             # ... or twice the pace of a shower in this tank, once that is known (a bath tap runs
+                              # about twice a shower head's flow; real showers peak at 1.7 times)
 COIL_TOP_DROP = 1.0           # K the top falls while the bottom is still warm (or falls less) = no water drawn
 COIL_BOTTOM_ABOVE_COLD = 15.0
 BATH_SIGNAL_MINUTES = 10      # a bathroom signal this long before or during the use counts
@@ -230,6 +232,11 @@ POWER_RISE = 1.0              # W above the usual (median) power of the last day
 FALL_START = 0.3              # K/min the tank must fall between two readings to start a use ...
 FALL_START_BATH = 0.15        # ... or this much when the bathroom signal is on (a full, hot tank responds slowly)
 FALL_CONTINUE = 0.1           # K/min that keeps a running use going (the end of a shower falls more slowly)
+
+
+def fill_rate(per_minute: float | None) -> float:
+    """Tank average fall (K/min) from which hot water is a bath or bucket being filled, not a shower."""
+    return FILL_FACTOR * per_minute if per_minute and per_minute > 0 else FILL_RATE
 
 
 @dataclass
@@ -245,7 +252,8 @@ class UseSession:
     bath_seen: bool = False
 
     def update(self, t: float, avg: float | None, bath_active: bool, confirm_k: float = SHOWER_CONFIRM_K, *,
-               top: float | None = None, bottom: float | None = None, cold: float | None = None) -> bool:
+               top: float | None = None, bottom: float | None = None, cold: float | None = None,
+               fill_rate: float = FILL_RATE, fast_flow: bool = False) -> bool:
         """Feed a new reading; returns True at the moment the use is recognised as a shower."""
         if avg is not None and self.start_avg is not None:
             self.drawn = max(self.drawn, self.start_avg - avg)
@@ -258,12 +266,17 @@ class UseSession:
             if top_drop >= COIL_TOP_DROP and (top_drop > bottom_drop or warm_bottom):
                 self.kind = "coil"               # heat left without water: not a use after all
                 return False
+        rate = self.drawn / max(1.0, t - self.start)
+        if self.drawn >= FILL_MIN_K and rate >= fill_rate:
+            self.kind = "fill"                   # also when it looked like a shower at first: a bath runs faster
+            return False
         if self.kind != "unknown":
             return False
-        rate = self.drawn / max(1.0, t - self.start)
-        if self.drawn >= FILL_MIN_K and rate >= FILL_RATE:
-            self.kind = "fill"
-        elif self.drawn >= (BATH_CONFIRM_K if self.bath_seen else confirm_k):
+        if fast_flow:                            # the water meter runs far faster than the shower head: a bath tap
+            if self.drawn >= BATH_CONFIRM_K:
+                self.kind = "fill"
+            return False
+        if self.drawn >= (BATH_CONFIRM_K if self.bath_seen else confirm_k):
             self.kind = "shower"
             self.confirmed_after = round(t - self.start, 1)
             return True
@@ -343,6 +356,7 @@ class BathSignal:
 WATER_SHOWER_FLOW = (4.0, 16.0)   # L/min a shower draws from the mains (hot and cold together)
 WATER_STEADY_MINUTES = 2.0        # that long without a break = a shower, not a sink being filled
 WATER_GAP_MINUTES = 2.0           # a meter total that has not moved for this long: the water is off
+FAST_FLOW_FACTOR = 1.6            # this many times the shower head's flow: a bath tap, not a shower
 
 
 class WaterSignal:
@@ -425,8 +439,9 @@ def draw_heat(params: dict, rows: list[model.Row], start: int, minutes: int) -> 
 
 
 def draw_kind(params: dict, rows: list[model.Row], start: int, minutes: int, cold: float,
-              confirm_k: float = SHOWER_CONFIRM_K) -> str:
-    """The same judgement for a draw found in the history: shower, tap or coil (heat left without water).
+              confirm_k: float = SHOWER_CONFIRM_K, fill_rate: float = FILL_RATE) -> str:
+    """The same judgement for a draw found in the history: shower, tap, fill (a bath or bucket) or coil (heat
+    left without water).
     Like the live judgement it stops where a reheat begins (a heat pump starting up dips the top)."""
     seg = []
     for r in rows:
@@ -445,7 +460,10 @@ def draw_kind(params: dict, rows: list[model.Row], start: int, minutes: int, col
         if dipped is not None and (top_drop > bottom_drop or (dipped.bottom is not None
                                                               and dipped.bottom > cold + COIL_BOTTOM_ABOVE_COLD)):
             return "coil"
-    return "shower" if draw_heat(params, rows, start, minutes) >= confirm_k else "tap"
+    heat = draw_heat(params, rows, start, minutes)
+    if heat >= FILL_MIN_K and heat / max(1, minutes) >= fill_rate:
+        return "fill"
+    return "shower" if heat >= confirm_k else "tap"
 
 
 # --------------------------------------------------------------------------- heat loss

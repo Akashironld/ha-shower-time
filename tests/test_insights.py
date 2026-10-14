@@ -399,3 +399,41 @@ def test_reheat_habits_need_a_week():
     h["reheat"] = daily_reheats(5, 13)["reheat"]
     f = insights.forecast(h, weekday=1, hour=8.0, minutes_now=12, per_minute=0.15, loss_k_h=0.27, typical=10)
     assert f.reheat_chance is None and not f.enough       # too little known: warn as before
+
+
+def test_a_bath_that_first_looked_like_a_shower_becomes_a_fill():
+    # the bathroom signal makes it a shower within a minute, then the tank empties at twice a shower's pace
+    steps = [(i, 55.0, 50.0 - 3.2 * i) for i in range(1, 9)]
+    s, at = run_use(steps, bath=lambda t: True)
+    assert at is not None                                    # it was taken for a shower at first ...
+    p = model.new_params("weheat_200")
+    s2 = insights.UseSession(start=0.0, start_avg=model.tank_average(p, 55.0, 50.0), start_top=55.0, start_bottom=50.0)
+    for t, top, bottom in steps:
+        s2.update(t, model.tank_average(p, top, bottom), True, top=top, bottom=bottom, cold=15.0,
+                  fill_rate=insights.fill_rate(0.625))
+    assert s2.kind == "fill" and s2.final(8, 40) == "fill"  # ... and a bath once its pace shows
+
+
+def test_a_shower_in_a_small_tank_is_not_a_fill():
+    # an 80 L tank empties fast during a normal shower: the pace is judged against this tank's shower pace
+    p = model.new_params("generic")
+    s = insights.UseSession(start=0.0, start_avg=model.tank_average(p, 60.0, 55.0), start_top=60.0, start_bottom=55.0)
+    for i in range(1, 9):
+        top, bottom = 60.0, 55.0 - 3.0 * i
+        s.update(i, model.tank_average(p, top, bottom), False, top=top, bottom=bottom, cold=12.0,
+                 fill_rate=insights.fill_rate(1.6))
+    assert s.kind == "shower"
+
+
+def test_a_fast_water_meter_flow_is_a_bath_tap():
+    p = model.new_params("weheat_200")
+    s = insights.UseSession(start=0.0, start_avg=model.tank_average(p, 55.0, 50.0), start_top=55.0, start_bottom=50.0)
+    for t, top, bottom in [(1, 55.0, 48.5), (2, 55.0, 47.0), (3, 55.0, 45.5)]:
+        assert not s.update(t, model.tank_average(p, top, bottom), False, top=top, bottom=bottom, cold=15.0,
+                            fast_flow=True)
+    assert s.kind == "fill"
+
+
+def test_fill_rate_follows_the_tank():
+    assert insights.fill_rate(None) == insights.FILL_RATE
+    assert insights.fill_rate(0.6) == 1.2 and insights.fill_rate(1.6) == 3.2

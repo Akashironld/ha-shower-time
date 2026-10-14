@@ -438,7 +438,7 @@ def learn(params: dict, rows: list[Row], *, volume: float, shower_temp: float, s
                 s["cold_pairs"].append([round(ema, 2), round(d.bottom_low - 1, 2)])
 
     if water:
-        s["head_flow"] = water_flow_samples(water, [d for d in draws if d.start >= since])
+        s["head_flow"] = water_flow_samples(water, [d for d in draws if d.start >= since and kinds[d.start] == "shower"])
 
     for key in W_POINTS:
         p["w"][key] = _blend(p["w"][key], s["w" + key], LIMITS["w"])

@@ -260,7 +260,8 @@ class ShowerLedger:
             return model.cold_for(m.params, local.month, local.timetuple().tm_yday, m._ema_on(local.date().isoformat()))
         # showers only: not washing up, and not heat that left without water (a heat pump starting a reheat)
         draws = [d for d in model.find_draws(rows) if MIN_SHOWER_MINUTES <= d.minutes <= MAX_SHOWER_MINUTES
-                 and insights.draw_kind(m.params, rows, d.start, d.minutes, cold_at(d.start), m.confirm_k()) == "shower"]
+                 and insights.draw_kind(m.params, rows, d.start, d.minutes, cold_at(d.start), m.confirm_k(),
+                                        insights.fill_rate(m.estimate.per_minute if m.estimate else None)) == "shower"]
         price_by_hour: dict[int, float] = {}
         cur = ""
         if m.price:
