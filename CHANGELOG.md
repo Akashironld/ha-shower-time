@@ -28,6 +28,7 @@
   week*, *Shower time expected today*, *Showers total* and *Shower time total* start switched off (Settings →
   Entities to switch them on). Existing installations keep them as they are
 - The dashboard resource is left alone when it is up to date (it was rewritten on every start)
+- **New logo**: a glossy hot-and-cold tank with a shower head, in Home Assistant, HACS and the README
 - Development: tests that run the integration inside a real test Home Assistant, Dependabot for the test Home
   Assistant and the CI actions, and releases published automatically from this changelog when a tag is pushed
 
