@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.11.1 — A bath is not a shower
+## v0.11.1 — A bath is not a shower, top-ups on the card
 
 - **Fix: filling a bath could count as a shower, and the rest of its heat as "cooled"** (reported on Tweakers). With
   a bathroom signal or a water meter a bath was taken for a shower within a minute, and a shower is counted in
