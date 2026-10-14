@@ -123,3 +123,8 @@ async def test_a_bath_is_not_a_shower_even_with_the_bathroom_signal(hass: HomeAs
     assert state(hass, "sensor.hot_water_showers_today") == "0"
     other = hass.states.get("sensor.hot_water_other_hot_water_today")
     assert other.attributes["by_kind"] == {"fill": 1} and float(other.state) > 0
+    split = entry.runtime_data.since_reheat()
+    if split is not None:                                      # the bath is not cooling
+        assert split["other_minutes"] > 0 and split["showered_minutes"] == 0
+        total = split["remaining_minutes"] + split["other_minutes"] + split["cooling_minutes"]
+        assert abs(total - split["total_minutes"]) < 0.3

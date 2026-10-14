@@ -11,7 +11,7 @@ const T = {
         reheating: "REHEATING", inuse: "SHOWERING", hotwater: "HOT WATER", filling: "FILLING", low: "ALMOST GONE", shortat: "EMPTY BY", fullat: "full", selflearning: "self-learning",
         learning: "learning", updated: "updated", today: "Today", lastshower: "Last shower", cooling: "Standing loss",
         perday: "per day", peryear: "/ year", none: "none yet", since: "Since reheat", left: "left", showered: "showered",
-        cooled: "cooled", last24: "Last 24 hours", max: "max", ago24: "-24 h", now: "now", yesterday: "yesterday",
+        cooled: "cooled", other: "bath / tap", reheated: "reheated", last24: "Last 24 hours", max: "max", ago24: "-24 h", now: "now", yesterday: "yesterday",
         nohist: "no history yet \u2014 fills in by itself", unavailable: "Not available", cold: "cold water", cop: "COP",
         pick: "Pick the 'Shower time' sensor of the Hot Water Shower Time integration.",
         sensed: "sensed", you: "you shower at",
@@ -26,7 +26,7 @@ const T = {
         reheating: "WORDT OPGEWARMD", inuse: "DOUCHT NU", hotwater: "WARM WATER", filling: "BAD / EMMER", low: "BIJNA OP", shortat: "OP OM", fullat: "vol", selflearning: "zelflerend",
         learning: "leert", updated: "bijgewerkt", today: "Vandaag", lastshower: "Laatste douche", cooling: "Afkoeling",
         perday: "per dag", peryear: "/ jaar", none: "nog geen", since: "Sinds opwarmen", left: "over", showered: "gedoucht",
-        cooled: "afgekoeld", last24: "Laatste 24 uur", max: "max", ago24: "-24 u", now: "nu", yesterday: "gisteren",
+        cooled: "afgekoeld", other: "bad / kraan", reheated: "bijgewarmd", last24: "Laatste 24 uur", max: "max", ago24: "-24 u", now: "nu", yesterday: "gisteren",
         nohist: "nog geen historie \u2014 vult zich vanzelf", unavailable: "Niet beschikbaar", cold: "koud water", cop: "COP",
         pick: "Kies de sensor 'Douchetijd' van de integratie Hot Water Shower Time.",
         sensed: "gemeten", you: "jullie douchen op",
@@ -243,20 +243,24 @@ class ShowerTimeCard extends HTMLElement {
     return `${a.currency || "\u20ac"} ${Number(v).toLocaleString(lang, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   }
 
-  _split(a) {                        // since the last reheat: left / showered / cooled
+  _split(a) {                        // since the last reheat: left / showered / bath or tap / cooled (+ reheated)
     const s = a.since_reheat;
     if (!s || !s.reference_minutes) return "";
-    const tot = s.reference_minutes, p = (v) => Math.max(0, Math.min(100, (v / tot) * 100));
+    const ref = s.reference_minutes, tot = s.total_minutes || ref;
+    const p = (v) => Math.max(0, Math.min(100, ((v || 0) / tot) * 100));
+    const other = s.other_minutes || 0, added = s.reheated_minutes || 0;
     const lang = this._locale();
     const t = this._time(new Date(s.since));
     const day = new Date(s.since).toDateString() === new Date().toDateString() ? "" :
       `${new Date(s.since).toLocaleDateString(lang, { weekday: "short" })} `;
     return `<div class="split">
-      <div class="sh"><span>${this._t("since")} ${day}${t}</span><span>${fmt(tot)} ${this._t("min")}</span></div>
-      <div class="sbar"><i class="left" style="width:${p(s.remaining_minutes)}%"></i><i class="used" style="width:${p(s.showered_minutes)}%"></i><i class="cool" style="width:${p(s.cooling_minutes)}%"></i></div>
+      <div class="sh"><span>${this._t("since")} ${day}${t}</span><span>${fmt(ref)} ${this._t("min")}</span></div>
+      <div class="sbar"><i class="left" style="width:${p(s.remaining_minutes)}%"></i><i class="used" style="width:${p(s.showered_minutes)}%"></i>${other >= 0.5 ? `<i class="other" style="width:${p(other)}%"></i>` : ""}<i class="cool" style="width:${p(s.cooling_minutes)}%"></i></div>
       <div class="legend"><span><b class="d left"></b>${this._t("left")} ${fmt(s.remaining_minutes)}</span>
-        <span><b class="d used"></b>${this._t("showered")} ${fmt(s.showered_minutes)}</span>
-        <span><b class="d cool"></b>${this._t("cooled")} ${fmt(s.cooling_minutes)}</span></div></div>`;
+        <span><b class="d used"></b>${this._t("showered")} ${fmt(s.showered_minutes)}</span>${other >= 0.5 ? `
+        <span><b class="d other"></b>${this._t("other")} ${fmt(other)}</span>` : ""}
+        <span><b class="d cool"></b>${this._t("cooled")} ${fmt(s.cooling_minutes)}</span>${added >= 0.5 ? `
+        <span class="plus">+ ${this._t("reheated")} ${fmt(added)}</span>` : ""}</div></div>`;
   }
 
   _tiles(a, lang) {
@@ -429,6 +433,7 @@ class ShowerTimeCard extends HTMLElement {
       .sbar i { display: block; height: 100%; }
       .left { background: var(--success-color, #30a46c); }
       .used { background: #3d8fe6; }
+      .other { background: #2bb5c8; }
       .cool { background: #f5a524; background: repeating-linear-gradient(45deg, #f5a524 0 4px, color-mix(in srgb, #f5a524 55%, transparent) 4px 8px); }
       .legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 11px; color: var(--secondary-text-color); margin-top: 5px; }
       .legend span { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }

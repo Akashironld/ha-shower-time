@@ -11,7 +11,10 @@
   tap and no longer counts as a shower signal
 - The bath test is now relative to this tank's shower pace instead of a fixed rate, so a normal shower in a small
   tank (80–120 L) is no longer taken for a fill
-- *Since reheat* counts a bath or tap that is still running by the heat it has taken so far
+- **Since reheat** on the card: a bath or the sink now has its own part (*bath / tap*, by the heat it took, also
+  while it runs), *cooled* is the tank's measured standing loss instead of whatever was left over, and heat a
+  reheat adds in between shows as *+ reheated* instead of shrinking *cooled* (new attributes `other_minutes`,
+  `reheated_minutes`, `total_minutes`)
 - Baths and other fills found in the history no longer teach the shower length, flow or shower-head flow
 
 ## v0.11.0 — Card in the mobile apps, water meter live, warnings

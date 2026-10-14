@@ -869,13 +869,15 @@ class ShowerTimeManager:
         return self.full_ref
 
     def since_reheat(self) -> dict | None:
-        """Where the hot water went since the last complete reheat: left, showered and lost to cooling.
+        """Where the hot water went since the last complete reheat: left, showered, other hot water (a bath, the
+        sink) and lost to cooling, plus what a reheat in between added.
 
-        Showered comes from the showers actually logged since the reheat (one shower minute takes about one
-        minute off the estimate); the rest of the drop is standing loss. The three parts always add up to the
-        minutes the tank held right after the reheat."""
+        Showers count in minutes (one shower minute takes about one minute off the estimate), other hot water by
+        the heat it took. Cooling is the tank's standing loss over the time since the reheat, or the drop that is
+        left unexplained when that is more. When the tank holds more than that adds up to, a reheat put heat back
+        in: that is ``reheated_minutes``. Left + showered + other + cooling = reference + reheated."""
         e, ref = self.current, self.ref_minutes()
-        if e is None or not ref or not self.full_ref_at:
+        if e is None or not ref or not self.full_ref_at or e.per_minute <= 0:
             return None
         try:
             since = dt_util.parse_datetime(self.full_ref_at)
@@ -884,30 +886,28 @@ class ShowerTimeManager:
         if since is None:
             return None
         hours = max(0.0, (dt_util.now() - since).total_seconds() / 3600)
-        # showered = the showers actually logged since the reheat (plus a shower still running); the rest of the
-        # drop is cooling. One minute of showering takes about one minute off the estimate.
         key = dt_util.as_local(since).isoformat(timespec="minutes")
-        logged = sum(x["minutes"] for x in self.ledger.log if x["start"] >= key)
+        showered = sum(x["minutes"] for x in self.ledger.log if x["start"] >= key)
+        per_min_kwh = e.per_minute * self.volume * model.CP
+        other = sum(x["heat_kwh"] for x in self.ledger.other if x["start"] >= key) / per_min_kwh
         kind = self.use_kind()
         if kind == "shower" and self.ledger.session_start:
-            logged += max(0.0, (dt_util.utcnow() - self.ledger.session_start).total_seconds() / 60)
-        elif kind not in (None, "coil") and e.per_minute > 0:
-            logged += self.use.drawn / e.per_minute     # a bath or tap running now: the heat it took so far
-        # other hot water (washing up, taps) is use too, not cooling: its heat in shower minutes
-        per_min_kwh = e.per_minute * self.volume * model.CP
-        if per_min_kwh > 0:
-            logged += sum(x["heat_kwh"] for x in self.ledger.other if x["start"] >= key) / per_min_kwh
-        drop = max(0.0, ref - e.minutes)
-        used = min(drop, logged)
-        cooling = drop - used
-        heat = cooling * e.per_minute * self.volume * model.CP
+            showered += max(0.0, (dt_util.utcnow() - self.ledger.session_start).total_seconds() / 60)
+        elif kind not in (None, "coil") and self.use is not None:
+            other += self.use.drawn / e.per_minute       # a bath or tap running now: the heat it took so far
+        standing = self.loss_k_h() * hours / e.per_minute
+        cooling = max(standing, ref - e.minutes - showered - other)
+        reheated = max(0.0, e.minutes + showered + other + cooling - ref)
+        heat = cooling * per_min_kwh
         price = self.ledger.tank_price
         if price is None:
             p, _ = self.ledger.price_now(self)
             price = p / self.ledger.cop(self) if p is not None else None
         return {"since": self.full_ref_at, "hours": round(hours, 1), "reference_minutes": round(ref, 1),
-                "remaining_minutes": round(e.minutes, 1), "showered_minutes": round(used, 1),
-                "cooling_minutes": round(cooling, 1), "cooling_kwh_heat": round(heat, 2),
+                "remaining_minutes": round(e.minutes, 1), "showered_minutes": round(showered, 1),
+                "other_minutes": round(other, 1), "cooling_minutes": round(cooling, 1),
+                "reheated_minutes": round(reheated, 1), "total_minutes": round(ref + reheated, 1),
+                "cooling_kwh_heat": round(heat, 2),
                 "cooling_cost": round(heat * price, 2) if price is not None else None}
 
     def standing_loss_per_day(self) -> dict:
