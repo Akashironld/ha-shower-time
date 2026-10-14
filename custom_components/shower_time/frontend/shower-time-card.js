@@ -249,6 +249,7 @@ class ShowerTimeCard extends HTMLElement {
     const ref = s.reference_minutes, tot = s.total_minutes || ref;
     const p = (v) => Math.max(0, Math.min(100, ((v || 0) / tot) * 100));
     const other = s.other_minutes || 0, added = s.reheated_minutes || 0;
+    const topAt = s.last_top_up_at ? ` (${this._time(new Date(s.last_top_up_at))})` : "";
     const lang = this._locale();
     const t = this._time(new Date(s.since));
     const day = new Date(s.since).toDateString() === new Date().toDateString() ? "" :
@@ -259,8 +260,8 @@ class ShowerTimeCard extends HTMLElement {
       <div class="legend"><span><b class="d left"></b>${this._t("left")} ${fmt(s.remaining_minutes)}</span>
         <span><b class="d used"></b>${this._t("showered")} ${fmt(s.showered_minutes)}</span>${other >= 0.5 ? `
         <span><b class="d other"></b>${this._t("other")} ${fmt(other)}</span>` : ""}
-        <span><b class="d cool"></b>${this._t("cooled")} ${fmt(s.cooling_minutes)}</span>${added >= 0.5 ? `
-        <span class="plus">+ ${this._t("reheated")} ${fmt(added)}</span>` : ""}</div></div>`;
+        <span><b class="d cool"></b>${this._t("cooled")} ${fmt(s.cooling_minutes)}</span>${added >= 0.5 || topAt ? `
+        <span class="plus">+ ${this._t("reheated")} ${fmt(added)}${topAt}</span>` : ""}</div></div>`;
   }
 
   _tiles(a, lang) {

@@ -15,6 +15,10 @@
   while it runs), *cooled* is the tank's measured standing loss instead of whatever was left over, and heat a
   reheat adds in between shows as *+ reheated* instead of shrinking *cooled* (new attributes `other_minutes`,
   `reheated_minutes`, `total_minutes`)
+- **Top-ups**: a reheat only starts *Since reheat* again when it brings the tank back to about full (90 % of the
+  last complete reheat, or any complete reheat the next day — smart controllers vary the target). A partial
+  reheat in between, say to 45 °C, keeps the breakdown and shows as *+ reheated 11 (14:05)*; each top-up (when,
+  until, minutes added, top temperature) is in the `top_ups` attribute
 - Baths and other fills found in the history no longer teach the shower length, flow or shower-head flow
 
 ## v0.11.0 — Card in the mobile apps, water meter live, warnings

@@ -98,3 +98,30 @@ async def test_reheats_are_learned_per_day(hass: HomeAssistant, entry) -> None:
     m._log_reheat(dt_util.utcnow())                           # live: a reheat starts now
     m._log_reheat(dt_util.utcnow() + timedelta(minutes=20))   # the same reheat resuming: not a second one
     assert m.reheat_log[today.isoformat()] == [dt_util.now().hour]
+
+
+async def test_a_top_up_keeps_since_reheat_and_a_full_reheat_starts_it_again(hass: HomeAssistant, entry, freezer) -> None:
+    """A reheat to a lower temperature in between is a top-up: "since reheat" goes on and notes when and how
+    much. A reheat that brings the tank back to (about) full starts it again."""
+    m = entry.runtime_data
+    m._set_ref(m.estimate.minutes)
+    since, ref = m.full_ref_at, m.ref_minutes()
+
+    def reheat(low: float, high: float, top: float, bottom: float) -> None:
+        for v in (low, low + 1, low + 4, high):          # the minutes fall, then rise: a reheat (no reheat entity)
+            m._track_full(v)
+        freezer.tick(timedelta(minutes=21))              # the rise stopped 20 minutes ago: the reheat is over
+        m.top_value, m.bottom_value = top, bottom
+        m._track_full(high)
+
+    freezer.tick(timedelta(hours=1))
+    reheat(0.3 * ref, 0.6 * ref, 45.0, 44.0)             # even, but only to 45 °C
+    assert m.full_ref_at == since and len(m.top_ups) == 1
+    assert m.top_ups[0]["added_minutes"] == round(0.6 * ref - (0.3 * ref + 1), 1) and m.top_ups[0]["top"] == 45.0
+    split = m.since_reheat()
+    assert split["since"] == since and split["last_top_up_at"] == m.top_ups[0]["at"]
+
+    freezer.tick(timedelta(hours=1))
+    reheat(0.5 * ref, 0.95 * ref, 55.0, 54.0)            # back to full
+    assert m.full_ref_at != since and m.top_ups == []
+    assert m.since_reheat()["last_top_up_at"] is None

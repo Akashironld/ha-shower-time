@@ -137,6 +137,8 @@ class ShowerTimeManager:
         self.full_ref: float | None = None          # minutes at the last reheat (kept for display/compat)
         self.full_ref_avg: float | None = None      # tank average temperature right after the last reheat
         self.full_ref_at: str | None = None
+        self.top_ups: list[dict] = []           # partial reheats since the last complete one
+        self._heat_from: tuple[datetime, float] | None = None
         self._ref_low: float | None = None
         self._last_minutes: float | None = None
         # live countdown while someone showers (sensors only report every few minutes)
@@ -199,6 +201,7 @@ class ShowerTimeManager:
             self.ledger.load(stored.get("ledger"))
             self.full_ref_avg = stored.get("full_ref_avg")
             self.full_ref_at = stored.get("full_ref_at")
+            self.top_ups = stored.get("top_ups") or []
             # a reference in minutes only (before 0.5.1) depends on the model it was computed with: rebuild it
             self.full_ref = stored.get("full_ref") if self.full_ref_avg is not None else None
         watch = [e for e in (self.top, self.bottom, self.heating, self.bath, self.water) if e]
@@ -818,6 +821,7 @@ class ShowerTimeManager:
         if self.estimate is not None:
             self.full_ref_avg = self.estimate.average
         self.full_ref_at = dt_util.now().isoformat(timespec="seconds")
+        self.top_ups = []
         self._ref_low = minutes
         self._store.async_delay_save(self._data, 60)
 
@@ -825,9 +829,11 @@ class ShowerTimeManager:
     def _track_full(self, m: float) -> None:
         """Keep 100 % at the end of the latest *complete* reheat.
 
-        A reheat that leaves the tank evenly hot (top and bottom within 2.5 °C) sets a new 100 %, also when it
-        heats to a lower temperature than last time (smart controllers vary the target). A partial top-up only
-        raises the fill level; it never becomes the new 100 % unless it beats the old one.
+        A reheat that leaves the tank evenly hot (top and bottom within 2.5 °C) and about as full as last time
+        (90 %) sets a new 100 %; so does one the day after, also when it heats to a lower temperature (smart
+        controllers vary the target). Anything less is a top-up: it is kept in ``top_ups`` (when, how much) and
+        "since reheat" goes on from the last complete reheat. A top-up never becomes the new 100 % unless it
+        beats the old one.
         Reheating is taken from the reheat entity, or recognised from the minutes rising 3+ above the lowest
         point since the last reheat; it ends when the entity switches off or the rise stops for 20 minutes."""
         now = dt_util.utcnow()
@@ -849,10 +855,22 @@ class ShowerTimeManager:
         self._was_heating = heating
         if heating and not was:
             self._log_reheat(now)
+            self._heat_from = (now, prev if prev is not None else m)
         if was and not heating:                 # a reheat just finished
             even = self.bottom_value is None or (self.top_value is not None and self.top_value - self.bottom_value <= 2.5)
-            if even or m > ref_now:
+            since = dt_util.parse_datetime(self.full_ref_at) if self.full_ref_at else None
+            old = since is None or now - since > timedelta(hours=20)
+            if m > ref_now or (even and (m >= 0.9 * ref_now or old)):
                 self._set_ref(m)
+            elif self._heat_from is not None:
+                start, before = self._heat_from
+                self.top_ups = (self.top_ups + [{
+                    "at": dt_util.as_local(start).isoformat(timespec="minutes"),
+                    "until": dt_util.as_local(now).isoformat(timespec="minutes"),
+                    "added_minutes": round(max(0.0, m - before), 1),
+                    "top": round(self.top_value, 1) if self.top_value is not None else None}])[-10:]
+                self.request_save()
+            self._heat_from = None
             self._rise_at = None
             return
         if not heating and m > ref_now + 0.3:   # sensors still settling after the reheat state switched off
@@ -903,7 +921,11 @@ class ShowerTimeManager:
         if price is None:
             p, _ = self.ledger.price_now(self)
             price = p / self.ledger.cop(self) if p is not None else None
+        last_top_up = self.top_ups[-1]["at"] if self.top_ups else None
+        if getattr(self, "_was_heating", False) and self._heat_from is not None:   # a top-up going on now
+            last_top_up = dt_util.as_local(self._heat_from[0]).isoformat(timespec="minutes")
         return {"since": self.full_ref_at, "hours": round(hours, 1), "reference_minutes": round(ref, 1),
+                "top_ups": self.top_ups, "last_top_up_at": last_top_up,
                 "remaining_minutes": round(e.minutes, 1), "showered_minutes": round(showered, 1),
                 "other_minutes": round(other, 1), "cooling_minutes": round(cooling, 1),
                 "reheated_minutes": round(reheated, 1), "total_minutes": round(ref + reheated, 1),
@@ -1013,7 +1035,7 @@ class ShowerTimeManager:
             "profile": self.profile, "params": self.params, "processed_until": self.processed_until,
             "last_cycle": asdict(self.last_cycle) if self.last_cycle else None, "last_learn": self.last_learn,
             "last_samples": self.last_samples, "full_ref": self.full_ref, "full_ref_avg": self.full_ref_avg,
-            "full_ref_at": self.full_ref_at, "ledger": self.ledger.to_dict(),
+            "full_ref_at": self.full_ref_at, "top_ups": self.top_ups, "ledger": self.ledger.to_dict(),
             "habits": self.habits, "loss_samples": self.loss_samples, "drip_nights": self.drip_nights,
             "use_stats": self.use_stats, "loss_backfilled": self.loss_backfilled,
             "reheat_log": self.reheat_log, "reheat_since": self.reheat_since,
