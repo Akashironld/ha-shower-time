@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.11.4 — A closer fit in sections
+
+**Recommended if you set a fixed height for the card in a sections dashboard** — v0.11.3 kept the card from being
+cut off, but left up to one and a half rows empty below it.
+
+### Fixes
+- **Closer minimum height** (#7): the rows the card asks for at least are now worked out from measured heights
+  per part, and the line with warnings only counts when there are warnings. A full card now asks for 8 rows
+  instead of 9; a fixed height can still never cut it off
+
+### After updating
+Update in HACS, restart Home Assistant and refresh the dashboard. For an exact fit, set the card's height to
+automatic in its *Layout* tab (or remove `rows:` from `grid_options`): then it follows the content to the pixel.
+
 ## v0.11.3 — The card keeps its height in sections
 
 **Recommended if the card sits in a sections dashboard with a card below it** — a fixed height on the card let the

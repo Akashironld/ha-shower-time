@@ -1,6 +1,6 @@
 /* Hot Water Shower Time card - served by the shower_time integration. */
 (() => {   // own scope: safe if the file is loaded twice as a classic script (legacy frontend + a manual resource)
-const CARD_VERSION = "0.11.3";
+const CARD_VERSION = "0.11.4";
 
 // Plain ES2017 on purpose (no ?. / ??): wall tablets often run an older browser that gets Home Assistant's
 // legacy frontend. "a ?? b" is written as nn(a, b).
@@ -84,13 +84,15 @@ class ShowerTimeCard extends HTMLElement {
       (this._show("tiles") ? 1 : 0) + (this._show("history") ? 1 : 0);
   }
   // Sections views: the height follows the content ("auto"). min_rows keeps a fixed height set in the editor
-  // (grid_options: rows) from cutting the card off, with the next card drawn over it (#7). Heights measured on a
-  // 360 px wide card; a narrow card (half a section or less) wraps more.
+  // (grid_options: rows) from cutting the card off, with the next card drawn over it (#7). Heights in px measured
+  // on a 360 px wide card (a row is 56 px plus an 8 px gap); a card half a section wide or less wraps more.
   getGridOptions() {
-    let px = 200;
+    let px = 174;
     if (this._config) {
-      px += (this._show("tank") || this._show("temps") ? 60 : 0) + (this._show("split") ? 35 : 0) +
-        (this._show("tiles") ? 85 : 0) + (this._show("history") ? 100 : 0) + (this._show("footer") ? 30 : 0);
+      const st = this._hass && this._hass.states[this._config.entity];
+      const problems = (st && st.attributes.problems && this._show("problems") && st.attributes.problems.length) || 0;
+      px += problems * 22 + (this._show("tank") || this._show("temps") ? 60 : 0) + (this._show("split") ? 32 : 0) +
+        (this._show("tiles") ? 82 : 0) + (this._show("history") ? 100 : 0) + (this._show("footer") ? 26 : 0);
       const cols = this._config.grid_options && this._config.grid_options.columns;
       if (typeof cols === "number" && cols <= 6) px *= 1.25;
     }
