@@ -2,24 +2,32 @@
 
 ## v0.11.1 — A bath is not a shower, top-ups on the card
 
-- **Fix: filling a bath could count as a shower, and the rest of its heat as "cooled"** (reported on Tweakers). With
-  a bathroom signal or a water meter a bath was taken for a shower within a minute, and a shower is counted in
-  minutes: a bath tap runs about twice a shower head's flow, so half of its heat showed up as *cooled* in *Since
-  reheat*. A use that empties the tank at twice this tank's shower pace is now a bath or bucket being filled, also
-  when it looked like a shower at first; it is logged as *Other hot water* with the heat it really took
-- **Water meter**: a flow far above the shower head's (1.6 times or more, when the head flow is known) is a bath
-  tap and no longer counts as a shower signal
-- The bath test is now relative to this tank's shower pace instead of a fixed rate, so a normal shower in a small
-  tank (80–120 L) is no longer taken for a fill
-- **Since reheat** on the card: a bath or the sink now has its own part (*bath / tap*, by the heat it took, also
-  while it runs), *cooled* is the tank's measured standing loss instead of whatever was left over, and heat a
-  reheat adds in between shows as *+ reheated* instead of shrinking *cooled* (new attributes `other_minutes`,
-  `reheated_minutes`, `total_minutes`)
-- **Top-ups**: a reheat only starts *Since reheat* again when it brings the tank back to about full (90 % of the
-  last complete reheat, or any complete reheat the next day — smart controllers vary the target). A partial
-  reheat in between, say to 45 °C, keeps the breakdown and shows as *+ reheated 11 (14:05)*; each top-up (when,
-  until, minutes added, top temperature) is in the `top_ups` attribute
-- Baths and other fills found in the history no longer teach the shower length, flow or shower-head flow
+**Recommended if you fill a bath, or use a bathroom signal or a water meter** — a bath could be counted as a
+shower, and half of its heat as *cooled*.
+
+### Fixes
+- **A bath is no longer a shower.** With a bathroom signal or a water meter a bath was taken for a shower within a
+  minute. A bath tap runs about twice a shower head's flow, so half of its heat showed up as *cooled* in *Since
+  reheat* (reported on Tweakers). Hot water that leaves the tank at twice this tank's shower pace is now a bath or
+  bucket being filled, also when it looked like a shower at first. It is logged as *Other hot water*, with the heat
+  and cost it really took
+- **Water meter:** a flow of 1.6 times the shower head's or more (when the head flow is known) is a bath tap, not a
+  shower
+- **Small tanks (80–120 L):** a normal shower is no longer taken for a fill — the test now follows this tank's
+  shower pace instead of a fixed rate
+- Baths found in the history no longer teach the shower length or flow
+
+### Improvements
+- **Since reheat** on the card has a part for *bath / tap* (by the heat it took, also while it runs). *Cooled* is the
+  tank's measured standing loss instead of whatever was left over
+- **Top-ups:** a partial reheat in between, say to 45 °C, keeps *Since reheat* going and shows as
+  *+ reheated 11 (14:05)*. Only a reheat back to about full (90 % of the last one, or any complete reheat the next
+  day) starts it again. Each top-up — when, how long, minutes added, top temperature — is in the new `top_ups`
+  attribute, with `other_minutes`, `reheated_minutes` and `total_minutes`
+
+### After updating
+Update in HACS and restart Home Assistant. No settings or dashboards to change; on a phone or tablet, refresh the
+dashboard once to load the new card.
 
 ## v0.11.0 — Card in the mobile apps, water meter live, warnings
 
