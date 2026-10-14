@@ -2,7 +2,8 @@ name: Release
 
 # Push a tag like v0.11.0 and this publishes the GitHub release, with the notes from CHANGELOG.md.
 # It refuses when the tag does not match the version in manifest.json or the changelog has no section for it.
-# Run it by hand (Actions → Release → Run workflow) to rewrite the notes of a published release from the changelog.
+# Run it by hand (Actions → Release → Run workflow) to rewrite the notes of a release from the changelog, or to
+# publish one whose tag is there but whose release is missing.
 on:
   push:
     tags: ["v*"]
@@ -37,12 +38,15 @@ jobs:
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.notes.outputs.tag }}
+          TITLE: ${{ steps.notes.outputs.title }}    # through the environment: quotes in a title stay text
         run: |
-          tag="${{ steps.notes.outputs.tag }}"
-          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
-            gh release edit "${tag}" --title "${{ steps.notes.outputs.title }}" --notes-file body.md
-          elif gh release view "${tag}" > /dev/null 2>&1; then
-            echo "Release ${tag} exists already, leaving it"
+          if gh release view "${TAG}" > /dev/null 2>&1; then
+            if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+              gh release edit "${TAG}" --title "${TITLE}" --notes-file body.md
+            else
+              echo "Release ${TAG} exists already, leaving it"
+            fi
           else
-            gh release create "${tag}" --title "${{ steps.notes.outputs.title }}" --notes-file body.md --latest
+            gh release create "${TAG}" --title "${TITLE}" --notes-file body.md --latest
           fi
