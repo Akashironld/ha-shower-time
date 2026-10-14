@@ -10,7 +10,7 @@ ignored once it could be learned, and "full again at" ran more than 10 minutes l
   value replaced it (reported on Tweakers: 3 filled in, 2.2 shown). Leave the field empty to learn it; the 2.5 the
   form used to fill in by itself counts as empty
 - **The card shows the heat pump's own COP**, as its app shows it. It showed the COP per kWh that reaches the tank,
-  which is lower when the heat meter counts more than arrives (pipes, coil — on a Weheat about a third). The costs
+  which is lower when the heat meter counts more than arrives (pipes, coil — on a Weheat about a quarter lower). The costs
   still use that tank COP, now also for a COP you fill in (new attributes `cop_heat_pump`, `cop_source`)
 - **"Full again at" follows the reheat going on now.** After 20 minutes it uses the pace this reheat shows instead
   of the learned average, which also holds slow and boosted reheats. It counts towards the usual tank average
