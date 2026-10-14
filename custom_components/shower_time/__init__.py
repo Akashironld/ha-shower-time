@@ -10,8 +10,8 @@ from homeassistant.components import websocket_api
 from homeassistant.components.frontend import add_extra_js_url
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import EVENT_HOMEASSISTANT_STARTED, Platform
-from homeassistant.core import CoreState, Event, HomeAssistant
+from homeassistant.const import Platform
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv, entity_registry as er, issue_registry as ir
 from homeassistant.helpers.typing import ConfigType
 
@@ -35,18 +35,17 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         from homeassistant.loader import async_get_integration
         version = str((await async_get_integration(hass, DOMAIN)).version)
         hass.data[DOMAIN]["version"] = version
-    # Both frontend builds: older browsers (e.g. wall tablets) get the legacy build, which only loads es5 URLs.
-    add_extra_js_url(hass, f"{CARD_URL}?v={version}")
-    add_extra_js_url(hass, f"{CARD_URL}?v={version}", es5=True)
-    # Also a dashboard resource, like cards installed through HACS: dashboards load their resources each time they
-    # open, so the card is there even when an app shows a cached start page (seen on iOS). Same URL, loaded once.
     url = f"{CARD_URL}?v={version}"
-    if hass.state is CoreState.running:
-        hass.async_create_task(_async_register_resource(hass, url))
+    # Older browsers (e.g. wall tablets) get Home Assistant's legacy build, which only loads es5 URLs.
+    add_extra_js_url(hass, url, es5=True)
+    if _resources(hass) is not None:
+        # Dashboards managed in the UI: the card comes only as a dashboard resource, like every card installed
+        # through HACS. Resources load once the frontend is up. An early module (add_extra_js_url) can run before
+        # Home Assistant (2026.9+) swaps in its scoped element registry and is then invisible to dashboards:
+        # "Custom element doesn't exist" (in the mobile apps, whose cache makes it load early).
+        hass.async_create_task(_async_card_as_resource(hass, url))
     else:
-        async def _started(_event: Event) -> None:
-            await _async_register_resource(hass, url)
-        hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, _started)
+        add_extra_js_url(hass, url)                     # resources in YAML: the start page is the only way in
     websocket_api.async_register_command(hass, ws_history)
     return True
 
@@ -65,21 +64,28 @@ def _resources(hass: HomeAssistant):
     return res if isinstance(res, ResourceStorageCollection) else None
 
 
-async def _async_register_resource(hass: HomeAssistant, url: str) -> None:
-    """Add the card to the dashboard resources, or bring its version up to date."""
+async def _async_card_as_resource(hass: HomeAssistant, url: str) -> None:
+    if not await _async_register_resource(hass, url):
+        add_extra_js_url(hass, url)                     # could not add the resource: fall back to the start page
+
+
+async def _async_register_resource(hass: HomeAssistant, url: str) -> bool:
+    """Add the card to the dashboard resources, or bring its version up to date. True when it is there."""
     res = _resources(hass)
     if res is None:
-        return
+        return False
     try:
         await res.async_get_info()                       # loads the collection
         for item in res.async_items():
             if str(item.get("url", "")).split("?")[0] == CARD_URL:
                 if item.get("url") != url or item.get("type") != "module":     # stored as "type"
                     await res.async_update_item(item["id"], {"res_type": "module", "url": url})
-                return
+                return True
         await res.async_create_item({"res_type": "module", "url": url})
-    except Exception:  # noqa: BLE001 - the card still loads as an extra module
+        return True
+    except Exception:  # noqa: BLE001 - the card then loads from the start page
         _LOGGER.warning("Could not add the Shower time card to the dashboard resources", exc_info=True)
+        return False
 
 
 @websocket_api.websocket_command({

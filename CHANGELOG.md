@@ -1,7 +1,13 @@
 # Changelog
 
-## v0.11.0 — Water meter live, warnings on the card
+## v0.11.0 — Card in the mobile apps, water meter live, warnings
 
+- **Fix: "Custom element doesn't exist: shower-time-card" in the mobile apps and on tablets** (#4). Since Home
+  Assistant 2026.9 the frontend swaps in a scoped element registry while it starts; a card loaded early from the
+  start page could register before that swap and stay invisible to dashboards (mostly in the apps, whose cache
+  makes the card load early). The card now comes only as a dashboard resource when dashboards are managed in the
+  UI (like every HACS card), and it registers again in the new registry if it was loaded early anyway. Dashboards
+  with resources in YAML keep the start-page module
 - **Water meter followed live**: a steady, shower-like flow (4–16 L/min for two minutes) while heat leaves the tank
   recognises a shower in about half the time, and the meter's start and stop make the shower length exact. Cold
   water alone (a toilet, the washing machine) is never a shower. Works with a meter total (L, m³) or a flow

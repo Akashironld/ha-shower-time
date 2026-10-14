@@ -471,8 +471,29 @@ class ShowerTimeCardEditor extends HTMLElement {
   }
 }
 
-if (!customElements.get("shower-time-card")) customElements.define("shower-time-card", ShowerTimeCard);
-if (!customElements.get("shower-time-card-editor")) customElements.define("shower-time-card-editor", ShowerTimeCardEditor);
+// Home Assistant 2026.9+ swaps window.customElements for a scoped registry (a polyfill) while it starts. A card
+// defined before that swap lives only in the old registry, where dashboards no longer look ("Custom element
+// doesn't exist", seen in the mobile apps). So define in the registry that is there now, and again in the new one
+// as soon as it appears.
+const ELEMENTS = [["shower-time-card", ShowerTimeCard], ["shower-time-card-editor", ShowerTimeCardEditor]];
+const defineIn = (registry) => {
+  for (const [name, cls] of ELEMENTS) {
+    try {
+      if (!registry.get(name)) registry.define(name, cls);
+    } catch (e) { /* defined meanwhile by another copy of this file */ }
+  }
+};
+let registry = window.customElements;
+defineIn(registry);
+const recheck = () => {
+  if (window.customElements !== registry) {
+    registry = window.customElements;
+    defineIn(registry);
+  }
+};
+if (registry.whenDefined) registry.whenDefined("home-assistant").then(recheck);
+let checks = 0;
+const timer = setInterval(() => { recheck(); if (++checks >= 120) clearInterval(timer); }, 250);   // the first 30 s
 window.customCards = window.customCards || [];
 if (!window.customCards.some((c) => c.type === "shower-time-card")) {
   window.customCards.push({ type: "shower-time-card", name: "Shower time", preview: true,
