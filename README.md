@@ -209,6 +209,15 @@ been warmer than the top for six hours (sensors swapped), or when learning faile
 
 [![Add the integration](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=shower_time)
 
+### Updating from v0.10.0 or older
+
+Home Assistant may show **"The entity no longer has a state class"** (Settings → System → Repairs, or Developer tools →
+Statistics) for *Showers left*, *Showers today*, *Shower time today* and *Shower time this week*. That is expected:
+since v0.10.1 these four no longer keep long-term statistics (they are derived from the minutes or restart every day
+or week, so the statistics only filled the database). Click **Delete** on each notice: it removes only the old
+long-term statistics, the sensors keep working and their normal history stays. The totals (*Showers total*,
+*Shower time total*, cost and electricity) keep their statistics.
+
 ## Configuration
 
 The setup has two screens. Only the first one needs input; the second is filled in for you where possible
@@ -425,6 +434,10 @@ onderin** is sterk aanbevolen (zonder ziet het model geen douches). Al het ander
 automatisch voorgesteld: opwarmstand, warmte- en stroommeter voor warm water, buitentemperatuur, prijssensor en het
 debiet van de douchekop. Achteraf wijzigen kan via **Instellingen → Apparaten en diensten → Hot Water Shower Time →
 Configureren**.
+
+**Bijwerken vanaf v0.10.0 of ouder:** de melding **"De entiteit heeft geen statusklasse meer"** voor *Douchebeurten*,
+*Douches vandaag*, *Douchetijd vandaag* en *Douchetijd deze week* is verwacht. Klik bij elke melding op
+**Verwijderen**: alleen de oude langetermijnstatistieken verdwijnen, de sensoren blijven gewoon werken.
 
 Debiet van je douchekop meten: zet de douche aan zoals je normaal doucht, houd een emmer eronder en kijk
 hoeveel seconden het duurt tot er 10 liter in zit. Debiet = 600 ÷ seconden (75 s = 8 L/min).
