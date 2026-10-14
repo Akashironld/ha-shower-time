@@ -1,9 +1,11 @@
-<img src="assets/icon.png" alt="Hot Water Shower Time" width="128" align="right">
+<p align="center"><img src="assets/icon.png" alt="Hot Water Shower Time" width="128"></p>
 
-# Hot Water Shower Time
+<h1 align="center">Hot Water Shower Time</h1>
 
+<p align="center">
 <a href="https://my.home-assistant.io/redirect/hacs_repository/?owner=Akashironld&repository=ha-shower-time&category=integration"><img src="https://my.home-assistant.io/badges/hacs_repository.svg" alt="Open in HACS" height="36"></a>
 <a href="https://ko-fi.com/akashironl/?hidefeed=true&widget=true&embed=true"><img src="https://storage.ko-fi.com/cdn/kofi2.png?v=3" alt="Buy me a coffee on Ko-fi" height="36"></a>
+</p>
 
 **How long can I still shower?** A self-learning Home Assistant integration that turns the temperature
 sensors of your hot water tank into minutes of showering — and gets better every night by learning from
