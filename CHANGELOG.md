@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.10.2 — Card in the mobile apps
+
+- **Fix: "Custom element doesn't exist: shower-time-card" in the mobile apps and on tablets** (#4). Since Home
+  Assistant 2026.9 the frontend swaps in a scoped element registry while it starts; a card loaded early from the
+  start page could register before that swap and stay invisible to dashboards (mostly in the apps, whose cache
+  makes the card load early). The card now comes only as a dashboard resource when dashboards are managed in the
+  UI (like every HACS card), and it registers again in the new registry if it was loaded early anyway. Dashboards
+  with resources in YAML keep the start-page module
+- The dashboard resource is left alone when it is up to date (it was rewritten on every start)
+- Tests that run the integration inside a real test Home Assistant
+
 ## v0.10.1
 
 - **Fix: v0.10.0 did not load on Home Assistant before mid-2025** (it imported a constant that older versions do

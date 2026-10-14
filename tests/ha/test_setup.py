@@ -28,13 +28,39 @@ async def test_entities_are_created(hass: HomeAssistant, entry) -> None:
     assert hass.states.get("sensor.hot_water_tank_charge") is not None
 
 
-async def test_card_is_served_for_both_frontend_builds(hass: HomeAssistant, entry) -> None:
+async def test_card_from_the_start_page_when_resources_are_in_yaml(hass: HomeAssistant, entry) -> None:
+    """No dashboard resources to manage (YAML): the start page loads the card, in both frontend builds."""
     hass.http.async_register_static_paths.assert_called_once()
     path = hass.http.async_register_static_paths.call_args.args[0][0]
     assert path.url_path == CARD_URL and path.path.endswith("shower-time-card.js")
     modern, legacy = hass.data[DATA_EXTRA_MODULE_URL], hass.data[DATA_EXTRA_JS_URL_ES5]
     assert len(modern) == 1 and next(iter(modern)).startswith(CARD_URL + "?v=")
     assert modern == legacy
+
+
+async def test_card_only_as_a_resource_when_dashboards_are_managed_in_the_ui(hass: HomeAssistant, deps) -> None:
+    """Dashboards in the UI (the default): the card is a dashboard resource and NOT an early start-page module,
+    which could run before Home Assistant's scoped element registry and be invisible ("Custom element doesn't
+    exist" in the mobile apps). Legacy browsers still get it from the start page."""
+    from custom_components.shower_time import async_setup as integration_setup
+    res = _resources(hass)
+    hass.data["lovelace"] = SimpleNamespace(resources=res)
+    assert await integration_setup(hass, {})
+    await hass.async_block_till_done()
+    assert hass.data[DATA_EXTRA_MODULE_URL] == set()
+    assert len(hass.data[DATA_EXTRA_JS_URL_ES5]) == 1
+    urls = [i["url"] for i in res.async_items()]
+    assert len(urls) == 1 and urls[0] == next(iter(hass.data[DATA_EXTRA_JS_URL_ES5]))
+
+
+async def test_card_falls_back_to_the_start_page_when_the_resource_fails(hass: HomeAssistant, deps) -> None:
+    from custom_components.shower_time import async_setup as integration_setup
+    res = _resources(hass)
+    res.async_create_item = AsyncMock(side_effect=RuntimeError("storage broken"))
+    hass.data["lovelace"] = SimpleNamespace(resources=res)
+    assert await integration_setup(hass, {})
+    await hass.async_block_till_done()
+    assert len(hass.data[DATA_EXTRA_MODULE_URL]) == 1
 
 
 async def test_diagnostics(hass: HomeAssistant, entry) -> None:
