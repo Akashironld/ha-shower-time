@@ -484,3 +484,11 @@ def test_gap_use_judges_by_heat():
     assert insights.gap_use(p, (54.1, 54.0), (54.0, 53.9), 20.0, 0.44) is None                    # nothing
     assert insights.gap_use(p, (54.1, 54.0), (54.0, 53.6), 20.0, 0.44, cooling=0.5) is None       # only cooling
     assert insights.gap_use(p, (43.5, 21.7), (33.0, 19.5), 17.0, 0.44)[0] == "coil"              # no water
+
+
+def test_a_hidden_shower_leans_a_little_on_the_usual_length():
+    assert insights.gap_minutes(20.0, [8, 9, 10]) == 20.0                         # too few showers known
+    usual = [8, 9, 10, 10, 14]
+    m = insights.gap_minutes(20.0, usual)
+    assert 16 < m < 20                                                            # mostly the heat
+    assert insights.gap_minutes(10.0, usual) == 10.0                              # usual already

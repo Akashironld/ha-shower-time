@@ -482,6 +482,9 @@ class ShowerTimeManager:
         else:                                        # somewhere in the gap: its middle
             start = before_at + timedelta(minutes=max(0.0, (span - minutes) / 2))
         if kind == "shower":
+            usual = [x["minutes"] for x in self.ledger.log
+                     if x.get("source") == "live" and x.get("kind", "shower") == "shower" and not x.get("estimated")]
+            minutes = insights.gap_minutes(minutes, usual)
             entry = self.ledger.estimated_ended(self, start, minutes, e)
             self._fire("shower_ended", {**entry, "currency": self.ledger.currency or None})
         else:

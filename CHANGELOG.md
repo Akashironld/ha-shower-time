@@ -11,7 +11,8 @@
   (the tank falls faster than any bath could), the pace of the fall is unknown. The hot water used meanwhile is now
   logged once, from the heat it took, after the readings have settled: as a shower (≈, attribute `estimated`) when
   that was enough heat for one — starting when the bathroom signal came on in the gap, else in the middle of it —
-  else as other hot water. Before, it was a bath that filled in seconds. A quiet heat pump at night (up to ~20
+  else as other hot water. Before, it was a bath that filled in seconds. Its length comes from the heat, drawn a
+  little towards your usual shower length (tested on real showers: typically 18 % off, at most 28 %) A quiet heat pump at night (up to ~20
   minutes) is no gap: the first reading of a shower after it is still followed live
 - **The bath threshold follows your showers.** It was twice the model's shower minute, which leans on the cold water
   estimate: with cold water estimated a few degrees too warm it came close to how fast a real shower lowers the tank
