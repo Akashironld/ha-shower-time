@@ -6,7 +6,7 @@
 0 minutes", and a bath now counts as a session, like a shower.
 
 ### Fixes
-- **Gaps in the tank readings** (reported by Wouter: the Weheat cloud stopped for 48 minutes while someone showered).
+- **Gaps in the tank readings** (seen on a Weheat: its cloud stopped for 48 minutes while someone showered).
   When the tank's device sent no temperature for 15 minutes, a tank sensor was unavailable, or a reading was stale
   (the tank falls faster than any bath could), the pace of the fall is unknown. The hot water used meanwhile is now
   logged once, from the heat it took, after the readings have settled: as a shower (≈, attribute `estimated`) when
@@ -24,7 +24,7 @@
   shower minutes of heat (≈ on the card, "bath" under the time), with `duration` for how long it ran. *Since
   reheat* counts it as showered; *tap / bucket* is what is left as other hot water. A bucket or a filled sink (less
   than six shower minutes of heat) stays other hot water
-- The shower log on the card marks an estimated session with ≈
+- The last-shower tile on the card marks an estimated session with ≈
 
 ### After updating
 Update in HACS and restart Home Assistant. The bath threshold learns your shower pace from the next five showers.
