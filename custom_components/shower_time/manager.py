@@ -597,7 +597,9 @@ class ShowerTimeManager:
         local = dt_util.as_local(at)
         showers = [tod(e["start"]) for e in self.ledger.log if e.get("kind", "shower") == "shower"]
         taps = [tod(e["start"]) for e in self.ledger.other if e.get("kind") == "tap"]
-        return insights.shower_time_of_day(local.hour * 60 + local.minute, showers, taps)
+        last = self.ledger.log[-1]["start"] if self.ledger.log else None
+        since_last = (at - datetime.fromisoformat(last)).total_seconds() / 60 if last else None
+        return insights.shower_time_of_day(local.hour * 60 + local.minute, showers, taps, since_last)
 
     def _remember_use(self, kind: str, drawn: float) -> None:
         self.use_stats[kind] = (self.use_stats[kind] + [round(drawn, 2)])[-50:]

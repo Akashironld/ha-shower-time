@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.12.1 — Short showers
+
+**Recommended for everyone** — a short shower could be logged as a tap, and the start of a use after a quiet tank
+was not measured.
+
+### Fixes
+- **The start of a use is measured again after a quiet tank** (#8). Most tank sensors only change state when the
+  value changes; when the bottom had not changed for half an hour, the first fall of a shower was spread over that
+  half hour, too slow to count, and only the part after the next reading was measured — about half of a short
+  shower. A fall now counts from when the heat pump last reported (its other temperatures change every few
+  minutes), so the whole use is measured. Showers also come out a little longer and closer to the truth
+- **Short showers count.** A use below the shower threshold is a shower when it ran 3 minutes or more, took 1.2 K
+  or more and came at a time this household showers: within an hour of the time of day two or more of its showers
+  were logged (and more showers than taps there), or within an hour after a logged shower — one showers after the
+  other. Checked on nine days of real readings: two short showers of 4 minutes that were taps before are now
+  showers; no tap became a shower
+
+### After updating
+Update in HACS and restart Home Assistant.
+
 ## v0.12.0 — Gaps in the readings, baths count as sessions
 
 **Recommended for everyone** — a heat pump whose data stopped for a while could turn a shower into a "bath filled in

@@ -503,6 +503,8 @@ def test_the_time_this_household_showers():
     assert not insights.shower_time_of_day(22 * 60, evening[:1], [])         # one shower is no habit
     assert not insights.shower_time_of_day(22 * 60, evening, [21 * 60 + 50] * 4)   # more taps than showers there
     assert insights.shower_time_of_day(10, [23 * 60 + 50, 23 * 60 + 40], [])        # across midnight
+    assert insights.shower_time_of_day(23 * 60 + 57, [23 * 60 + 30], [], since_last_shower=20)   # one after the other
+    assert not insights.shower_time_of_day(23 * 60 + 57, [23 * 60 + 30], [], since_last_shower=90)
 
 
 def test_a_short_shower_needs_minutes_heat_and_the_usual_time():

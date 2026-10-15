@@ -384,9 +384,12 @@ def _day_minutes(a: float, b: float) -> float:
     return min(d, 1440 - d)
 
 
-def shower_time_of_day(at: float, showers: list[float], taps: list[float]) -> bool:
-    """Does this household usually shower at this time of day (minutes since midnight)? At least two showers in the
-    log within an hour of it, and more showers than taps there: the evening shower, not the washing up."""
+def shower_time_of_day(at: float, showers: list[float], taps: list[float], since_last_shower: float | None = None) -> bool:
+    """Is this a time this household showers (minutes since midnight)? Either its habit — at least two showers in the
+    log within an hour of this time of day, and more showers than taps there (the evening shower, not the washing
+    up) — or a shower began less than an hour ago (``since_last_shower``, minutes): one showers after the other."""
+    if since_last_shower is not None and 0 <= since_last_shower <= HABIT_WINDOW:
+        return True
     near_showers = sum(1 for t in showers if _day_minutes(t, at) <= HABIT_WINDOW)
     near_taps = sum(1 for t in taps if _day_minutes(t, at) <= HABIT_WINDOW)
     return near_showers >= 2 and near_showers > near_taps
