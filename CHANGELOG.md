@@ -13,10 +13,10 @@
   that was enough heat for one — starting when the bathroom signal came on in the gap, else in the middle of it —
   else as other hot water. Before, it was a bath that filled in seconds. A quiet heat pump at night (up to ~20
   minutes) is no gap: the first reading of a shower after it is still followed live
-- **The bath threshold follows your showers.** It was twice the model's shower minute, which in autumn (warm cold
-  water) is lower than how fast the tank average really falls in a shower: up to 2.4 times early on. It is now twice
-  the measured pace of your own showers (from five of them), with a wider margin until then, and a shower only
-  turns into a fill once 4 K has left the tank
+- **The bath threshold follows your showers.** It was twice the model's shower minute, which leans on the cold water
+  estimate: with cold water estimated a few degrees too warm it came close to how fast a real shower lowers the tank
+  early on. It is now twice the measured pace of your own showers (from five of them), with a wider margin until
+  then, and a shower only turns into a fill once 4 K has left the tank
 - What the tank lost by itself during a gap is not counted as hot water used
 
 ### Improvements

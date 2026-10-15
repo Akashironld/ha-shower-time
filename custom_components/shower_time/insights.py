@@ -224,8 +224,9 @@ FILL_RATE = 1.2               # K/min, far faster than any shower: a bath or buc
 FILL_MIN_K = 2.0
 FILL_FACTOR = 2.0             # ... or twice the pace of this household's showers, once measured (a bath tap runs
                               # about twice a shower head's flow)
-FILL_FACTOR_MODEL = 2.5       # ... or this many times the model's shower minute until then: the tank average falls
-                              # faster than the model's minute early in a shower (up to 2.4 times measured)
+FILL_FACTOR_MODEL = 2.5       # ... or this many times the model's shower minute until then: the tank average can
+                              # fall faster early in a shower (1.8 times measured), and the model's minute leans on
+                              # the cold water estimate
 FILL_RECLASSIFY_K = 4.0       # a use already taken for a shower becomes a fill only once this much heat left: the
                               # first minutes of a shower can fall fast
 COIL_TOP_DROP = 1.0           # K the top falls while the bottom is still warm (or falls less) = no water drawn
