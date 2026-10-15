@@ -1,5 +1,34 @@
 # Changelog
 
+## v0.12.0 — Gaps in the readings, baths count as sessions
+
+**Recommended for everyone** — a heat pump whose data stopped for a while could turn a shower into a "bath filled in
+0 minutes", and a bath now counts as a session, like a shower.
+
+### Fixes
+- **Gaps in the tank readings** (reported by Wouter: the Weheat cloud stopped for 48 minutes while someone showered).
+  When the tank's device sent no temperature for 15 minutes, a tank sensor was unavailable, or a reading was stale
+  (the tank falls faster than any bath could), the pace of the fall is unknown. The hot water used meanwhile is now
+  logged once, from the heat it took, after the readings have settled: as a shower (≈, attribute `estimated`) when
+  that was enough heat for one — starting when the bathroom signal came on in the gap, else in the middle of it —
+  else as other hot water. Before, it was a bath that filled in seconds. A quiet heat pump at night (up to ~20
+  minutes) is no gap: the first reading of a shower after it is still followed live
+- **The bath threshold follows your showers.** It was twice the model's shower minute, which in autumn (warm cold
+  water) is lower than how fast the tank average really falls in a shower: up to 2.4 times early on. It is now twice
+  the measured pace of your own showers (from five of them), with a wider margin until then, and a shower only
+  turns into a fill once 4 K has left the tank
+- What the tank lost by itself during a gap is not counted as hot water used
+
+### Improvements
+- **A bath counts as a session**: in the shower log (kind `bath`), *Showers today*, the costs and the totals, in
+  shower minutes of heat (≈ on the card, "bath" under the time), with `duration` for how long it ran. *Since
+  reheat* counts it as showered; *tap / bucket* is what is left as other hot water. A bucket or a filled sink (less
+  than six shower minutes of heat) stays other hot water
+- The shower log on the card marks an estimated session with ≈
+
+### After updating
+Update in HACS and restart Home Assistant. The bath threshold learns your shower pace from the next five showers.
+
 ## v0.11.4 — A closer fit in sections
 
 **Recommended if you set a fixed height for the card in a sections dashboard** — v0.11.3 kept the card from being

@@ -134,9 +134,21 @@ Water drawn from the tank is replaced by cold water at the bottom, so the top st
 top falls while the bottom is still warm — a heat pump starting a reheat, or heat taken out through the coil — no
 water was drawn and it is not counted at all.
 
-Only showers go in the shower log, the habits and the shower totals. Everything else is counted as *Other hot water
-today* (heat, how often, cost) and fires `hot_water_used` on the Shower event. *Showering* is on only for a
+A **bath** counts as a session too: hot water that leaves at about twice the pace of your showers (learned from
+them) shows as **FILLING** while it runs, and once it took the heat of six shower minutes or more it goes in the
+shower log as a bath — counted in shower minutes of heat (≈), with its cost. A bucket or a filled sink stays other
+hot water. Baths never teach the shower length or flow.
+
+Showers and baths go in the shower log, the habits and the shower totals. Everything else is counted as *Other hot
+water today* (heat, how often, cost) and fires `hot_water_used` on the Shower event. *Showering* is on only for a
 recognised shower; *Hot water in use* for any use.
+
+**Gaps in the readings.** A heat pump's cloud can stop for a while, a sensor can be unavailable, and right after a
+restart the first readings can be old. When the tank's device sent no temperature for 15 minutes (or a sensor was
+unavailable, or the tank falls faster than any bath could) and the tank is much lower when the readings come back,
+the hot water used meanwhile is logged once from the heat it took: as a shower (≈) when that was enough for one,
+starting when the bathroom signal came on in the meantime, else as other hot water. It is not taken for a bath that
+filled in seconds.
 
 ### Enough for today?
 
@@ -445,8 +457,10 @@ hoeveel seconden het duurt tot er 10 liter in zit. Debiet = 600 ÷ seconden (75 
 **Slimme extra's:**
 - **Douche of afwas?** Warm water verschijnt eerst als **WARM WATER** op de kaart en wordt **DOUCHT NU** zodra er
   genoeg warmte in douchetempo uit het vat is gegaan (een paar minuten). Met een **badkamersignaal** (vochtigheid,
-  een slimme stekker op de badkamerventilatie, of een ventilator of lamp) binnen een minuut. Afwas en kranen tellen
-  apart als *Overig warm water vandaag*; een warmtepomp die opstart telt helemaal niet.
+  een slimme stekker op de badkamerventilatie, of een ventilator of lamp) binnen een minuut. Een **bad** telt als
+  beurt (in douche-minuten warmte, ≈). Afwas, kranen en een emmer tellen apart als *Overig warm water vandaag*; een
+  warmtepomp die opstart telt helemaal niet. Viel de warmtepomp even weg (geen gegevens), dan telt het warme water
+  van die tijd één keer, uit de warmte, als douche (≈) vanaf het moment dat het badkamersignaal aansloeg.
 - **Genoeg voor vandaag?** Hij leert wanneer jullie douchen (per weekdag) en waarschuwt als het warme water op
   raakt vóór de laatste douche van de dag; de kaart toont dan bijvoorbeeld **OP OM 21:30**.
 - **Huidige douche** (minuten en kosten tot nu toe) en een **Douche**-gebeurtenis na elke douche.
