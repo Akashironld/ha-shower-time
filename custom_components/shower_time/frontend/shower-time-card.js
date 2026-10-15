@@ -1,6 +1,6 @@
 /* Hot Water Shower Time card - served by the shower_time integration. */
 (() => {   // own scope: safe if the file is loaded twice as a classic script (legacy frontend + a manual resource)
-const CARD_VERSION = "0.11.4";
+const CARD_VERSION = "0.12.0";
 
 // Plain ES2017 on purpose (no ?. / ??): wall tablets often run an older browser that gets Home Assistant's
 // legacy frontend. "a ?? b" is written as nn(a, b).
@@ -11,7 +11,7 @@ const T = {
         reheating: "REHEATING", inuse: "SHOWERING", hotwater: "HOT WATER", filling: "FILLING", low: "ALMOST GONE", shortat: "EMPTY BY", fullat: "full", selflearning: "self-learning",
         learning: "learning", updated: "updated", today: "Today", lastshower: "Last shower", cooling: "Standing loss",
         perday: "per day", peryear: "/ year", none: "none yet", since: "Since reheat", left: "left", showered: "showered",
-        cooled: "cooled", other: "bath / tap", reheated: "reheated", last24: "Last 24 hours", max: "max", ago24: "-24 h", now: "now", yesterday: "yesterday",
+        cooled: "cooled", other: "bath / tap", reheated: "reheated", bath: "bath", last24: "Last 24 hours", max: "max", ago24: "-24 h", now: "now", yesterday: "yesterday",
         nohist: "no history yet \u2014 fills in by itself", unavailable: "Not available", cold: "cold water", cop: "COP",
         pick: "Pick the 'Shower time' sensor of the Hot Water Shower Time integration.",
         sensed: "sensed", you: "you shower at",
@@ -26,7 +26,7 @@ const T = {
         reheating: "WORDT OPGEWARMD", inuse: "DOUCHT NU", hotwater: "WARM WATER", filling: "BAD / EMMER", low: "BIJNA OP", shortat: "OP OM", fullat: "vol", selflearning: "zelflerend",
         learning: "leert", updated: "bijgewerkt", today: "Vandaag", lastshower: "Laatste douche", cooling: "Afkoeling",
         perday: "per dag", peryear: "/ jaar", none: "nog geen", since: "Sinds opwarmen", left: "over", showered: "gedoucht",
-        cooled: "afgekoeld", other: "bad / kraan", reheated: "bijgewarmd", last24: "Laatste 24 uur", max: "max", ago24: "-24 u", now: "nu", yesterday: "gisteren",
+        cooled: "afgekoeld", other: "bad / kraan", reheated: "bijgewarmd", bath: "bad", last24: "Laatste 24 uur", max: "max", ago24: "-24 u", now: "nu", yesterday: "gisteren",
         nohist: "nog geen historie \u2014 vult zich vanzelf", unavailable: "Niet beschikbaar", cold: "koud water", cop: "COP",
         pick: "Kies de sensor 'Douchetijd' van de integratie Hot Water Shower Time.",
         sensed: "gemeten", you: "jullie douchen op",
@@ -287,8 +287,11 @@ class ShowerTimeCard extends HTMLElement {
     if (a.last) {
       const when = new Date(a.last.start);
       const day = when.toDateString() === new Date().toDateString() ? "" : `${when.toLocaleDateString(lang, { weekday: "short" })} `;
-      last = `<div class="tv">${Math.round(a.last.minutes)} ${this._t("min")}${this._money(a.last.cost, a, lang) ? ` \u00b7 ${this._money(a.last.cost, a, lang)}` : ""}</div>
-        <div class="ts">${day}${this._time(when)}</div>`;
+      // a bath counts in shower minutes of heat, a session hidden by a gap in the readings is estimated: "\u2248"
+      const approx = a.last.kind === "bath" || a.last.estimated ? "\u2248 " : "";
+      const what = a.last.kind === "bath" ? ` \u00b7 ${this._t("bath")}` : "";
+      last = `<div class="tv">${approx}${Math.round(a.last.minutes)} ${this._t("min")}${this._money(a.last.cost, a, lang) ? ` \u00b7 ${this._money(a.last.cost, a, lang)}` : ""}</div>
+        <div class="ts">${day}${this._time(when)}${what}</div>`;
     }
     const loss = a.standing_loss_per_day;
     const cool = loss ? `<div class="tile">

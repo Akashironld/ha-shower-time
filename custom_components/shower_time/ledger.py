@@ -195,8 +195,18 @@ class ShowerLedger:
                 "electricity_kwh": round(heat / self.cop(m), 2),
                 "cost": round(heat * price, 2) if price is not None else None}
 
+    def bath_ended(self, m: ShowerTimeManager, start: datetime, duration: float, minutes: float,
+                   est: model.Estimate) -> dict:
+        """Log a bath as a session: ``minutes`` is its heat in shower minutes, ``duration`` how long it ran."""
+        return self._add(m, start, minutes, est.per_minute, self.tank_price, "live", kind="bath",
+                         duration=round(duration, 1))
+
+    def estimated_ended(self, m: ShowerTimeManager, start: datetime, minutes: float, est: model.Estimate) -> dict:
+        """Log a session hidden by a gap in the tank readings: its length follows from the heat it took."""
+        return self._add(m, start, minutes, est.per_minute, self.tank_price, "live", estimated=True)
+
     def _add(self, m: ShowerTimeManager, start: datetime, minutes: float, per_minute: float,
-             heat_price: float | None, source: str) -> dict:
+             heat_price: float | None, source: str, kind: str = "shower", **extra) -> dict:
         heat = model.shower_heat_kwh(per_minute, minutes, m.volume)
         cop = self.cop(m)
         if heat_price is None:
@@ -205,7 +215,8 @@ class ShowerLedger:
             self.currency = cur or self.currency
         entry = {"start": dt_util.as_local(start).isoformat(timespec="minutes"), "minutes": round(minutes, 1),
                  "heat_kwh": round(heat, 2), "electricity_kwh": round(heat / cop, 2),
-                 "cost": round(heat * heat_price, 2) if heat_price is not None else None, "source": source}
+                 "cost": round(heat * heat_price, 2) if heat_price is not None else None, "source": source,
+                 "kind": kind, **extra}
         self.log.append(entry)
         self.log.sort(key=lambda e: e["start"])
         cutoff = (dt_util.now() - timedelta(days=LOG_DAYS)).isoformat()
@@ -221,7 +232,8 @@ class ShowerLedger:
         m.request_save()
         return entry
 
-    def other_ended(self, m: ShowerTimeManager, kind: str, start: datetime, minutes: float, heat_kwh: float) -> dict:
+    def other_ended(self, m: ShowerTimeManager, kind: str, start: datetime, minutes: float, heat_kwh: float,
+                    **extra) -> dict:
         """Log hot water that was not a shower (washing up, a tap, a bath or bucket), with what it cost."""
         cop = self.cop(m)
         price = self.tank_price
@@ -232,7 +244,7 @@ class ShowerLedger:
         entry = {"start": dt_util.as_local(start).isoformat(timespec="minutes"), "kind": kind,
                  "minutes": round(minutes, 1), "heat_kwh": round(heat_kwh, 2),
                  "electricity_kwh": round(heat_kwh / cop, 2),
-                 "cost": round(heat_kwh * price, 2) if price is not None else None}
+                 "cost": round(heat_kwh * price, 2) if price is not None else None, **extra}
         cutoff = (dt_util.now() - timedelta(days=LOG_DAYS)).isoformat()
         self.other = [e for e in self.other if e["start"] >= cutoff] + [entry]
         m.request_save()
@@ -290,7 +302,7 @@ class ShowerLedger:
         # showers only: not washing up, and not heat that left without water (a heat pump starting a reheat)
         draws = [d for d in model.find_draws(rows) if MIN_SHOWER_MINUTES <= d.minutes <= MAX_SHOWER_MINUTES
                  and insights.draw_kind(m.params, rows, d.start, d.minutes, cold_at(d.start), m.confirm_k(),
-                                        insights.fill_rate(m.estimate.per_minute if m.estimate else None)) == "shower"]
+                                        m.fill_rate()) == "shower"]
         price_by_hour: dict[int, float] = {}
         cur = ""
         if m.price:

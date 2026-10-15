@@ -103,28 +103,40 @@ async def test_bathroom_signal_recognises_a_shower_at_once(hass: HomeAssistant, 
     assert started["event_type"] == "shower_started" and started["bathroom_signal"] is True
 
 
-async def test_a_bath_is_not_a_shower_even_with_the_bathroom_signal(hass: HomeAssistant, deps, freezer) -> None:
-    """The bathroom signal makes a bath look like a shower at first; its pace (twice a shower's) makes it a fill,
-    logged as other hot water with the heat it really took."""
+async def test_a_bath_counts_as_a_session_even_with_the_bathroom_signal(hass: HomeAssistant, deps, freezer) -> None:
+    """The bathroom signal makes a bath look like a shower at first; its pace (far above a shower's) makes it a
+    fill while it runs, and once done a session of its own: counted like a shower, in shower minutes of heat."""
     hass.states.async_set(HUMIDITY, "60", {"unit_of_measurement": "%", "device_class": "humidity"})
     entry = await setup_entry(hass, {"bathroom_sensor": HUMIDITY})
-    per_minute = entry.runtime_data.estimate.per_minute
+    m = entry.runtime_data
+    per_minute = m.estimate.per_minute
     await start_reading(hass, freezer)
     freezer.tick(timedelta(minutes=1))
     hass.states.async_set(HUMIDITY, "66", {"unit_of_measurement": "%", "device_class": "humidity"})
     await hass.async_block_till_done()
     bottom = 50.0
-    for _ in range(8):
-        bottom -= 3.0 * per_minute / 0.625 * 1.6                # far faster than a shower in this tank
+    for _ in range(6):
+        bottom -= 4.5 * per_minute / 0.84                    # about three times a shower's pace in this tank
         await step(hass, freezer, 1, 55.0, bottom)
     assert hass.states.get(IN_USE).attributes["kind"] == "fill"
     assert state(hass, SHOWERING) == "off"
     await wait(hass, freezer, 6)
-    assert state(hass, "sensor.hot_water_showers_today") == "0"
-    other = hass.states.get("sensor.hot_water_other_hot_water_today")
-    assert other.attributes["by_kind"] == {"fill": 1} and float(other.state) > 0
-    split = entry.runtime_data.since_reheat()
+    assert state(hass, "sensor.hot_water_showers_today") == "1"
+    last = m.ledger.log[-1]
+    assert last["kind"] == "bath" and last["minutes"] > last["duration"]   # more heat than its minutes of running
+    assert float(state(hass, "sensor.hot_water_other_hot_water_today")) == 0
+    assert hass.states.get(EVENT).attributes["event_type"] == "shower_ended"
+    assert hass.states.get(EVENT).attributes["kind"] == "bath"
+    split = m.since_reheat()
     if split is not None:                                      # the bath is not cooling
-        assert split["other_minutes"] > 0 and split["showered_minutes"] == 0
-        total = split["remaining_minutes"] + split["other_minutes"] + split["cooling_minutes"]
-        assert abs(total - split["total_minutes"]) < 0.3
+        assert split["showered_minutes"] > 0 and split["other_minutes"] == 0
+
+
+async def test_a_bucket_stays_other_hot_water(hass: HomeAssistant, entry, freezer) -> None:
+    """Filling a bucket with hot water: fast, but too little heat for a bath."""
+    await start_reading(hass, freezer)
+    await step(hass, freezer, 1, 55.0, 42.0)                 # 4.3 K in a minute: a fill, 5 shower minutes of heat
+    assert hass.states.get(IN_USE).attributes["kind"] == "fill"
+    await wait(hass, freezer, 6)
+    assert state(hass, "sensor.hot_water_showers_today") == "0"
+    assert hass.states.get("sensor.hot_water_other_hot_water_today").attributes["by_kind"] == {"fill": 1}

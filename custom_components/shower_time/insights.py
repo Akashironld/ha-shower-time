@@ -222,8 +222,12 @@ SHOWER_CONFIRM_K = 1.8        # tank average drop that makes a use a shower (unt
 BATH_CONFIRM_K = 0.6          # with a bathroom signal a much smaller drop is enough
 FILL_RATE = 1.2               # K/min, far faster than any shower: a bath or bucket filled with hot water only
 FILL_MIN_K = 2.0
-FILL_FACTOR = 2.0             # ... or twice the pace of a shower in this tank, once that is known (a bath tap runs
-                              # about twice a shower head's flow; real showers peak at 1.7 times)
+FILL_FACTOR = 2.0             # ... or twice the pace of this household's showers, once measured (a bath tap runs
+                              # about twice a shower head's flow)
+FILL_FACTOR_MODEL = 2.5       # ... or this many times the model's shower minute until then: the tank average falls
+                              # faster than the model's minute early in a shower (up to 2.4 times measured)
+FILL_RECLASSIFY_K = 4.0       # a use already taken for a shower becomes a fill only once this much heat left: the
+                              # first minutes of a shower can fall fast
 COIL_TOP_DROP = 1.0           # K the top falls while the bottom is still warm (or falls less) = no water drawn
 COIL_BOTTOM_ABOVE_COLD = 15.0
 BATH_SIGNAL_MINUTES = 10      # a bathroom signal this long before or during the use counts
@@ -234,9 +238,13 @@ FALL_START_BATH = 0.15        # ... or this much when the bathroom signal is on 
 FALL_CONTINUE = 0.1           # K/min that keeps a running use going (the end of a shower falls more slowly)
 
 
-def fill_rate(per_minute: float | None) -> float:
-    """Tank average fall (K/min) from which hot water is a bath or bucket being filled, not a shower."""
-    return FILL_FACTOR * per_minute if per_minute and per_minute > 0 else FILL_RATE
+def fill_rate(per_minute: float | None, shower_rates: list[float] | None = None) -> float:
+    """Tank average fall (K/min) from which hot water is a bath or bucket being filled, not a shower: twice the
+    pace this household's showers were measured at (five or more), else a margin over the model's minute."""
+    model_rate = FILL_FACTOR_MODEL * per_minute if per_minute and per_minute > 0 else FILL_RATE
+    if shower_rates and len(shower_rates) >= 5:
+        return max(FILL_FACTOR * statistics.median(shower_rates), FILL_FACTOR * (per_minute or 0.0))
+    return model_rate
 
 
 @dataclass
@@ -267,7 +275,7 @@ class UseSession:
                 self.kind = "coil"               # heat left without water: not a use after all
                 return False
         rate = self.drawn / max(1.0, t - self.start)
-        if self.drawn >= FILL_MIN_K and rate >= fill_rate:
+        if self.drawn >= (FILL_MIN_K if self.kind == "unknown" else FILL_RECLASSIFY_K) and rate >= fill_rate:
             self.kind = "fill"                   # also when it looked like a shower at first: a bath runs faster
             return False
         if self.kind != "unknown":
@@ -288,6 +296,59 @@ class UseSession:
         if self.kind == "shower":
             return "shower" if min_shower <= minutes <= max_shower else "other"
         return self.kind if self.kind in ("fill", "coil") else "tap"
+
+
+# --------------------------------------------------------------------------- uses hidden by a data gap
+
+GAP_MINUTES = 15.0            # the tank's device sent no temperature for this long: when hot water went is unknown
+                              # (a Weheat is silent for up to ~20 minutes at night; outages last far longer)
+GAP_DROP_K = 1.5              # ... and the tank average fell at least this much in the meantime
+GAP_PACE_FACTOR = 3.0         # a fall this many times faster than a bath fills: the earlier reading was stale
+BATH_SHOWER_MINUTES = 6.0     # a fill that took the heat of this many shower minutes is a bath (a session, like a
+                              # shower); less is a bucket or a sink
+
+
+def pace_unknown(now: float, prev_reading: float, temp_seen: list[float], started: float,
+                 unavailable_at: float | None, drop: float, fill_rate: float = FILL_RATE,
+                 per_minute: float | None = None) -> bool:
+    """Is the pace of a fall between two tank readings unknown? Times are minutes.
+
+    True when a tank sensor was unavailable since the previous reading, when the fall is far faster than even a
+    bath could cause (the previous reading was stale), or when the tank's device sent no temperature for
+    GAP_MINUTES before this reading and the tank fell more meanwhile than one reading into a shower shows (three
+    shower minutes; ``temp_seen``: when its temperature sensors last changed — a tank sensor that does not change
+    says nothing, the others change every few minutes).
+    Changes within half a minute of this reading are left out: one poll writes all sensors at once."""
+    if drop < 0.15:
+        return False
+    if unavailable_at is not None and unavailable_at >= prev_reading:
+        return True
+    if drop / max(0.5, now - prev_reading) > GAP_PACE_FACTOR * fill_rate:
+        return True
+    seen = [t for t in temp_seen if t <= now - 0.5]
+    last = max(seen) if seen else started
+    return now - last > GAP_MINUTES and drop >= max(GAP_DROP_K, 3 * (per_minute or 0.0))
+
+
+def gap_use(params: dict, before: tuple[float, float | None], after: tuple[float, float | None], cold: float,
+            per_minute: float, confirm_k: float = SHOWER_CONFIRM_K, cooling: float = 0.0) -> tuple[str, float, float] | None:
+    """Hot water used while the readings were stale: (kind, tank average fall in K, shower-minute equivalent), or
+    None when nothing measurable left the tank. The pace is unknown, so a shower and a bath look the same: enough
+    heat for a shower makes it a session, less is a tap (a bathroom signal only tells when it began: a fan or light
+    can be on for other reasons). "coil" when the heat left without water (the top fell, the bottom stayed warm).
+    ``cooling`` (K) is what the tank lost by itself during the gap."""
+    a0 = model.tank_average(params, before[0], before[1])
+    a1 = model.tank_average(params, after[0], after[1])
+    drop = a0 - a1 - max(0.0, cooling)
+    if drop < 0.15:
+        return None
+    if before[1] is not None and after[1] is not None:
+        top_drop, bottom_drop = before[0] - after[0], before[1] - after[1]
+        if top_drop >= COIL_TOP_DROP and (top_drop > bottom_drop or after[1] > cold + COIL_BOTTOM_ABOVE_COLD):
+            return "coil", round(drop, 2), 0.0
+    minutes = drop / per_minute if per_minute > 0 else 0.0
+    kind = "shower" if drop >= confirm_k else "tap"
+    return kind, round(drop, 2), round(minutes, 1)
 
 
 def _quantile(values: list[float], q: float) -> float:

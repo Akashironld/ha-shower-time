@@ -410,7 +410,7 @@ def test_a_bath_that_first_looked_like_a_shower_becomes_a_fill():
     s2 = insights.UseSession(start=0.0, start_avg=model.tank_average(p, 55.0, 50.0), start_top=55.0, start_bottom=50.0)
     for t, top, bottom in steps:
         s2.update(t, model.tank_average(p, top, bottom), True, top=top, bottom=bottom, cold=15.0,
-                  fill_rate=insights.fill_rate(0.625))
+                  fill_rate=insights.fill_rate(0.625, [0.625] * 5))
     assert s2.kind == "fill" and s2.final(8, 40) == "fill"  # ... and a bath once its pace shows
 
 
@@ -434,6 +434,53 @@ def test_a_fast_water_meter_flow_is_a_bath_tap():
     assert s.kind == "fill"
 
 
-def test_fill_rate_follows_the_tank():
+def test_fill_rate_follows_the_tank_and_the_household():
     assert insights.fill_rate(None) == insights.FILL_RATE
-    assert insights.fill_rate(0.6) == 1.2 and insights.fill_rate(1.6) == 3.2
+    assert insights.fill_rate(0.6) == 1.5 and insights.fill_rate(1.6) == 4.0      # the model's minute, with margin
+    assert insights.fill_rate(0.44, [0.4, 0.5, 0.6, 0.65, 0.88]) == 1.2            # twice the measured showers
+    assert insights.fill_rate(0.44, [0.6, 0.6]) == 1.1                             # too few measured yet
+
+
+def test_a_shower_that_falls_fast_at_first_stays_a_shower():
+    """The first minutes of a shower can fall fast; a confirmed shower only becomes a fill after 4 K."""
+    p = model.new_params("weheat_200")
+    s = insights.UseSession(start=0.0, start_avg=model.tank_average(p, 55.0, 50.0), start_top=55.0, start_bottom=50.0)
+    s.kind, s.confirmed_after = "shower", 1.0
+    for t, bottom in ((1, 47.0), (2, 44.5)):                 # quick at first ...
+        s.update(t, model.tank_average(p, 55.0, bottom), True, top=55.0, bottom=bottom, cold=17.0, fill_rate=1.1)
+    assert s.kind == "shower" and s.drawn < insights.FILL_RECLASSIFY_K
+    for t in range(3, 12):                                   # ... then a shower's pace
+        bottom -= 0.9
+        s.update(t, model.tank_average(p, 55.0, bottom), True, top=55.0, bottom=bottom, cold=17.0, fill_rate=1.1)
+    assert s.kind == "shower"
+
+
+# --------------------------------------------------------------------------- uses hidden by a gap in the readings
+
+def test_pace_unknown_after_a_gap_only():
+    # a normal reading in a shower: the previous one two minutes ago, the device sent data a minute ago
+    assert not insights.pace_unknown(100.0, 98.0, [99.0], 0.0, None, 1.2, 1.2, 0.44)
+    # the device was silent for 40 minutes and the tank fell far: a gap
+    assert insights.pace_unknown(100.0, 58.0, [60.0, 99.9], 0.0, None, 10.0, 1.2, 0.44)
+    # ... but a quiet night followed by the first reading of a shower is not
+    assert not insights.pace_unknown(100.0, 58.0, [60.0], 0.0, None, 1.0, 1.2, 0.44)
+    # just after a restart: no data since the start
+    assert insights.pace_unknown(100.0, 59.0, [], 59.0, None, 10.0, 1.2, 0.44)
+    # a tank sensor was unavailable since the previous reading
+    assert insights.pace_unknown(100.0, 90.0, [99.0], 0.0, 95.0, 0.5, 1.2, 0.44)
+    # a fall no bath can make: the previous reading was stale
+    assert insights.pace_unknown(100.0, 99.9, [99.0], 0.0, None, 10.0, 1.2, 0.44)
+    # a bath reading: fast, but possible
+    assert not insights.pace_unknown(100.0, 98.0, [99.0], 0.0, None, 3.0, 1.2, 0.44)
+    assert not insights.pace_unknown(100.0, 58.0, [60.0], 0.0, None, 0.1, 1.2, 0.44)   # nothing used
+
+
+def test_gap_use_judges_by_heat():
+    p = model.new_params("weheat_200")
+    kind, drop, minutes = insights.gap_use(p, (54.1, 54.0), (53.6, 28.8), 20.0, 0.44)
+    assert kind == "shower" and drop > 8 and abs(minutes - drop / 0.44) < 0.2
+    kind, drop, _ = insights.gap_use(p, (54.1, 54.0), (54.0, 52.5), 20.0, 0.44)
+    assert kind == "tap"
+    assert insights.gap_use(p, (54.1, 54.0), (54.0, 53.9), 20.0, 0.44) is None                    # nothing
+    assert insights.gap_use(p, (54.1, 54.0), (54.0, 53.6), 20.0, 0.44, cooling=0.5) is None       # only cooling
+    assert insights.gap_use(p, (43.5, 21.7), (33.0, 19.5), 17.0, 0.44)[0] == "coil"              # no water
