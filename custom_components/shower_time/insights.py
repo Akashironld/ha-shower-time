@@ -373,6 +373,31 @@ def _quantile(values: list[float], q: float) -> float:
     return v[lo] + (v[min(lo + 1, len(v) - 1)] - v[lo]) * (pos - lo)
 
 
+SHORT_SHOWER_K = 1.2          # a use below the shower threshold is still a (short) shower with at least this much
+SHORT_SHOWER_MINUTES = 3.0    # ... and this long — a tap runs shorter — at an hour this household usually showers
+HABIT_WINDOW = 60.0           # minutes either side of the time of day: "the hour this household showers"
+
+
+def _day_minutes(a: float, b: float) -> float:
+    """Distance between two times of day in minutes, across midnight."""
+    d = abs(a - b) % 1440
+    return min(d, 1440 - d)
+
+
+def shower_time_of_day(at: float, showers: list[float], taps: list[float]) -> bool:
+    """Does this household usually shower at this time of day (minutes since midnight)? At least two showers in the
+    log within an hour of it, and more showers than taps there: the evening shower, not the washing up."""
+    near_showers = sum(1 for t in showers if _day_minutes(t, at) <= HABIT_WINDOW)
+    near_taps = sum(1 for t in taps if _day_minutes(t, at) <= HABIT_WINDOW)
+    return near_showers >= 2 and near_showers > near_taps
+
+
+def short_shower(drawn: float, minutes: float, usual_time: bool) -> bool:
+    """A use that stayed below the shower threshold, but ran for minutes, took real heat and came at a time this
+    household showers: a short shower (a tap runs shorter and takes less)."""
+    return usual_time and drawn >= SHORT_SHOWER_K and minutes >= SHORT_SHOWER_MINUTES
+
+
 def learn_confirm_k(showers: list[float], taps: list[float]) -> float:
     """Threshold between this household's taps and showers (tank average drop, K): the geometric middle of the
     largest taps and the smallest showers. The default until both have been seen five times, or when they

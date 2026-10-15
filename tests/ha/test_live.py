@@ -140,3 +140,31 @@ async def test_a_bucket_stays_other_hot_water(hass: HomeAssistant, entry, freeze
     await wait(hass, freezer, 6)
     assert state(hass, "sensor.hot_water_showers_today") == "0"
     assert hass.states.get("sensor.hot_water_other_hot_water_today").attributes["by_kind"] == {"fill": 1}
+
+
+async def _short_use(hass: HomeAssistant, freezer) -> None:
+    """Hot water for four minutes, about 1.4 K off the tank average: below the shower threshold."""
+    await start_reading(hass, freezer)
+    await step(hass, freezer, 2, 55.0, 48.7)
+    await step(hass, freezer, 2, 55.0, 47.5)
+    await wait(hass, freezer, 6)
+
+
+async def test_a_short_shower_at_the_usual_time_counts(hass: HomeAssistant, entry, freezer) -> None:
+    """Short showers that stay below the threshold count when they come at the time this household showers."""
+    from homeassistant.util import dt as dt_util
+    m = entry.runtime_data
+    now = dt_util.now()
+    for days, shift in ((1, -20), (2, 5), (3, 25)):                     # showers around this time on earlier days
+        t = (now - timedelta(days=days, minutes=-shift)).isoformat(timespec="minutes")
+        m.ledger.log.append({"start": t, "minutes": 8.0, "heat_kwh": 1.0, "electricity_kwh": 0.4, "cost": None,
+                             "source": "live", "kind": "shower"})
+    await _short_use(hass, freezer)
+    assert state(hass, "sensor.hot_water_showers_today") == "1"
+    assert m.ledger.other == []
+
+
+async def test_the_same_short_use_at_another_time_is_a_tap(hass: HomeAssistant, entry, freezer) -> None:
+    await _short_use(hass, freezer)
+    assert state(hass, "sensor.hot_water_showers_today") == "0"
+    assert [o["kind"] for o in entry.runtime_data.ledger.other] == ["tap"]

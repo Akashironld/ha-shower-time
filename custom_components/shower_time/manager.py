@@ -414,6 +414,10 @@ class ShowerTimeManager:
         if start and end:
             minutes = (end - start).total_seconds() / 60
             kind = use.final(minutes, MAX_SHOWER_MINUTES) if use else "tap"
+            by_habit = kind == "tap" and use is not None and insights.short_shower(
+                use.drawn, minutes, self._shower_time_of_day(start))
+            if by_habit:
+                kind = "shower"                    # short, but at the hour this household showers
             if kind == "shower":
                 entry = self.ledger.shower_ended(self, start, end, self.estimate, min_minutes=2.0)
                 if entry is not None:
@@ -573,6 +577,16 @@ class ShowerTimeManager:
     def fill_rate(self) -> float:
         """Tank average fall (K/min) from which hot water is a bath or bucket, from this household's showers."""
         return insights.fill_rate(self.estimate.per_minute if self.estimate else None, self.use_stats.get("shower_rate"))
+
+    def _shower_time_of_day(self, at: datetime) -> bool:
+        """Is this the time of day this household usually showers (from the shower log and the other hot water)?"""
+        def tod(iso: str) -> float:
+            t = dt_util.as_local(datetime.fromisoformat(iso))
+            return t.hour * 60 + t.minute
+        local = dt_util.as_local(at)
+        showers = [tod(e["start"]) for e in self.ledger.log if e.get("kind", "shower") == "shower"]
+        taps = [tod(e["start"]) for e in self.ledger.other if e.get("kind") == "tap"]
+        return insights.shower_time_of_day(local.hour * 60 + local.minute, showers, taps)
 
     def _remember_use(self, kind: str, drawn: float) -> None:
         self.use_stats[kind] = (self.use_stats[kind] + [round(drawn, 2)])[-50:]

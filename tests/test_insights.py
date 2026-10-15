@@ -492,3 +492,21 @@ def test_a_hidden_shower_leans_a_little_on_the_usual_length():
     m = insights.gap_minutes(20.0, usual)
     assert 16 < m < 20                                                            # mostly the heat
     assert insights.gap_minutes(10.0, usual) == 10.0                              # usual already
+
+
+# --------------------------------------------------------------------------- short showers at the usual hour
+
+def test_the_time_this_household_showers():
+    evening = [21 * 60 + 24, 21 * 60 + 36, 21 * 60 + 55]                   # showers at 21:24, 21:36, 21:55
+    assert insights.shower_time_of_day(22 * 60, evening, [20 * 60 + 45])     # 22:00: their shower time
+    assert not insights.shower_time_of_day(18 * 60 + 30, evening, [])        # dinner time: no showers then
+    assert not insights.shower_time_of_day(22 * 60, evening[:1], [])         # one shower is no habit
+    assert not insights.shower_time_of_day(22 * 60, evening, [21 * 60 + 50] * 4)   # more taps than showers there
+    assert insights.shower_time_of_day(10, [23 * 60 + 50, 23 * 60 + 40], [])        # across midnight
+
+
+def test_a_short_shower_needs_minutes_heat_and_the_usual_time():
+    assert insights.short_shower(1.7, 4.0, True)
+    assert not insights.short_shower(1.7, 4.0, False)          # not at a shower time: a tap
+    assert not insights.short_shower(0.8, 2.0, True)           # washing up: short and little heat
+    assert not insights.short_shower(1.7, 2.0, True)           # a tap at full blast for two minutes
