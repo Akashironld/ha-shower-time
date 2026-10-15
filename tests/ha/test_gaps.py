@@ -65,7 +65,7 @@ async def test_a_shower_hidden_by_an_outage_is_logged_once_from_its_heat(hass: H
     last = m.ledger.log[-1]
     assert last["kind"] == "shower" and last["estimated"] is True
     assert abs(local(last["start"]) - showered_at) < timedelta(minutes=1)
-    assert 10 < last["minutes"] < 40                                     # the heat of 26 K off the bottom
+    assert 8 < last["minutes"] < 30          # 26 K off the bottom: about 8 K of tank average, 0.84 K per minute
     assert float(state(hass, "sensor.hot_water_other_hot_water_today")) == 0
     ended = hass.states.get("event.hot_water_shower").attributes
     assert ended["event_type"] == "shower_ended" and ended["estimated"] is True
