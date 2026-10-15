@@ -296,6 +296,13 @@ class ShowerTimeManager:
                  (e.device_class or e.original_device_class) == "temperature"]
         return sorted(set(found) | {x for x in (self.top, self.bottom) if x})
 
+    def _reported_before(self, now: datetime) -> datetime | None:
+        """When the tank's device last sent a temperature before this reading (one poll writes all its sensors at
+        once, so the half minute before now is left out)."""
+        cut = now.timestamp() / 60 - 0.5
+        seen = [t for t in self._temp_seen if t <= cut]
+        return datetime.fromtimestamp(max(seen) * 60, timezone.utc) if seen else None
+
     @callback
     def _temp_changed(self, _event: Event) -> None:
         self._temp_seen = (self._temp_seen + [dt_util.utcnow().timestamp() / 60])[-50:]
@@ -338,6 +345,7 @@ class ShowerTimeManager:
         changed, falling, fall_from = False, False, None
         before = {ent: v[0] for ent, v in self._prev.items()}     # readings before this update
         before_at = None                                          # previous reading of the sensor(s) that changed
+        confirmed = self._reported_before(now)                    # the device's last report before this one
         for ent, val in ((self.top, self.top_value), (self.bottom, self.bottom_value)):
             if not ent or val is None:
                 continue
@@ -346,13 +354,16 @@ class ShowerTimeManager:
                 changed = True
                 if prev is not None:
                     before_at = prev[1] if before_at is None else min(before_at, prev[1])
-                    minutes = max((now - prev[1]).total_seconds() / 60, 0.5)
+                    # the value held until the device last reported (most sensors only change state when the
+                    # value changes): a fall is as fast as the time since then, not since the value last changed
+                    since = max(prev[1], confirmed) if confirmed is not None else prev[1]
+                    minutes = max((now - since).total_seconds() / 60, 0.5)
                     # a lower threshold keeps a running use going, and the bathroom signal lowers the start one
                     threshold = (insights.FALL_CONTINUE if self.showering else
                                  insights.FALL_START_BATH if self.signal_active() else insights.FALL_START)
                     if (prev[0] - val) / minutes >= threshold:
                         falling = True
-                        fall_from = prev[1] if fall_from is None else min(fall_from, prev[1])
+                        fall_from = since if fall_from is None else min(fall_from, since)
                 self._prev[ent] = (val, now)
         if not changed:
             return

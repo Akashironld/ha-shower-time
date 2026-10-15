@@ -126,3 +126,37 @@ async def test_a_shower_after_a_quiet_night_is_followed_live(hass: HomeAssistant
     await wait(hass, freezer, 6)
     last = entry.runtime_data.ledger.log[-1]
     assert last["kind"] == "shower" and "estimated" not in last
+
+
+async def test_a_use_after_a_quiet_tank_is_measured_whole(hass: HomeAssistant, deps, freezer) -> None:
+    """Issue #8: the tank bottom had not changed for half an hour (so no new state), but the heat pump reported every
+    two minutes. The first fall of a short shower counts from the last report, not from the last change, so the
+    whole drop is measured — not only the part after the second reading."""
+    from custom_components.shower_time import model
+
+    heat_pump_device(hass)
+    entry = await setup_entry(hass)                                      # tank 55.0 / 49.8
+    m = entry.runtime_data
+    await minutes(hass, freezer, 30, heat_pump_reports=True)             # quiet tank, heat pump reporting
+
+    async def poll(top: float | None = None, bottom: float | None = None) -> None:
+        freezer.tick(timedelta(minutes=2))
+        value = float(hass.states.get(OUTSIDE).state)
+        hass.states.async_set(OUTSIDE, f"{value + 0.1:.1f}", TEMP_ATTRS)
+        if top is not None:
+            hass.states.async_set("sensor.tank_top", str(top), TEMP_ATTRS)
+        if bottom is not None:
+            hass.states.async_set("sensor.tank_bottom", str(bottom), TEMP_ATTRS)
+        async_fire_time_changed(hass)
+        await hass.async_block_till_done()
+
+    await poll(top=54.9)
+    await poll(bottom=47.9)                 # the first fall, after 30 minutes without a change of the bottom
+    await poll(bottom=46.8)
+    await poll(top=54.8, bottom=46.6)
+    await minutes(hass, freezer, 8, heat_pump_reports=True)
+    whole = model.tank_average(m.params, 55.0, 49.8) - model.tank_average(m.params, 54.8, 46.6)
+    used = m.ledger.other + m.ledger.log
+    assert len(used) == 1
+    drawn = used[0]["heat_kwh"] / (m.volume * model.CP)
+    assert drawn > 0.85 * whole, (drawn, whole)                          # was about half before
