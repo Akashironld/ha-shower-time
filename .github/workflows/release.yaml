@@ -16,6 +16,11 @@ on:
 permissions:
   contents: write
 
+# one run per release at a time: GitHub sometimes starts a tag push twice, and the second then found the release
+# already made and failed
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+
 jobs:
   release:
     runs-on: ubuntu-latest
@@ -48,5 +53,6 @@ jobs:
               echo "Release ${TAG} exists already, leaving it"
             fi
           else
-            gh release create "${TAG}" --title "${TITLE}" --notes-file body.md --latest
+            gh release create "${TAG}" --title "${TITLE}" --notes-file body.md --latest \
+              || gh release view "${TAG}" > /dev/null   # made by a run that started at the same moment
           fi
