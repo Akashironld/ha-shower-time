@@ -22,6 +22,7 @@ async def test_setup_creates_an_entry(hass: HomeAssistant, deps) -> None:
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["title"] == "Hot water"
     assert result["data"]["top_sensor"] == TOP and "name" not in result["data"]
+    assert result["data"]["bathtub"] is True                      # asked at setup: a bath on this tank (default)
     assert hass.states.get("sensor.hot_water_shower_time") is not None
 
 
@@ -61,6 +62,7 @@ async def test_options_suggest_and_save_a_bathroom_signal(hass: HomeAssistant, d
     assert result["type"] is FlowResultType.FORM
     suggested = {str(k): (k.description or {}).get("suggested_value") for k in result["data_schema"].schema}
     assert suggested["bathroom_sensor"] == "sensor.badkamer_humidity"              # suggested by its name
+    assert suggested["bathtub"] is True                       # entries from before the question: a bath, as before
     values = {k: v for k, v in suggested.items() if v is not None}
     values.update({"tank_volume": 200, "temperature_mode": "auto", "flow_source": "unknown", "low_minutes": 10,
                    "legionella_temperature": 60, "legionella_days": 8})

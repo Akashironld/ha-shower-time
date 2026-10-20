@@ -512,3 +512,41 @@ def test_a_short_shower_needs_minutes_heat_and_the_usual_time():
     assert not insights.short_shower(1.7, 4.0, False)          # not at a shower time: a tap
     assert not insights.short_shower(0.8, 2.0, True)           # washing up: short and little heat
     assert not insights.short_shower(1.7, 2.0, True)           # a tap at full blast for two minutes
+
+
+def test_a_short_shower_needs_the_signal_when_there_is_one():
+    """#10: hand washing at the hour this household showers became a shower. With a bathroom signal or water
+    meter set up, a short use counts only when that saw the bathroom in use or a shower-like flow."""
+    assert insights.short_shower(1.7, 4.0, True, None)          # no signal set up: habit alone
+    assert insights.short_shower(1.7, 4.0, True, True)
+    assert not insights.short_shower(1.7, 4.0, True, False)     # the bathroom stayed quiet: a tap
+
+
+def test_since_reheat_without_a_reheat_never_shows_reheated():
+    """#10: two logged 8-minute uses while the tank lost only ~9 minutes and no reheat ran: 'reheated' stayed
+    at 7 minutes. Without a seen reheat the uses are cut back to what the tank lost."""
+    s = insights.split_since_reheat(37.7, 25.5, 16.0, 0.0, 3.4, reheat_seen=False)
+    assert s["reheated"] == 0.0 and s["cooling"] == 3.4
+    assert round(s["showered"], 1) == 8.8 and round(s["overcounted"], 1) == 7.2
+    assert round(25.5 + s["showered"] + s["other"] + s["cooling"], 6) == 37.7      # the books still close
+    shared = insights.split_since_reheat(30.0, 10.0, 15.0, 5.0, 2.0, reheat_seen=False)
+    assert round(shared["showered"], 2) == 13.5 and round(shared["other"], 2) == 4.5   # cut back in proportion
+
+
+def test_since_reheat_with_a_reheat_keeps_what_it_added():
+    s = insights.split_since_reheat(37.7, 25.5, 16.0, 0.0, 3.4, reheat_seen=True)
+    assert round(s["reheated"], 1) == 7.2 and s["showered"] == 16.0 and s["overcounted"] == 0.0
+
+
+def test_since_reheat_unexplained_drop_is_cooling():
+    s = insights.split_since_reheat(40.0, 20.0, 8.0, 0.0, 3.0, reheat_seen=False)
+    assert s["cooling"] == 12.0 and s["reheated"] == 0.0 and s["showered"] == 8.0
+    full = insights.split_since_reheat(40.0, 40.2, 0.0, 0.0, 0.5, reheat_seen=False)   # settling just after
+    assert full["cooling"] == 0.0 and round(full["reheated"], 1) == 0.2
+
+
+if __name__ == "__main__":
+    for name, fn in list(globals().items()):
+        if name.startswith("test_"):
+            fn()
+            print("ok ", name)

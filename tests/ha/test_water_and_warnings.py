@@ -127,6 +127,22 @@ async def test_a_top_up_keeps_since_reheat_and_a_full_reheat_starts_it_again(has
     assert m.since_reheat()["last_top_up_at"] is None
 
 
+async def test_no_reheated_without_a_reheat(hass: HomeAssistant, entry, freezer) -> None:
+    """#10: uses logged longer than the tank lost showed up as 'reheated' while nothing reheated. Without a seen
+    reheat they are cut back to what the tank lost; with a top-up the surplus is what it added."""
+    m = entry.runtime_data
+    m._set_ref(m.estimate.minutes)
+    freezer.tick(timedelta(hours=1))
+    m.ledger.log.append({"start": dt_util.now().isoformat(timespec="minutes"), "minutes": 8.0, "heat_kwh": 1.0,
+                         "electricity_kwh": 0.4, "cost": None, "source": "live", "kind": "shower"})
+    split = m.since_reheat()
+    assert split["reheated_minutes"] == 0 and split["overcounted_minutes"] > 7
+    assert split["showered_minutes"] < 1 and split["total_minutes"] == split["reference_minutes"]
+    m.top_ups = [{"at": dt_util.now().isoformat(timespec="minutes"), "until": None, "added_minutes": 8.0, "top": 55.0}]
+    split = m.since_reheat()
+    assert split["reheated_minutes"] > 7 and split["showered_minutes"] == 8.0 and split["overcounted_minutes"] == 0
+
+
 async def test_full_again_follows_the_pace_of_this_reheat(hass: HomeAssistant, entry, freezer) -> None:
     """A steady reheat that runs faster than the learned average: after 20 minutes its own pace counts."""
     from types import SimpleNamespace

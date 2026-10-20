@@ -10,12 +10,14 @@
           "bottom_sensor": "Bottom temperature sensor (recommended)",
           "tank_volume": "Tank volume",
           "shower_temperature": "Fixed shower temperature (only with 'Set it myself')",
-          "temperature_mode": "Shower temperature"
+          "temperature_mode": "Shower temperature",
+          "bathtub": "There is a bath on this tank"
         },
         "data_description": {
           "tank_volume": "Look on the type plate of the tank.",
           "shower_temperature": "Ignored in automatic mode.",
-          "temperature_mode": "Automatic: the model learns how much heat a minute of showering takes — nothing to fill in. Add your shower-head flow in the next step and it works out the temperature you shower at."
+          "temperature_mode": "Automatic: the model learns how much heat a minute of showering takes — nothing to fill in. Add your shower-head flow in the next step and it works out the temperature you shower at.",
+          "bathtub": "Off when you only have showers and taps: filling a bucket or a sink fast is then never counted as a bath."
         }
       },
       "extras": {
@@ -81,7 +83,8 @@
           "price_sensor": "Electricity price sensor",
           "legionella_temperature": "Legionella temperature",
           "legionella_days": "Legionella: warn after",
-          "bathroom_sensor": "Bathroom signal (optional)"
+          "bathroom_sensor": "Bathroom signal (optional)",
+          "bathtub": "There is a bath on this tank"
         },
         "data_description": {
           "flow_source": "Optional. With the flow the integration works out the temperature you shower at and the litres. A water meter measures it while you shower. Don't know it? Choose 'Fill in myself' and measure it in a minute with a bucket (see below), or pick the type of shower head.",
@@ -93,6 +96,7 @@
           "legionella_temperature": "The whole tank (top and bottom) must reach this to count as a legionella heat-up.",
           "legionella_days": "Days without such a heat-up before 'Legionella heat-up overdue' turns on. Default 8: a weekly program plus a day.",
           "bathroom_sensor": "Recognises a shower within a minute instead of after a few: a bathroom humidity sensor (rising), the power of the bathroom fan (running harder than usual), or a fan, light or motion sensor that switches on. Without it showers are told apart from washing up by how much heat they take, which takes a few minutes.",
+          "bathtub": "Off when you only have showers and taps: filling a bucket or a sink fast is then never counted as a bath.",
           "water_sensor": "A meter total (litres, m³) or a flow sensor (L/min). Recognises a shower live by a steady flow of water and makes its length exact; with 'Water meter' above it also measures the shower-head flow."
         }
       }

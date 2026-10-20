@@ -58,3 +58,7 @@ DEFAULT_LEGIONELLA_DAYS = 8          # a weekly program plus a day of margin
 
 # Optional bathroom signal that confirms a shower quickly: humidity, the bathroom fan's power, or a fan/light/motion
 CONF_BATH = "bathroom_sensor"
+
+# Is there a bath on this tank? Without one a fast fill is a bucket (other hot water), never a bath session
+CONF_BATHTUB = "bathtub"
+DEFAULT_BATHTUB = True

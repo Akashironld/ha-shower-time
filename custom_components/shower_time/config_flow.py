@@ -12,6 +12,7 @@ from homeassistant.helpers import entity_registry as er, selector
 
 from .const import (
     CONF_BATH,
+    CONF_BATHTUB,
     CONF_BOTTOM,
     CONF_ENERGY,
     CONF_FLOW_SOURCE,
@@ -34,6 +35,7 @@ from .const import (
     CONF_SHOWER_TEMP,
     CONF_TOP,
     CONF_VOLUME,
+    DEFAULT_BATHTUB,
     DEFAULT_HEATING_STATES,
     DEFAULT_LEGIONELLA_DAYS,
     DEFAULT_LEGIONELLA_TEMP,
@@ -146,6 +148,7 @@ class ShowerTimeConfigFlow(ConfigFlow, domain=DOMAIN):
             vol.Required(CONF_VOLUME, default=DEFAULT_VOLUME): VOLUME,
             vol.Required(CONF_TEMP_MODE, default="auto"): TEMP_MODE,
             vol.Optional(CONF_SHOWER_TEMP, default=DEFAULT_SHOWER_TEMP): SHOWER,
+            vol.Required(CONF_BATHTUB, default=DEFAULT_BATHTUB): selector.BooleanSelector(),
         })
         return self.async_show_form(step_id="user", data_schema=self.add_suggested_values_to_schema(schema, user_input or {}),
                                     errors=errors)
@@ -193,6 +196,7 @@ class ShowerTimeOptionsFlow(OptionsFlow):
         cur.setdefault(CONF_TEMP_MODE, "fixed" if CONF_SHOWER_TEMP in cur else "auto")
         cur.setdefault(CONF_FLOW_SOURCE, "unknown")
         cur.setdefault(CONF_LOW, DEFAULT_LOW)
+        cur.setdefault(CONF_BATHTUB, DEFAULT_BATHTUB)
         cur.setdefault(CONF_LEGIONELLA_TEMP, DEFAULT_LEGIONELLA_TEMP)
         cur.setdefault(CONF_LEGIONELLA_DAYS, DEFAULT_LEGIONELLA_DAYS)
         if CONF_BATH not in cur and (bath := suggest_bathroom(self.hass)):
@@ -214,6 +218,7 @@ class ShowerTimeOptionsFlow(OptionsFlow):
             vol.Optional(CONF_COP): COP,
             vol.Optional(CONF_PRICE): PRICE,
             vol.Optional(CONF_BATH): BATH,
+            vol.Required(CONF_BATHTUB): selector.BooleanSelector(),
             vol.Required(CONF_LEGIONELLA_TEMP): LEGIONELLA_TEMP,
             vol.Required(CONF_LEGIONELLA_DAYS): LEGIONELLA_DAYS,
         })

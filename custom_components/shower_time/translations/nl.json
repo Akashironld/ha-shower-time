@@ -10,12 +10,14 @@
           "bottom_sensor": "Temperatuursensor onder (aanbevolen)",
           "tank_volume": "Inhoud boiler",
           "shower_temperature": "Vaste douchetemperatuur (alleen bij 'Zelf instellen')",
-          "temperature_mode": "Douchetemperatuur"
+          "temperature_mode": "Douchetemperatuur",
+          "bathtub": "Er zit een bad op dit vat"
         },
         "data_description": {
           "tank_volume": "Staat op het typeplaatje van de boiler.",
           "shower_temperature": "Wordt genegeerd in de automatische modus.",
-          "temperature_mode": "Automatisch: het model leert hoeveel warmte een minuut douchen kost; je hoeft niets te weten. Geef je bij de volgende stap ook het debiet van de douchekop op, dan berekent het jullie douchetemperatuur."
+          "temperature_mode": "Automatisch: het model leert hoeveel warmte een minuut douchen kost; je hoeft niets te weten. Geef je bij de volgende stap ook het debiet van de douchekop op, dan berekent het jullie douchetemperatuur.",
+          "bathtub": "Uit als je alleen douches en kranen hebt: snel een emmer of wasbak vullen telt dan nooit als bad."
         }
       },
       "extras": {
@@ -81,7 +83,8 @@
           "price_sensor": "Stroomprijs-sensor",
           "legionella_temperature": "Legionellatemperatuur",
           "legionella_days": "Legionella: waarschuwen na",
-          "bathroom_sensor": "Badkamersignaal (optioneel)"
+          "bathroom_sensor": "Badkamersignaal (optioneel)",
+          "bathtub": "Er zit een bad op dit vat"
         },
         "data_description": {
           "flow_source": "Optioneel. Met het debiet berekent de integratie op welke temperatuur jullie douchen en hoeveel liter dat is. Een watermeter meet het tijdens het douchen. Weet je het niet? Kies 'Zelf invullen' en meet het in een minuut met een emmer (zie hieronder), of kies het type douchekop.",
@@ -93,6 +96,7 @@
           "legionella_temperature": "Het hele vat (boven en onder) moet dit halen om als legionella-opwarming te tellen.",
           "legionella_days": "Aantal dagen zonder zo'n opwarming voordat 'Legionella-opwarming te lang geleden' aangaat. Standaard 8: een wekelijks programma plus een dag.",
           "bathroom_sensor": "Herkent een douche binnen een minuut in plaats van na een paar minuten: een vochtigheidssensor in de badkamer (stijgend), het vermogen van de badkamerventilatie (harder dan normaal), of een ventilator, lamp of bewegingssensor die aangaat. Zonder dit onderscheidt de integratie douches van de afwas aan hoeveel warmte ze kosten; dat duurt een paar minuten.",
+          "bathtub": "Uit als je alleen douches en kranen hebt: snel een emmer of wasbak vullen telt dan nooit als bad.",
           "water_sensor": "Een teller (liter, m³) of debietsensor (L/min). Herkent een douche live aan een stabiele waterstroom en maakt de duur exact; met 'Watermeter' hierboven meet hij ook het debiet van de douchekop."
         }
       }

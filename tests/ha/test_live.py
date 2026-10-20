@@ -164,6 +164,63 @@ async def test_a_short_shower_at_the_usual_time_counts(hass: HomeAssistant, entr
     assert m.ledger.other == []
 
 
+def _shower_habit(m) -> None:
+    """Showers around this time of day on the three days before."""
+    from homeassistant.util import dt as dt_util
+    now = dt_util.now()
+    for days, shift in ((1, -20), (2, 5), (3, 25)):
+        t = (now - timedelta(days=days, minutes=-shift)).isoformat(timespec="minutes")
+        m.ledger.log.append({"start": t, "minutes": 8.0, "heat_kwh": 1.0, "electricity_kwh": 0.4, "cost": None,
+                             "source": "live", "kind": "shower"})
+
+
+async def test_hand_washing_at_the_usual_time_is_a_tap_when_the_bathroom_stays_quiet(hass: HomeAssistant, deps,
+                                                                                       freezer) -> None:
+    """#10: with a bathroom signal, a short use at the hour this household showers is only a shower when that
+    signal saw the bathroom in use."""
+    hass.states.async_set(HUMIDITY, "60", {"unit_of_measurement": "%", "device_class": "humidity"})
+    entry = await setup_entry(hass, {"bathroom_sensor": HUMIDITY})
+    m = entry.runtime_data
+    _shower_habit(m)
+    await _short_use(hass, freezer)
+    assert state(hass, "sensor.hot_water_showers_today") == "0"
+    assert [o["kind"] for o in m.ledger.other] == ["tap"]
+
+
+async def test_a_short_shower_with_the_bathroom_signal_still_counts(hass: HomeAssistant, deps, freezer) -> None:
+    """The humidity rises a little after the water stopped: still a shower."""
+    hass.states.async_set(HUMIDITY, "60", {"unit_of_measurement": "%", "device_class": "humidity"})
+    entry = await setup_entry(hass, {"bathroom_sensor": HUMIDITY})
+    m = entry.runtime_data
+    _shower_habit(m)
+    await start_reading(hass, freezer)
+    await step(hass, freezer, 2, 55.0, 48.7)
+    await step(hass, freezer, 2, 55.0, 47.5)
+    await wait(hass, freezer, 1)
+    hass.states.async_set(HUMIDITY, "66", {"unit_of_measurement": "%", "device_class": "humidity"})
+    await hass.async_block_till_done()
+    await wait(hass, freezer, 6)
+    assert state(hass, "sensor.hot_water_showers_today") == "1"
+    assert m.ledger.other == []
+
+
+async def test_without_a_bath_a_big_fill_stays_other_hot_water(hass: HomeAssistant, deps, freezer) -> None:
+    """No bath on this tank: hot water drawn at a bath's pace is a bucket or sink, never a bath session."""
+    entry = await setup_entry(hass, {"bathtub": False})
+    m = entry.runtime_data
+    per_minute = m.estimate.per_minute
+    await start_reading(hass, freezer)
+    bottom = 50.0
+    for _ in range(6):
+        bottom -= 4.5 * per_minute / 0.84
+        await step(hass, freezer, 1, 55.0, bottom)
+    assert hass.states.get(IN_USE).attributes["kind"] == "fill"
+    await wait(hass, freezer, 6)
+    assert state(hass, "sensor.hot_water_showers_today") == "0"
+    assert not any(x.get("kind") == "bath" for x in m.ledger.log)
+    assert [o["kind"] for o in m.ledger.other] == ["fill"]
+
+
 async def test_the_same_short_use_at_another_time_is_a_tap(hass: HomeAssistant, entry, freezer) -> None:
     await _short_use(hass, freezer)
     assert state(hass, "sensor.hot_water_showers_today") == "0"

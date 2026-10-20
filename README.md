@@ -128,7 +128,9 @@ minutes, depending on how often your sensors report. With a **bathroom signal** 
 the bathroom fan, or a fan or light that switches on) it is recognised within a minute; with a **water meter** a
 steady, shower-like flow confirms it after two minutes and the meter's start and stop make the length exact (cold
 water alone, like a toilet, never counts). The threshold between your taps and your showers is learned per
-household.
+household. A short use below that threshold (3+ minutes, 1.2+ K) still counts as a shower at the time of day your
+household showers — and when you have a bathroom signal or water meter, only when it saw the bathroom in use or a
+shower-like flow, so washing your hands at that hour stays a tap.
 
 Water drawn from the tank is replaced by cold water at the bottom, so the top stays hot while you shower. When the
 top falls while the bottom is still warm — a heat pump starting a reheat, or heat taken out through the coil — no
@@ -137,7 +139,8 @@ water was drawn and it is not counted at all.
 A **bath** counts as a session too: hot water that leaves at about twice the pace of your showers (learned from
 them) shows as **FILLING** while it runs, and once it took the heat of six shower minutes or more it goes in the
 shower log as a bath — counted in shower minutes of heat (≈), with its cost. A bucket or a filled sink stays other
-hot water. Baths never teach the shower length or flow.
+hot water. Baths never teach the shower length or flow. No bath on this tank? Turn off *There is a bath on this
+tank* (setup and options): a fast fill then always stays other hot water.
 
 Showers and baths go in the shower log, the habits and the shower totals. Everything else is counted as *Other hot
 water today* (heat, how often, cost) and fires `hot_water_used` on the Shower event. *Showering* is on only for a
@@ -244,6 +247,7 @@ The setup has two screens. Only the first one needs input; the second is filled 
 | **Bottom temperature sensor** | strongly recommended | Sees cold water coming in while you shower. Without it: no live countdown, no shower log and hardly any learning | `sensor.…_dhw_bottom_temperature` |
 | **Tank volume** | **required** | Litres, from the type plate | `200` |
 | **Shower temperature** | required, default *Automatic* | *Automatic* needs nothing; *Set it myself* uses the fixed value below it | Automatic |
+| **There is a bath on this tank** | on by default | Off when you only have showers and taps: a fast fill is then never counted as a bath | on |
 
 ### Screen 2 — make it smarter (all optional)
 

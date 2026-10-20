@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.13.0 — Hand washing is no shower, no false "reheated", bath yes/no
+
+**Recommended for everyone with a bathroom signal or water meter, and for everyone who sees "+ reheated" while nothing reheated** — hand washing at the hour your household showers could be logged as a shower, and the *Since reheat* bar could show a reheat that never happened (#10).
+
+### Fixes
+- **Hand washing at shower time stays a tap** (#10). Since v0.12.1 a short use (3+ minutes, 1.2+ K) at the time your household showers counts as a shower. With a bathroom signal or water meter it now also has to see the bathroom in use or a shower-like flow — during the use or just after, as a humidity sensor rises late. Without either, nothing changes.
+- **"+ reheated" only after a real reheat** (#10). The *Since reheat* bar closes its books: left + showered + other + cooled = full. When the logged uses added up to more than the tank lost, the rest showed as "+ reheated", even without any reheat. Now that only happens when a reheat or top-up was seen; otherwise the uses in the bar are scaled back to what the tank lost (attribute `overcounted_minutes` says by how much). The shower log itself is unchanged.
+
+### Improvements
+- **There is a bath on this tank** (yes/no) in setup and in the options. Turn it off when you only have showers and taps: a fast fill (a bucket, a sink) is then never counted as a bath. On by default, so nothing changes for existing installs.
+
+### After updating
+Update in HACS and restart Home Assistant. No bath? Turn off *There is a bath on this tank* under Settings → Devices & services → Hot Water Shower Time → Configure.
+
 ## v0.12.1 — Short showers
 
 **Recommended for everyone** — a short shower could be logged as a tap, and the start of a use after a quiet tank

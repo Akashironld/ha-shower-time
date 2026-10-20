@@ -25,11 +25,13 @@ from . import insights, model
 from .ledger import ShowerLedger
 from .const import (
     CONF_BATH,
+    CONF_BATHTUB,
     CONF_BOTTOM,
     CONF_COP,
     CONF_ELEC,
     CONF_ENERGY,
     CONF_PRICE,
+    DEFAULT_BATHTUB,
     DEFAULT_COP,
     MAX_SHOWER_MINUTES,
     MIN_SHOWER_MINUTES,
@@ -176,6 +178,7 @@ class ShowerTimeManager:
         self._swap_since: datetime | None = None
         # what kind of hot water use: followed live, confirmed by heat or a bathroom signal (insights.UseSession)
         self.bath: str | None = cfg.get(CONF_BATH) or None
+        self.bathtub = bool(cfg.get(CONF_BATHTUB, DEFAULT_BATHTUB))   # without a bath a fast fill is a bucket
         self.bath_signal: insights.BathSignal | None = None
         self.water_signal: insights.WaterSignal | None = None   # a water meter, followed live too
         self._water_factor = 1.0
@@ -425,8 +428,11 @@ class ShowerTimeManager:
         if start and end:
             minutes = (end - start).total_seconds() / 60
             kind = use.final(minutes, MAX_SHOWER_MINUTES) if use else "tap"
+            signal = None
+            if use is not None and (self.bath_signal is not None or self.water_signal is not None):
+                signal = use.bath_seen or self.signal_active()   # a humidity sensor can rise after the water stopped
             by_habit = kind == "tap" and use is not None and insights.short_shower(
-                use.drawn, minutes, self._shower_time_of_day(start))
+                use.drawn, minutes, self._shower_time_of_day(start), signal)
             if by_habit:
                 kind = "shower"                    # short, but at the hour this household showers
             if kind == "shower":
@@ -436,7 +442,7 @@ class ShowerTimeManager:
                     if minutes >= MIN_SHOWER_MINUTES:           # the pace of a whole shower: tells baths apart
                         self._remember_use("shower_rate", use.drawn / minutes)
                     self._fire("shower_ended", {**entry, "currency": self.ledger.currency or None})
-            elif (kind == "fill" and use is not None and self.estimate is not None and self.estimate.per_minute > 0
+            elif (kind == "fill" and self.bathtub and use is not None and self.estimate is not None and self.estimate.per_minute > 0
                   and use.drawn / self.estimate.per_minute >= insights.BATH_SHOWER_MINUTES):
                 entry = self.ledger.bath_ended(self, start, minutes, use.drawn / self.estimate.per_minute, self.estimate)
                 self._fire("shower_ended", {**entry, "currency": self.ledger.currency or None})
@@ -1025,8 +1031,9 @@ class ShowerTimeManager:
 
         Showers count in minutes (one shower minute takes about one minute off the estimate), other hot water by
         the heat it took. Cooling is the tank's standing loss over the time since the reheat, or the drop that is
-        left unexplained when that is more. When the tank holds more than that adds up to, a reheat put heat back
-        in: that is ``reheated_minutes``. Left + showered + other + cooling = reference + reheated."""
+        left unexplained when that is more. When the tank holds more than that adds up to and a reheat was seen in
+        between, it put heat back in: that is ``reheated_minutes``. Without a reheat the uses are cut back to what
+        the tank lost (``overcounted_minutes``). Left + showered + other + cooling = reference + reheated."""
         e, ref = self.current, self.ref_minutes()
         if e is None or not ref or not self.full_ref_at or e.per_minute <= 0:
             return None
@@ -1047,21 +1054,23 @@ class ShowerTimeManager:
         elif kind not in (None, "coil") and self.use is not None:
             other += self.use.drawn / e.per_minute       # a bath or tap running now: the heat it took so far
         standing = self.loss_k_h() * hours / e.per_minute
-        cooling = max(standing, ref - e.minutes - showered - other)
-        reheated = max(0.0, e.minutes + showered + other + cooling - ref)
+        heating_now = getattr(self, "_was_heating", False) and self._heat_from is not None   # a top-up going on now
+        s = insights.split_since_reheat(ref, e.minutes, showered, other, standing, bool(self.top_ups) or heating_now)
+        cooling, reheated = s["cooling"], s["reheated"]
         heat = cooling * per_min_kwh
         price = self.ledger.tank_price
         if price is None:
             p, _ = self.ledger.price_now(self)
             price = p / self.ledger.cop(self) if p is not None else None
         last_top_up = self.top_ups[-1]["at"] if self.top_ups else None
-        if getattr(self, "_was_heating", False) and self._heat_from is not None:   # a top-up going on now
+        if heating_now:
             last_top_up = dt_util.as_local(self._heat_from[0]).isoformat(timespec="minutes")
         return {"since": self.full_ref_at, "hours": round(hours, 1), "reference_minutes": round(ref, 1),
                 "top_ups": self.top_ups, "last_top_up_at": last_top_up,
-                "remaining_minutes": round(e.minutes, 1), "showered_minutes": round(showered, 1),
-                "other_minutes": round(other, 1), "cooling_minutes": round(cooling, 1),
+                "remaining_minutes": round(e.minutes, 1), "showered_minutes": round(s["showered"], 1),
+                "other_minutes": round(s["other"], 1), "cooling_minutes": round(cooling, 1),
                 "reheated_minutes": round(reheated, 1), "total_minutes": round(ref + reheated, 1),
+                "overcounted_minutes": round(s["overcounted"], 1),
                 "cooling_kwh_heat": round(heat, 2),
                 "cooling_cost": round(heat * price, 2) if price is not None else None}
 

@@ -366,6 +366,26 @@ def gap_use(params: dict, before: tuple[float, float | None], after: tuple[float
     return kind, round(drop, 2), round(minutes, 1)
 
 
+def split_since_reheat(ref: float, left: float, showered: float, other: float, standing: float,
+                       reheat_seen: bool) -> dict[str, float]:
+    """Close the books since the last complete reheat, in shower minutes: left + showered + other + cooling =
+    reference + reheated.
+    Cooling is the standing loss, or the drop left unexplained when that is more. When the tank holds more than
+    that adds up to and a reheat was seen in between, the reheat put that heat back in. Without one, the uses were
+    logged longer than the tank lost (their minutes are how long they ran: a slow tap, a lagging sensor): they are
+    cut back to what the tank lost, and ``overcounted`` says by how much."""
+    cooling = max(standing, ref - left - showered - other)
+    surplus = max(0.0, left + showered + other + cooling - ref)
+    if reheat_seen or surplus <= 0:
+        return {"showered": showered, "other": other, "cooling": cooling, "reheated": surplus, "overcounted": 0.0}
+    cooling = min(standing, max(0.0, ref - left))
+    room = max(0.0, ref - left - cooling)
+    used = showered + other
+    scale = room / used if used > room else 1.0
+    return {"showered": showered * scale, "other": other * scale, "cooling": cooling,
+            "reheated": max(0.0, left - ref), "overcounted": used - used * scale}
+
+
 def _quantile(values: list[float], q: float) -> float:
     v = sorted(values)
     pos = q * (len(v) - 1)
@@ -395,9 +415,13 @@ def shower_time_of_day(at: float, showers: list[float], taps: list[float], since
     return near_showers >= 2 and near_showers > near_taps
 
 
-def short_shower(drawn: float, minutes: float, usual_time: bool) -> bool:
+def short_shower(drawn: float, minutes: float, usual_time: bool, signal_seen: bool | None = None) -> bool:
     """A use that stayed below the shower threshold, but ran for minutes, took real heat and came at a time this
-    household showers: a short shower (a tap runs shorter and takes less)."""
+    household showers: a short shower (a tap runs shorter and takes less).
+    With a bathroom signal or water meter (``signal_seen`` not None) it must also have seen the bathroom in use or
+    a shower-like flow: hand washing at the hour this household showers is otherwise easily taken for one."""
+    if signal_seen is False:
+        return False
     return usual_time and drawn >= SHORT_SHOWER_K and minutes >= SHORT_SHOWER_MINUTES
 
 
