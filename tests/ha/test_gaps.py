@@ -47,6 +47,7 @@ def local(iso: str) -> datetime:
 async def test_a_shower_hidden_by_an_outage_is_logged_once_from_its_heat(hass: HomeAssistant, deps, freezer) -> None:
     """The heat pump stops reporting for 45 minutes; someone showers meanwhile (the bathroom fan says when). When
     the readings come back the tank is far lower: one shower, its length from the heat, starting with the fan."""
+    freezer.move_to("2026-10-15T19:00:00+00:00")       # midday in the tests' time zone: the hour does not cross a day
     heat_pump_device(hass)
     hass.states.async_set(HUMIDITY, "60", HUMIDITY_ATTRS)
     entry = await setup_entry(hass, {"bathroom_sensor": HUMIDITY})
