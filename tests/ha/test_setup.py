@@ -7,9 +7,12 @@ from unittest.mock import AsyncMock, MagicMock
 from homeassistant.components.frontend import DATA_EXTRA_JS_URL_ES5, DATA_EXTRA_MODULE_URL
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
+from pytest_homeassistant_custom_component.components.recorder.common import async_wait_recording_done
 
 from custom_components.shower_time import CARD_URL, _async_register_resource
 from custom_components.shower_time.diagnostics import async_get_config_entry_diagnostics
+
+from .conftest import HUMIDITY, setup_entry
 
 
 
@@ -74,8 +77,23 @@ async def test_diagnostics(hass: HomeAssistant, entry) -> None:
     data = await async_get_config_entry_diagnostics(hass, entry)
     assert data["config"]["top_sensor"] == "sensor.tank_top"
     assert data["live"]["top"] == 55.0
-    for key in ("learned", "ledger", "habits", "heat_loss", "legionella", "hot_water_use", "tank_readings_24h_5min"):
+    for key in ("learned", "ledger", "habits", "heat_loss", "legionella", "hot_water_use", "tank_readings_24h_5min",
+                "signals_24h"):
         assert key in data, key
+    assert "cop_learned" in data["ledger"]
+
+
+async def test_diagnostics_show_what_the_bathroom_signal_saw(hass: HomeAssistant, deps) -> None:
+    water = ("sensor.water_flow", {"unit_of_measurement": "L/min", "device_class": "volume_flow_rate"})
+    hass.states.async_set(HUMIDITY, "60", {"unit_of_measurement": "%", "device_class": "humidity"})
+    hass.states.async_set(water[0], "0", water[1])
+    entry = await setup_entry(hass, {"bathroom_sensor": HUMIDITY, "water_sensor": water[0]})
+    hass.states.async_set(HUMIDITY, "71.25", {"unit_of_measurement": "%", "device_class": "humidity"})
+    hass.states.async_set(water[0], "7.5", water[1])
+    await async_wait_recording_done(hass)
+    data = await async_get_config_entry_diagnostics(hass, entry)
+    assert data["signals_24h"]["bathroom"][-1][1] == 71.25
+    assert data["signals_24h"]["water_meter"][-1][1] == 7.5
 
 
 async def test_reload_and_unload(hass: HomeAssistant, entry) -> None:

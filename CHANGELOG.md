@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.13.1 — Emptied options stay empty, washing up is no shower
+
+**Recommended for everyone who emptied a field under Configure, and for everyone with a bathroom signal or water meter** — a COP or other setting filled in at setup came back after you emptied it, and stayed in use (#12), and washing up that took as much heat as a shower could still be logged as one (#10).
+
+### Fixes
+- **A field you empty under Configure stays empty** (#12). What you fill in at setup is kept apart from what Configure saves. An emptied field was left out when saving, so the value from setup came back — and was still used, for example a COP you wanted learned. Emptied fields are now saved as empty, and an emptied bathroom signal is no longer suggested again.
+- **Washing up is no shower, even with a shower's heat** (#10). Washing up with the tap on and off can take as much heat as the shower threshold, but over a long time: a third of a shower's pace or less, where real showers run at 0.6 times and up. A use of 6 minutes or more that takes heat at less than 0.35 times a shower's pace is now a tap, unless the bathroom signal saw it. This is only judged while the bottom of the tank is still warm (15 °C above the cold water) — with a cool bottom a shower shows little at the sensors — and when the tank sensors report at least every 3 minutes, so the pace can be measured. Checked on two weeks of real readings: no shower changed, and the washing up from #10 became a tap.
+- **With a bathroom signal, a steady flow on the water meter alone no longer confirms a shower early** (#10). A kitchen tap can run as steadily as a shower, so only the bathroom signal lowers the threshold now. The water meter still times the shower and still confirms a short one.
+- **Washing up no longer teaches the model about your showers.** A use that was followed live and logged as a tap is left out when the shower length and flow are learned from the history, and the history gets the same pace check. Washing up taken for a shower could pull the measured shower-head flow down, and with it raise the shower temperature shown.
+
+### Improvements
+- **Diagnostics** now show why each use counted as a shower or a tap (the heat it took, the signals that saw it, the rule that decided), what the bathroom signal and water meter showed in the last 24 hours, and the learned COP.
+
+### After updating
+Update in HACS and restart Home Assistant. Filled in a COP (or anything else) at setup that you want the integration to work out itself? Open Configure, empty the field and save.
+
 ## v0.13.0 — Hand washing is no shower, no false "reheated", bath yes/no
 
 **Recommended for everyone with a bathroom signal or water meter, and for everyone who sees "+ reheated" while nothing reheated** — hand washing at the hour your household showers could be logged as a shower, and the *Since reheat* bar could show a reheat that never happened (#10).

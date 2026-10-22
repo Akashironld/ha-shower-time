@@ -7,7 +7,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import async_fire_time_changed
 
-from .conftest import setup_entry, tank
+from .conftest import HUMIDITY, setup_entry, tank
 from .test_live import SHOWERING, state, wait
 
 WATER = "sensor.water_meter_total"
@@ -41,8 +41,8 @@ async def test_water_meter_confirms_early_and_times_the_shower(hass: HomeAssista
     assert hass.states.get("event.hot_water_shower").attributes["water_meter"] is True
 
     litres, bottom = 1017, 48.4
-    for _ in range(5):                                        # m4..m8: the tank keeps falling
-        litres, bottom = litres + 8, bottom - 0.6
+    for _ in range(5):                                        # m4..m8: the bottom falls at a shower's pace
+        litres, bottom = litres + 8, bottom - 2.0
         await minute(hass, freezer, litres, bottom)
     for _ in range(2):                                        # m9, m10: water still runs, the tank shows no change
         litres += 8
@@ -50,6 +50,27 @@ async def test_water_meter_confirms_early_and_times_the_shower(hass: HomeAssista
     await wait(hass, freezer, 7)
     assert state(hass, SHOWERING) == "off"
     assert state(hass, "sensor.hot_water_last_shower") == "10"   # from m0 until the meter stopped (m10)
+
+
+async def test_with_a_bathroom_signal_a_steady_flow_alone_does_not_confirm(hass: HomeAssistant, deps, freezer) -> None:
+    """#10: a kitchen tap can run as steadily as a shower. With a bathroom signal set up only that signal lowers
+    the threshold: a steady flow while the bathroom stays quiet needs a shower's heat."""
+    hass.states.async_set(WATER, "1000", WATER_ATTRS)
+    hass.states.async_set(HUMIDITY, "60", {"unit_of_measurement": "%", "device_class": "humidity"})
+    entry = await setup_entry(hass, {"water_sensor": WATER, "bathroom_sensor": HUMIDITY})
+    freezer.tick(timedelta(minutes=30))
+    tank(hass, 55.0, 50.0)
+    await hass.async_block_till_done()
+    litres = 1001
+    await minute(hass, freezer, litres, 49.6)
+    for bottom in (49.0, 48.4, 47.8):                         # steady 8 L/min, 1.3 K off the tank average
+        litres += 8
+        await minute(hass, freezer, litres, bottom)
+    assert state(hass, SHOWERING) == "off"                    # with the water meter alone: on since m3
+    await wait(hass, freezer, 7)
+    assert state(hass, "sensor.hot_water_showers_today") == "0"
+    other = entry.runtime_data.ledger.other
+    assert [o["kind"] for o in other] == ["tap"] and other[-1]["seen"] == ["water_meter"]
 
 
 async def test_cold_water_alone_is_not_a_shower(hass: HomeAssistant, deps, freezer) -> None:

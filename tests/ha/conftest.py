@@ -43,12 +43,13 @@ async def deps(hass: HomeAssistant) -> HomeAssistant:
     return hass
 
 
-async def setup_entry(hass: HomeAssistant, options: dict | None = None) -> MockConfigEntry:
+async def setup_entry(hass: HomeAssistant, options: dict | None = None, data: dict | None = None) -> MockConfigEntry:
+    """``data``: what was filled in at setup besides the tank; ``options``: what was saved in the options since."""
     tank(hass, 55.0, 49.8)
     entry = MockConfigEntry(
         domain=DOMAIN, title="Hot water", unique_id=TOP,
         data={"top_sensor": TOP, "bottom_sensor": BOTTOM, "tank_volume": 200, "temperature_mode": "auto",
-              "profile": "generic", "flow_source": "unknown"},
+              "profile": "generic", "flow_source": "unknown", **(data or {})},
         options=options or {})
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)

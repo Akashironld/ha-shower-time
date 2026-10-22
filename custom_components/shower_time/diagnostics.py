@@ -1,8 +1,9 @@
 """Diagnostics download: everything needed to reproduce a user's situation, nothing private.
 
 Attach the downloaded file to a GitHub issue. It contains the settings (entity ids, no credentials), what
-has been learned, the current estimate, the shower log and the tank readings of the last 24 hours at a
-5-minute grid, so the situation can be replayed in the model's test simulator.
+has been learned, the current estimate, the shower log, the tank readings of the last 24 hours at a
+5-minute grid (so the situation can be replayed in the model's test simulator) and what the bathroom signal
+and water meter showed in that time.
 """
 from __future__ import annotations
 
@@ -10,6 +11,7 @@ from dataclasses import asdict
 from datetime import timedelta
 from typing import Any
 
+from homeassistant.components.recorder import get_instance, history
 from homeassistant.const import __version__ as HA_VERSION
 from homeassistant.core import HomeAssistant
 from homeassistant.loader import async_get_integration
@@ -29,15 +31,22 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: ShowerT
         return st.attributes.get("unit_of_measurement") if st else None
 
     readings: list[list] = []
+    end = dt_util.utcnow()
+    start = end - timedelta(hours=24)
     try:
-        end = dt_util.utcnow()
-        start = end - timedelta(hours=24)
         series = await m._fetch_series(start, end)
         rows = await hass.async_add_executor_job(m._rows, series, start, end)
         for r in rows[::5]:
             readings.append([r.minute, round(r.top, 1), None if r.bottom is None else round(r.bottom, 1), int(r.heating)])
     except Exception as err:  # noqa: BLE001 - diagnostics must always download
         readings = [["error", str(err)]]
+    signals: dict[str, list] = {}
+    for name, entity in (("bathroom", m.bath), ("water_meter", m.water)):
+        if entity:
+            try:
+                signals[name] = await _changes(hass, entity, start, end)
+            except Exception as err:  # noqa: BLE001
+                signals[name] = [["error", str(err)]]
 
     return {
         "versions": {"integration": str(integration.version), "home_assistant": HA_VERSION},
@@ -54,7 +63,8 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: ShowerT
         },
         "learned": {"params": m.params, "processed_until_minute": m.processed_until, "last_learn": m.last_learn,
                     "last_samples": m.last_samples, "last_cycle": asdict(m.last_cycle) if m.last_cycle else None},
-        "ledger": {"cop": m.ledger.cop(m), "cop_heat_pump": m.ledger.cop_heat_pump(m), "tank_price": m.ledger.tank_price,
+        "ledger": {"cop": m.ledger.cop(m), "cop_heat_pump": m.ledger.cop_heat_pump(m),
+                   "cop_learned": m.ledger.cop_learned, "tank_price": m.ledger.tank_price,
                    "currency": m.ledger.currency, "summary": m.ledger.summary(), "log": m.ledger.log[-30:],
                    "totals": m.ledger.totals, "covered_from": m.ledger.covered_from},
         "habits": m.habits,
@@ -72,4 +82,19 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: ShowerT
                           "other": m.ledger.other[-30:]},
         "tank_readings_24h_5min": {"columns": ["minute_since_epoch_utc", "top_c", "bottom_c", "reheating"],
                                    "rows": readings},
+        "signals_24h": {"columns": ["minute_since_epoch_utc", "value"], **signals},
     }
+
+
+async def _changes(hass: HomeAssistant, entity: str, start, end) -> list[list]:
+    """The values an entity reported in a period: the last one of every minute."""
+    res = await get_instance(hass).async_add_executor_job(
+        history.state_changes_during_period, hass, start, end, entity, True, False, None, True)
+    by_minute: dict[int, float | str] = {}
+    for st in res.get(entity, []):
+        try:
+            value: float | str = round(float(st.state), 2)
+        except ValueError:
+            value = st.state
+        by_minute[int(st.last_changed.timestamp() // 60)] = value
+    return [[minute, value] for minute, value in sorted(by_minute.items())]

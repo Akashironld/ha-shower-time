@@ -157,6 +157,11 @@ def sensed_shower_temp(params: dict, cold: float, ref_temp: float, head_flow: fl
     return min(46.0, max(30.0, cold + heat / head_flow))
 
 
+def shower_minute(params: dict, cold: float, shower_temp: float, volume: float) -> float:
+    """K the tank average falls per shower minute."""
+    return params["flow"]["v"] * max(shower_temp - cold, 5.0) / volume
+
+
 def estimate(params: dict, top: float, bottom: float | None, *, volume: float, shower_temp: float,
              month: int, head_flow: float | None = None, doy: int | None = None, ema: float | None = None) -> Estimate:
     """``shower_temp`` is the fixed temperature or the 38 °C reference in auto mode.
@@ -164,7 +169,7 @@ def estimate(params: dict, top: float, bottom: float | None, *, volume: float, s
     reported shower temperature, never the minutes (those come from the learned heat per minute)."""
     cold = cold_for(params, month, doy, ema)
     flow = params["flow"]["v"]
-    per_minute = flow * max(shower_temp - cold, 5.0) / volume
+    per_minute = shower_minute(params, cold, shower_temp, volume)
     empty = cold + params["phi"]["v"] * (shower_temp + 2 - cold)
     avg = tank_average(params, top, bottom)
     minutes = max(0.0, (avg - empty) / per_minute) if top >= shower_temp + 2 else 0.0

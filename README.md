@@ -127,10 +127,14 @@ a bath or bucket filled with hot water only goes about three times faster than a
 minutes, depending on how often your sensors report. With a **bathroom signal** (a humidity sensor, a smart plug on
 the bathroom fan, or a fan or light that switches on) it is recognised within a minute; with a **water meter** a
 steady, shower-like flow confirms it after two minutes and the meter's start and stop make the length exact (cold
-water alone, like a toilet, never counts). The threshold between your taps and your showers is learned per
-household. A short use below that threshold (3+ minutes, 1.2+ K) still counts as a shower at the time of day your
-household showers — and when you have a bathroom signal or water meter, only when it saw the bathroom in use or a
-shower-like flow, so washing your hands at that hour stays a tap.
+water alone, like a toilet, never counts). With both, only the bathroom signal confirms early: a kitchen tap can
+run as steadily as a shower. The threshold between your taps and your showers is learned per household. A short
+use below that threshold (3+ minutes, 1.2+ K) still counts as a shower at the time of day your household showers —
+and when you have a bathroom signal or water meter, only when it saw the bathroom in use or a shower-like flow, so
+washing your hands at that hour stays a tap. Washing up with the tap on and off can take as much heat as a shower,
+but slowly: a use of 6 minutes or more that takes heat at less than 0.35 times a shower's pace stays a tap, unless
+the bathroom signal saw it (judged while the bottom of the tank is still warm and the tank sensors report at least
+every 3 minutes; real showers run at 0.6 times and up).
 
 Water drawn from the tank is replaced by cold water at the bottom, so the top stays hot while you shower. When the
 top falls while the bottom is still warm — a heat pump starting a reheat, or heat taken out through the coil — no
@@ -167,7 +171,9 @@ or when the tank runs low): when a reheat is likely before the shortage, there i
 
 *Current shower* counts the minutes of the shower going on (0 otherwise) and what that hot water costs so far.
 The **Shower** event entity fires `shower_started` and, for a real shower (4–40 minutes), `shower_ended` with
-`minutes`, `heat_kwh`, `electricity_kwh`, `cost` and `currency` — see the blueprints below.
+`minutes`, `heat_kwh`, `electricity_kwh`, `cost` and `currency` — see the blueprints below. A use first taken for a
+shower that turns out to be something else (washing up at a slow pace, a use longer than 40 minutes) ends with
+`hot_water_used` instead.
 
 ### Totals and the energy dashboard
 
@@ -269,7 +275,8 @@ The setup has two screens. Only the first one needs input; the second is filled 
 
 **Settings → Devices & services → Hot Water Shower Time → Configure** lets you change everything except the name,
 the top sensor and the starting knowledge, plus the **"Almost empty" threshold** (default 10 minutes) and the
-**legionella temperature and days** (default 60 °C and 8 days). The model keeps what it learned.
+**legionella temperature and days** (default 60 °C and 8 days). Empty a field to stop using it — an emptied COP is
+learned again. The model keeps what it learned.
 To start learning from scratch, remove the integration and add it again.
 
 ### Good to know
@@ -399,8 +406,8 @@ actions:
 
 Open an [issue](https://github.com/Akashironld/ha-shower-time/issues/new/choose) and attach the **diagnostics
 file**: *Settings → Devices & services → Hot Water Shower Time → ⋮ → Download diagnostics*. It contains the
-settings, what has been learned and the tank readings of the last 24 hours (no passwords or personal data), so
-your situation can be replayed exactly.
+settings, what has been learned, why each use counted as a shower or a tap, and the tank readings, bathroom signal
+and water meter of the last 24 hours (no passwords or personal data), so your situation can be replayed exactly.
 
 ## Development
 

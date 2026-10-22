@@ -7,6 +7,8 @@ from datetime import timedelta
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.common import async_fire_time_changed
 
+from custom_components.shower_time import model
+
 from .conftest import HUMIDITY, setup_entry, tank
 
 IN_USE = "binary_sensor.hot_water_hot_water_in_use"
@@ -225,3 +227,46 @@ async def test_the_same_short_use_at_another_time_is_a_tap(hass: HomeAssistant, 
     await _short_use(hass, freezer)
     assert state(hass, "sensor.hot_water_showers_today") == "0"
     assert [o["kind"] for o in entry.runtime_data.ledger.other] == ["tap"]
+
+
+def _bottom_for(m, avg: float) -> float:
+    """The bottom reading (top 55 °C) at which the tank average is ``avg``."""
+    lo, hi = 0.0, 55.0
+    for _ in range(40):
+        mid = (lo + hi) / 2
+        lo, hi = (mid, hi) if model.tank_average(m.params, 55.0, mid) < avg else (lo, mid)
+    return round(hi, 2)
+
+
+async def _slow_use(hass: HomeAssistant, freezer, m) -> None:
+    """Washing up: ten minutes of hot water, 2.2 K off the tank average — more than the shower threshold, but at a
+    fraction of a shower's pace (2.2 K in ten minutes against 7-11 K for a shower), with a warm bottom."""
+    await start_reading(hass, freezer)
+    avg = model.tank_average(m.params, 55.0, 50.0)
+    for _ in range(5):
+        avg -= 0.44
+        await step(hass, freezer, 2, 55.0, _bottom_for(m, avg))
+    await wait(hass, freezer, 6)
+
+
+async def test_washing_up_with_a_shower_s_heat_but_not_its_pace_is_a_tap(hass: HomeAssistant, entry, freezer) -> None:
+    """#10: washing up that took as much heat as the shower threshold, over ten minutes."""
+    m = entry.runtime_data
+    await _slow_use(hass, freezer, m)
+    assert state(hass, "sensor.hot_water_showers_today") == "0"
+    assert not any(e["source"] == "live" for e in m.ledger.log) and [o["kind"] for o in m.ledger.other] == ["tap"]
+    last = m.ledger.other[-1]
+    assert last["rule"] == "slow" and last["drawn"] >= 1.8 and last["seen"] == []
+    assert m.use_stats["tap"] == [] and m.use_stats["shower"] == []    # says nothing about a tap's heat
+
+
+async def test_a_slow_use_the_bathroom_signal_saw_is_a_shower(hass: HomeAssistant, deps, freezer) -> None:
+    hass.states.async_set(HUMIDITY, "60", {"unit_of_measurement": "%", "device_class": "humidity"})
+    entry = await setup_entry(hass, {"bathroom_sensor": HUMIDITY})
+    m = entry.runtime_data
+    freezer.tick(timedelta(minutes=1))
+    hass.states.async_set(HUMIDITY, "66", {"unit_of_measurement": "%", "device_class": "humidity"})
+    await hass.async_block_till_done()
+    await _slow_use(hass, freezer, m)
+    assert state(hass, "sensor.hot_water_showers_today") == "1"
+    assert m.ledger.log[-1]["seen"] == ["bathroom"] and "rule" not in m.ledger.log[-1]

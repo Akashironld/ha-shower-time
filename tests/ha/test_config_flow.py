@@ -71,3 +71,64 @@ async def test_options_suggest_and_save_a_bathroom_signal(hass: HomeAssistant, d
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert entry.options["bathroom_sensor"] == "sensor.badkamer_humidity"
     assert entry.runtime_data.bath_signal is not None and entry.runtime_data.bath_signal.kind == "humidity"
+
+
+def _suggested(result) -> dict:
+    return {str(k): (k.description or {}).get("suggested_value") for k in result["data_schema"].schema}
+
+
+async def test_options_can_empty_what_setup_filled_in(hass: HomeAssistant, deps) -> None:
+    """#12: a COP, flow and sensor filled in at setup are kept in the entry's data; emptied in the options they
+    stay empty, also when the options are opened again, and the integration stops using them."""
+    entry = await setup_entry(hass, data={"cop": 3.0, "flow_source": "manual", "head_flow": 6.5,
+                                          "outdoor_sensor": "sensor.outdoor"})
+    m = entry.runtime_data
+    assert m.cop_manual == 3.0 and m.head_flow() == (6.5, "manual") and m.outdoor == "sensor.outdoor"
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    suggested = _suggested(result)
+    assert suggested["cop"] == 3.0 and suggested["head_flow"] == 6.5
+    values = {k: v for k, v in suggested.items()
+              if v is not None and k not in ("cop", "head_flow", "outdoor_sensor", "bathroom_sensor")}
+    values.update({"flow_source": "unknown", "low_minutes": 10, "legionella_temperature": 60, "legionella_days": 8})
+    result = await hass.config_entries.options.async_configure(result["flow_id"], values)
+    await hass.async_block_till_done()
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.options["cop"] is None and entry.options["head_flow"] is None and entry.options["outdoor_sensor"] is None
+
+    m = entry.runtime_data                                     # reloaded with the new options
+    assert m.cop_manual is None and m.ledger.cop_heat_pump(m)[1] != "manual"
+    assert m.head_flow() == (None, "unknown") and m.outdoor is None
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    suggested = _suggested(result)
+    assert suggested["cop"] is None and suggested["head_flow"] is None and suggested["outdoor_sensor"] is None
+
+
+async def test_an_emptied_bathroom_signal_is_not_suggested_again(hass: HomeAssistant, deps) -> None:
+    entry = await setup_entry(hass)
+    hass.states.async_set("sensor.badkamer_humidity", "58", {"unit_of_measurement": "%", "device_class": "humidity"})
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    suggested = _suggested(result)
+    assert suggested["bathroom_sensor"] == "sensor.badkamer_humidity"
+    values = {k: v for k, v in suggested.items() if v is not None and k != "bathroom_sensor"}   # emptied
+    result = await hass.config_entries.options.async_configure(result["flow_id"], values)
+    await hass.async_block_till_done()
+    assert entry.options["bathroom_sensor"] is None and entry.runtime_data.bath_signal is None
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    assert _suggested(result)["bathroom_sensor"] is None
+
+
+async def test_a_bathroom_signal_emptied_at_setup_is_not_suggested_later(hass: HomeAssistant, deps) -> None:
+    tank(hass, 55.0, 49.8)
+    hass.states.async_set("sensor.badkamer_humidity", "58", {"unit_of_measurement": "%", "device_class": "humidity"})
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_USER})
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {
+        "name": "Hot water", "top_sensor": TOP, "bottom_sensor": BOTTOM, "tank_volume": 200,
+        "temperature_mode": "auto"})
+    assert _suggested(result)["bathroom_sensor"] == "sensor.badkamer_humidity"
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {
+        "profile": "generic", "flow_source": "unknown"})                # the suggestion emptied
+    await hass.async_block_till_done()
+    entry = result["result"]
+    assert entry.data["bathroom_sensor"] is None
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    assert _suggested(result)["bathroom_sensor"] is None

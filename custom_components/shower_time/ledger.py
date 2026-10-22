@@ -173,12 +173,14 @@ class ShowerLedger:
         self.eta_one = now if est.average >= need else now + timedelta(minutes=(need - est.average) / pace)
 
     def shower_ended(self, m: ShowerTimeManager, start: datetime, end: datetime,
-                     est: model.Estimate | None, min_minutes: float = MIN_SHOWER_MINUTES) -> dict | None:
-        """Log a finished shower; returns the log entry, or None when it was too short or too long."""
+                     est: model.Estimate | None, min_minutes: float = MIN_SHOWER_MINUTES,
+                     extra: dict | None = None) -> dict | None:
+        """Log a finished shower; returns the log entry, or None when it was too short or too long. ``extra``:
+        why it counts (heat measured, signals seen), kept for the diagnostics."""
         minutes = (end - start).total_seconds() / 60
         if not min_minutes <= minutes <= MAX_SHOWER_MINUTES or est is None:
             return None
-        return self._add(m, start, minutes, est.per_minute, self.tank_price, "live")
+        return self._add(m, start, minutes, est.per_minute, self.tank_price, "live", **(extra or {}))
 
     def running(self, m: ShowerTimeManager, now: datetime) -> dict | None:
         """The shower going on right now (once recognised as one): minutes so far and what that hot water cost."""
@@ -302,7 +304,8 @@ class ShowerLedger:
         # showers only: not washing up, and not heat that left without water (a heat pump starting a reheat)
         draws = [d for d in model.find_draws(rows) if MIN_SHOWER_MINUTES <= d.minutes <= MAX_SHOWER_MINUTES
                  and insights.draw_kind(m.params, rows, d.start, d.minutes, cold_at(d.start), m.confirm_k(),
-                                        m.fill_rate()) == "shower"]
+                                        m.fill_rate(), model.shower_minute(m.params, cold_at(d.start), m.shower_temp,
+                                                                           m.volume)) == "shower"]
         price_by_hour: dict[int, float] = {}
         cur = ""
         if m.price:

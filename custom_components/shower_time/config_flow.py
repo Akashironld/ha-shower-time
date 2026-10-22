@@ -65,6 +65,28 @@ LEGIONELLA_TEMP = selector.NumberSelector(selector.NumberSelectorConfig(min=50, 
 LEGIONELLA_DAYS = selector.NumberSelector(selector.NumberSelectorConfig(min=1, max=60, step=1, unit_of_measurement="d", mode=selector.NumberSelectorMode.BOX))
 PROFILE = selector.SelectSelector(selector.SelectSelectorConfig(options=PROFILES, translation_key="profile", mode=selector.SelectSelectorMode.DROPDOWN))
 
+OPTIONS = vol.Schema({
+    vol.Required(CONF_VOLUME): VOLUME,
+    vol.Required(CONF_TEMP_MODE): TEMP_MODE,
+    vol.Optional(CONF_SHOWER_TEMP, default=DEFAULT_SHOWER_TEMP): SHOWER,
+    vol.Required(CONF_FLOW_SOURCE): FLOW_SOURCE,
+    vol.Optional(CONF_HEAD_FLOW): HEAD_FLOW,
+    vol.Optional(CONF_WATER): WATER,
+    vol.Required(CONF_LOW): LOW,
+    vol.Optional(CONF_BOTTOM): TEMP,
+    vol.Optional(CONF_HEATING): ANY,
+    vol.Optional(CONF_HEATING_STATES, default=DEFAULT_HEATING_STATES): selector.TextSelector(),
+    vol.Optional(CONF_ENERGY): ENERGY,
+    vol.Optional(CONF_OUTDOOR): TEMP,
+    vol.Optional(CONF_ELEC): ENERGY,
+    vol.Optional(CONF_COP): COP,
+    vol.Optional(CONF_PRICE): PRICE,
+    vol.Optional(CONF_BATH): BATH,
+    vol.Required(CONF_BATHTUB): selector.BooleanSelector(),
+    vol.Required(CONF_LEGIONELLA_TEMP): LEGIONELLA_TEMP,
+    vol.Required(CONF_LEGIONELLA_DAYS): LEGIONELLA_DAYS,
+})
+
 
 def suggest_bathroom(hass: HomeAssistant) -> str | None:
     """A bathroom humidity sensor, else the power of a bathroom fan, else a bathroom fan itself."""
@@ -159,6 +181,8 @@ class ShowerTimeConfigFlow(ConfigFlow, domain=DOMAIN):
             errors = _check_flow(user_input)
             if not errors:
                 data = {**self._data, **user_input}
+                if CONF_BATH not in user_input and suggest_bathroom(self.hass):
+                    data[CONF_BATH] = None          # the suggested bathroom signal was emptied: not suggested again
                 title = data.pop(CONF_NAME)
                 return self.async_create_entry(title=title, data=data)
         sug = suggest(self.hass, self._data[CONF_TOP], float(self._data[CONF_VOLUME]))
@@ -191,7 +215,10 @@ class ShowerTimeOptionsFlow(OptionsFlow):
         if user_input is not None:
             errors = _check_flow(user_input)
             if not errors:
-                return self.async_create_entry(data=user_input)
+                # a field emptied here is left out of user_input: save it as empty, or what was filled in at setup
+                # (kept in the entry's data) would come back and stay in use
+                cleared = {str(k): None for k in OPTIONS.schema if str(k) not in user_input}
+                return self.async_create_entry(data={**cleared, **user_input})
         cur = {**self.config_entry.data, **self.config_entry.options}
         cur.setdefault(CONF_TEMP_MODE, "fixed" if CONF_SHOWER_TEMP in cur else "auto")
         cur.setdefault(CONF_FLOW_SOURCE, "unknown")
@@ -200,29 +227,8 @@ class ShowerTimeOptionsFlow(OptionsFlow):
         cur.setdefault(CONF_LEGIONELLA_TEMP, DEFAULT_LEGIONELLA_TEMP)
         cur.setdefault(CONF_LEGIONELLA_DAYS, DEFAULT_LEGIONELLA_DAYS)
         if CONF_BATH not in cur and (bath := suggest_bathroom(self.hass)):
-            cur[CONF_BATH] = bath                   # suggested only: saved when you press submit
-        schema = vol.Schema({
-            vol.Required(CONF_VOLUME): VOLUME,
-            vol.Required(CONF_TEMP_MODE): TEMP_MODE,
-            vol.Optional(CONF_SHOWER_TEMP, default=DEFAULT_SHOWER_TEMP): SHOWER,
-            vol.Required(CONF_FLOW_SOURCE): FLOW_SOURCE,
-            vol.Optional(CONF_HEAD_FLOW): HEAD_FLOW,
-            vol.Optional(CONF_WATER): WATER,
-            vol.Required(CONF_LOW): LOW,
-            vol.Optional(CONF_BOTTOM): TEMP,
-            vol.Optional(CONF_HEATING): ANY,
-            vol.Optional(CONF_HEATING_STATES, default=DEFAULT_HEATING_STATES): selector.TextSelector(),
-            vol.Optional(CONF_ENERGY): ENERGY,
-            vol.Optional(CONF_OUTDOOR): TEMP,
-            vol.Optional(CONF_ELEC): ENERGY,
-            vol.Optional(CONF_COP): COP,
-            vol.Optional(CONF_PRICE): PRICE,
-            vol.Optional(CONF_BATH): BATH,
-            vol.Required(CONF_BATHTUB): selector.BooleanSelector(),
-            vol.Required(CONF_LEGIONELLA_TEMP): LEGIONELLA_TEMP,
-            vol.Required(CONF_LEGIONELLA_DAYS): LEGIONELLA_DAYS,
-        })
-        return self.async_show_form(step_id="init", data_schema=self.add_suggested_values_to_schema(schema, user_input or cur),
+            cur[CONF_BATH] = bath                   # suggested only (not once emptied): saved when you press submit
+        return self.async_show_form(step_id="init", data_schema=self.add_suggested_values_to_schema(OPTIONS, user_input or cur),
                                     errors=errors)
 
 

@@ -522,6 +522,30 @@ def test_a_short_shower_needs_the_signal_when_there_is_one():
     assert not insights.short_shower(1.7, 4.0, True, False)     # the bathroom stayed quiet: a tap
 
 
+def test_washing_up_with_a_shower_s_heat_is_too_slow_for_a_shower():
+    """#10: washing up took 1.85 K in ten minutes from a hot tank (bottom 53 °C): over the shower threshold, but a
+    third of a shower's pace there (0.585 K/min). Real showers with a warm bottom: 0.6 of the pace and up."""
+    assert insights.too_slow_for_a_shower(1.85, 10.0, 0.585, 53.2, 18.3, 5)
+    assert not insights.too_slow_for_a_shower(5.56, 10.0, 0.585, 53.2, 18.3, 5)     # a real shower in that tank
+    assert not insights.too_slow_for_a_shower(1.74, 6.0, 0.47, 37.9, 22.4, 3)       # the slowest real one seen
+    assert not insights.too_slow_for_a_shower(1.85, 10.0, 0.585, 30.0, 18.3, 5)     # bottom cool: says little
+    assert not insights.too_slow_for_a_shower(1.2, 4.0, 0.585, 53.2, 18.3, 2)       # too short to tell
+    assert not insights.too_slow_for_a_shower(1.85, 10.0, 0.585, 53.2, 18.3, 2)     # read every 5 minutes: unsure
+    assert not insights.too_slow_for_a_shower(1.85, 10.0, None, 53.2, 18.3, 5)
+    assert not insights.too_slow_for_a_shower(1.85, 10.0, 0.585, None, 18.3, 5)     # no bottom sensor
+
+
+def test_history_draws_judge_the_pace_too():
+    p = model.new_params("weheat_200")
+    m0 = 1000
+    slow = [model.Row(minute=m0 + i, top=55.0, bottom=53.0 - min(i, 16) * 0.25, heating=False) for i in range(30)]
+    assert insights.draw_heat(p, slow, m0, 16) >= insights.SHOWER_CONFIRM_K
+    assert insights.draw_kind(p, slow, m0, 16, cold=18.0) == "shower"                # by its heat alone
+    assert insights.draw_kind(p, slow, m0, 16, cold=18.0, per_minute=0.585) == "tap"
+    shower = [model.Row(minute=m0 + i, top=55.0, bottom=50.0 - min(i, 12) * 2.0, heating=False) for i in range(25)]
+    assert insights.draw_kind(p, shower, m0, 12, cold=15.0, per_minute=0.585) == "shower"
+
+
 def test_since_reheat_without_a_reheat_never_shows_reheated():
     """#10: two logged 8-minute uses while the tank lost only ~9 minutes and no reheat ran: 'reheated' stayed
     at 7 minutes. Without a seen reheat the uses are cut back to what the tank lost."""

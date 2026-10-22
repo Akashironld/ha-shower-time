@@ -371,6 +371,8 @@ class ShowerTimeManager:
         if not changed:
             return
         self._sensor_at, self.live_offset = now, 0.0       # a real reading: start from the sensors again
+        if self.use is not None:
+            self.use.readings += 1
         if self._gap is not None:                          # still settling after a gap: one use for all of it
             self._gap["last"] = now
             return
@@ -430,13 +432,25 @@ class ShowerTimeManager:
             kind = use.final(minutes, MAX_SHOWER_MINUTES) if use else "tap"
             signal = None
             if use is not None and (self.bath_signal is not None or self.water_signal is not None):
-                signal = use.bath_seen or self.signal_active()   # a humidity sensor can rise after the water stopped
+                # a humidity sensor can rise after the water stopped
+                signal = use.bath_seen or use.water_seen or self.signal_active()
             by_habit = kind == "tap" and use is not None and insights.short_shower(
                 use.drawn, minutes, self._shower_time_of_day(start), signal)
             if by_habit:
                 kind = "shower"                    # short, but at the hour this household showers
+            bathroom = use is not None and self.bath_signal is not None and (use.bath_seen or self.bath_active())
+            slow = (kind == "shower" and not bathroom and use is not None and self.estimate is not None
+                    and insights.too_slow_for_a_shower(use.drawn, minutes, self.estimate.per_minute, use.start_bottom,
+                                                       self.estimate.cold, use.readings))
+            if slow:
+                kind = "tap"                       # heat enough, but at a fraction of a shower's pace: washing up
+            # why it counts as what it is (for the diagnostics): the heat that left, the signals that saw it
+            why = {} if use is None else {"drawn": round(use.drawn, 2), "seen": [
+                s for s, on in (("bathroom", bathroom), ("water_meter", use.water_seen)) if on]}
+            if by_habit or slow:
+                why["rule"] = "slow" if slow else "habit"
             if kind == "shower":
-                entry = self.ledger.shower_ended(self, start, end, self.estimate, min_minutes=2.0)
+                entry = self.ledger.shower_ended(self, start, end, self.estimate, min_minutes=2.0, extra=why)
                 if entry is not None:
                     self._remember_use("shower", use.drawn)
                     if minutes >= MIN_SHOWER_MINUTES:           # the pace of a whole shower: tells baths apart
@@ -449,9 +463,9 @@ class ShowerTimeManager:
             elif kind == "coil":
                 self.coil_events += 1
             elif use is not None and use.drawn >= 0.15:   # below that nothing measurable left the tank
-                if kind == "tap":
+                if kind == "tap" and not slow:             # a slow use says nothing about a tap's heat
                     self._remember_use("tap", use.drawn)
-                entry = self.ledger.other_ended(self, kind, start, minutes, use.drawn * self.volume * model.CP)
+                entry = self.ledger.other_ended(self, kind, start, minutes, use.drawn * self.volume * model.CP, **why)
                 self._fire("hot_water_used", {**entry, "currency": self.ledger.currency or None})
         self.ledger.session_start = None
 
@@ -625,9 +639,11 @@ class ShowerTimeManager:
             if began < self.ledger.session_start and dt_util.utcnow() - began <= timedelta(minutes=15):
                 self.ledger.session_start = began           # the water was running before the tank showed it
                 self.use.start = self.water_signal.rose_at
-        if self.use.update(dt_util.utcnow().timestamp() / 60, self.estimate.average, self.signal_active(),
+        # with a bathroom signal only that one lowers the threshold: a kitchen tap can run as steadily as a shower
+        lowers = self.bath_active() if self.bath_signal is not None else self.water_active()
+        if self.use.update(dt_util.utcnow().timestamp() / 60, self.estimate.average, lowers,
                            self.confirm_k(), top=self.top_value, bottom=self.bottom_value, cold=self.estimate.cold,
-                           fill_rate=self.fill_rate(), fast_flow=self.fast_flow()):
+                           fill_rate=self.fill_rate(), fast_flow=self.fast_flow(), water_active=self.water_active()):
             self._fire("shower_started", {"started": dt_util.as_local(self.ledger.session_start).isoformat(timespec="seconds"),
                                           "confirmed_after_minutes": self.use.confirmed_after,
                                           "bathroom_signal": self.use.bath_seen,
@@ -842,6 +858,7 @@ class ShowerTimeManager:
         self.request_save()
         for key, ent, val in (("top", self.top, self.top_value), ("bottom", self.bottom, self.bottom_value)):
             if not ent:
+                self._issue(f"sensor_missing:{key}", False)     # a sensor emptied under Configure
                 continue
             if val is None:
                 since = self._missing_since.setdefault(key, now)
@@ -1249,12 +1266,16 @@ class ShowerTimeManager:
 
         confirm_k = self.confirm_k()
         fill_rate = self.fill_rate()
+        taps = [datetime.fromisoformat(e["start"]).timestamp() / 60 for e in self.ledger.other if e.get("kind") == "tap"]
 
         def draw_kind(d: model.Draw) -> str:            # only real showers teach shower length and flow
+            if any(abs(d.start - t) <= 5 for t in taps):
+                return "tap"                            # followed live (with the bathroom and water signals): a tap
             local = dt_util.as_local(datetime.fromtimestamp(d.start * 60, timezone.utc))
             cold = model.cold_for(self.params, local.month, local.timetuple().tm_yday,
                                   ema_of(d.start) if self.outdoor else None)
-            return insights.draw_kind(self.params, rows, d.start, d.minutes, cold, confirm_k, fill_rate)
+            return insights.draw_kind(self.params, rows, d.start, d.minutes, cold, confirm_k, fill_rate,
+                                      model.shower_minute(self.params, cold, self.shower_temp, self.volume))
 
         result, last = await self.hass.async_add_executor_job(
             lambda: model.learn(self.params, rows, volume=self.volume, shower_temp=self.shower_temp,
