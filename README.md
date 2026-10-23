@@ -59,7 +59,7 @@ other tanks start from a generic profile and learn their own behaviour.
 | Heat per minute of showering (≈ shower flow) | heat drawn between two full reheats vs. the minutes cold water was coming in |
 | Tank layering | reheats from a layered tank (needs a heat/energy sensor) |
 | When the tank is really empty | reheats that start from an almost empty tank |
-| Cold water temperature | how cold the bottom gets in long showers, against a 3-week outdoor average |
+| Cold water temperature | starting values, lowered where the bottom of the tank got colder than expected |
 | Standing loss | quiet hours without showers or reheating |
 | Reheat speed | every reheat |
 | Typical shower length | the showers it sees |
@@ -76,8 +76,13 @@ learning skips periods with a top-up in between, so it does not learn a too-low 
 
 Mains water follows the ground, which follows the weather weeks later: a few warm days hardly matter, a
 cold month does. With an outdoor temperature sensor the model uses **cold water ≈ a + b × 3-week outdoor
-average** and learns *a* and *b* from long showers (the slope only once the data spans the seasons).
-Without one it uses a learned monthly table that changes smoothly between months.
+average**. Without one it uses a monthly table that changes smoothly between months.
+
+Both start from values for the Netherlands/Belgium/Germany. The bottom sensor never reads colder than the
+mains water, but after most showers it stays far above it: the water let in mixes with the warm water that
+was there. So the coldest bottom reading of a day only *lowers* the cold water, where it was colder than
+expected (the outdoor line once that happened on two days), at most 4 °C below the starting values; it
+never raises it.
 
 ## Shower temperature: automatic, sensed or set
 
@@ -427,8 +432,9 @@ is published from the changelog.
 
 - Without a bottom sensor showers are hard to see: no live countdown or log, little learning.
 - Costs are in electricity; a gas-heated tank is not supported for cost.
-- The cold water starting values are for the Netherlands/Belgium/Germany; elsewhere the model learns the
-  local values, but starts a few degrees off.
+- The cold water starting values are for the Netherlands/Belgium/Germany. Colder mains water elsewhere is
+  learned from the bottom of the tank; warmer mains water is not, and the shower time then stays a little
+  on the low, safe side.
 - Live updates follow your sensors: with readings every few minutes the countdown runs on its own for up to
   4 minutes between readings.
 - *Enough for today* learns when the tank is usually reheated, but cannot know about a reheat that is out of the

@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.13.2 — Cold water no longer learned too warm
+
+**Recommended for everyone** — the cold water temperature the integration learned crept up to 25 °C within days. The shower time shown was too high because of it, the heat and cost of a shower too low, and washing up could count as a shower again (#10).
+
+### Fixes
+- **The bottom of the tank after a shower is no longer taken for the mains water.** The bottom sensor never reads colder than the mains water, but after most showers it stays far above it: a shower lets in about a fifth of the tank, and that mixes with the warm water that was there. On a 200 L tank the bottom ended at 25–38 °C after an ordinary shower, with mains water of 17–18 °C, and that reading pushed the cold water up to 25 °C. Now the coldest bottom reading of a day can only *lower* the cold water, where the tank showed colder water than expected (the outdoor line once that happened on two days), at most 4 °C below the starting values; it never raises it. Readings while reheating are left out: a heat pump starting up cools the bottom for a moment.
+- **Readings kept from earlier nights count once.** With an outdoor sensor the cold water line was refitted every night on top of the previous night's result, with all kept readings again, so the same few showers pushed it further each night.
+- **Cold water learned too warm is repaired** at the first start after updating: months above the starting value go back to it, and the outdoor line is refitted from the kept readings the new way. Values learned lower stay.
+
+With too warm cold water a shower minute seemed to take less heat than it does. On a 200 L tank with 22 °C instead of 16.5 °C: 20 minutes left instead of 17, a full tank 47 minutes instead of 37, a logged shower's heat and cost a quarter too low, and the pace check that tells washing up from a shower (#10) became lax. At 25 °C, and in winter, the gap grows larger.
+
+### After updating
+Update in HACS and restart Home Assistant. Nothing to set: the cold water is repaired by itself. The shower time shown can drop a few minutes; the lower figure is the right one.
+
 ## v0.13.1 — Emptied options stay empty, washing up is no shower
 
 **Recommended for everyone who emptied a field under Configure, and for everyone with a bathroom signal or water meter** — a COP or other setting filled in at setup came back after you emptied it, and stayed in use (#12), and washing up that took as much heat as a shower could still be logged as one (#10).

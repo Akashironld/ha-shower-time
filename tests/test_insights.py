@@ -533,6 +533,11 @@ def test_washing_up_with_a_shower_s_heat_is_too_slow_for_a_shower():
     assert not insights.too_slow_for_a_shower(1.85, 10.0, 0.585, 53.2, 18.3, 2)     # read every 5 minutes: unsure
     assert not insights.too_slow_for_a_shower(1.85, 10.0, None, 53.2, 18.3, 5)
     assert not insights.too_slow_for_a_shower(1.85, 10.0, 0.585, None, 18.3, 5)     # no bottom sensor
+    # The values above came from a cold water estimate learned too warm (18.3 and 22.4 °C). With the profile's
+    # cold water (16.0 and 16.5 °C) a shower minute takes more heat; the washing up and the slowest real shower
+    # stay on their side of the line.
+    assert insights.too_slow_for_a_shower(1.85, 10.0, 0.655, 53.2, 16.0, 5)
+    assert not insights.too_slow_for_a_shower(1.74, 6.0, 0.648, 37.9, 16.5, 3)
 
 
 def test_history_draws_judge_the_pace_too():

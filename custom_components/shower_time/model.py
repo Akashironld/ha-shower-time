@@ -32,9 +32,14 @@ CP = 1.163 / 1000          # kWh per litre per kelvin
 MAX_PRIOR_WEIGHT = 60      # the prior never counts for more than this many observations
 W_POINTS = ("20", "30", "45")
 
-# Monthly cold (mains) water temperature, temperate climate (NL/BE/DE). Learned per month.
+# Monthly cold (mains) water temperature, temperate climate (NL/BE/DE). Lowered per month by what the tank shows.
 COLD_GENERIC = {"01": 8.0, "02": 8.0, "03": 9.5, "04": 11.5, "05": 14.0, "06": 16.5,
                 "07": 18.5, "08": 19.0, "09": 18.0, "10": 15.5, "11": 12.5, "12": 9.5}
+# The bottom sensor never reads colder than the mains water coming in, but after most uses it stays well above it
+# (a shower lets in a fifth of the tank, which mixes with what was there): its coldest reading is an upper bound.
+COLD_BELOW_BOTTOM = 1.0    # mains water is taken this far below the coldest bottom reading of a use
+COLD_MAX_LOWER = 4.0       # the bottom lowers the profile's cold water by this much at most (a sensor reading low)
+COLD_MIN_SAMPLES = 2       # days below the line before the line moves: one odd reading does not
 
 PROFILES: dict[str, dict] = {
     # Sensible starting point for any stratified tank with a top and bottom sensor.
@@ -81,8 +86,15 @@ def ensure_params(p: dict) -> dict:
     p.setdefault("head_flow", {"v": 8.0, "n": 0})     # measured shower-head flow (water meter), L/min
     # cold water = a + b * outdoor running average (°C); default from the profile the model started with
     p.setdefault("cold_model", copy.deepcopy(PROFILES.get(p.get("profile"), PROFILES["generic"])["cold_model"]))
-    p.setdefault("cold_samples", [])                  # [outdoor running average, measured cold] pairs
+    p.setdefault("cold_samples", [])                  # [outdoor running average, coldest bottom of a day - 1]
     p.setdefault("reheat_rate", {"v": 0.3, "n": 0})   # tank average °C per minute while reheating
+    if p.get("cold_version", 1) < 2:
+        # Up to 0.13.1 the bottom after a shower was taken for the mains water itself, which pushed the cold water
+        # up to 25 °C within days: back to the profile (what was learned downwards stays), refitted the new way.
+        prof = PROFILES.get(p.get("profile"), PROFILES["generic"])
+        p["cold"] = {m: min(v, prof["cold"].get(m, v)) for m, v in p["cold"].items()}
+        p["cold_model"] = fit_cold_model(prof["cold_model"], p["cold_samples"])
+        p["cold_version"] = 2
     return p
 
 
@@ -123,8 +135,8 @@ def cold_for(params: dict, month: int, doy: int | None = None, ema: float | None
 
     Mains water follows the ground, which follows the weather with a delay of weeks: a few warm days hardly
     matter, a cold month does. With an outdoor sensor the model uses a ~3-week running average of the outdoor
-    temperature: cold = a + b * average, with a and b learned from long showers. Without one it uses the
-    learned monthly table, smoothly interpolated."""
+    temperature: cold = a + b * average, from the profile and lowered where the tank showed colder water. Without
+    one it uses the monthly table, lowered the same way and smoothly interpolated."""
     if ema is not None:
         cm = params["cold_model"]
         return round(min(25.0, max(4.0, cm["a"]["v"] + cm["b"]["v"] * ema)), 2)
@@ -302,6 +314,14 @@ def _draw_drop(params: dict, rows: list[Row], d: Draw) -> float:
     return max(0.0, a0 - min(tank_average(params, r.top, r.bottom) for r in seg))
 
 
+def _lowest_bottom(rows: list[Row], d: Draw) -> float | None:
+    """Coldest bottom reading of a draw and the 10 minutes after it, outside a reheat (a heat pump starting up
+    cools the bottom for a moment)."""
+    lows = [r.bottom for r in rows if d.start <= r.minute <= d.start + d.minutes + 10 and not r.heating
+            and r.bottom is not None]
+    return min(lows) if lows else None
+
+
 def _blend(old: dict, samples: list[float], limits: tuple[float, float]) -> dict:
     if not samples:
         return old
@@ -431,16 +451,22 @@ def learn(params: dict, rows: list[Row], *, volume: float, shower_temp: float, s
             s["loss"].append((t0 - t1) / ((block[-1].minute - block[0].minute) / 60))
         i += 60
 
+    days: dict[int, list[float]] = {}
     for d in draws:
-        if d.start < since or kinds[d.start] != "shower":
+        if d.start < since:
             continue
-        s["duration"].append(d.minutes)
-        if d.bottom_start is not None and d.bottom_low is not None and d.bottom_start - d.bottom_low >= 15:
-            m = "%02d" % month_of(d.start)
-            s["cold"][m] = min(s["cold"].get(m, 99.0), d.bottom_low - 1)
-            ema = ema_of(d.start) if ema_of else None
-            if ema is not None:
-                s["cold_pairs"].append([round(ema, 2), round(d.bottom_low - 1, 2)])
+        if kinds[d.start] == "shower":
+            s["duration"].append(d.minutes)
+        low = _lowest_bottom(rows, d) if kinds[d.start] != "coil" else None   # mains is at most this
+        if low is None:
+            continue
+        m, cold = "%02d" % month_of(d.start), low - COLD_BELOW_BOTTOM
+        s["cold"][m] = min(s["cold"].get(m, 99.0), cold)
+        ema = ema_of(d.start) if ema_of else None
+        day = d.start // 1440
+        if ema is not None and (day not in days or cold < days[day][1]):
+            days[day] = [round(ema, 2), round(cold, 2)]        # the coldest of each day
+    s["cold_pairs"] = [days[k] for k in sorted(days)]
 
     if water:
         s["head_flow"] = water_flow_samples(water, [d for d in draws if d.start >= since and kinds[d.start] == "shower"])
@@ -449,12 +475,15 @@ def learn(params: dict, rows: list[Row], *, volume: float, shower_temp: float, s
         p["w"][key] = _blend(p["w"][key], s["w" + key], LIMITS["w"])
     for key in ("veff_factor", "phi", "flow", "loss", "duration", "head_flow", "reheat_rate"):
         p[key] = _blend(p[key], s[key], LIMITS[key])
-    for m, low in s["cold"].items():                 # cold water only moves towards what was seen
-        p["cold"][m] = round(min(max(4.0, 0.7 * p["cold"][m] + 0.3 * low), 25.0), 1)
+    prof = PROFILES.get(p.get("profile"), PROFILES["generic"])
+    for m, low in s["cold"].items():                 # an upper bound: it only ever lowers the month
+        if low < p["cold"][m]:
+            floor = min(p["cold"][m], prof["cold"].get(m, p["cold"][m]) - COLD_MAX_LOWER)
+            p["cold"][m] = round(max(4.0, floor, 0.7 * p["cold"][m] + 0.3 * low), 1)
 
     if s["cold_pairs"]:
         p["cold_samples"] = (p["cold_samples"] + s["cold_pairs"])[-150:]
-        p["cold_model"] = fit_cold_model(p["cold_model"], p["cold_samples"])
+        p["cold_model"] = fit_cold_model(prof["cold_model"], p["cold_samples"])
 
     tops = [c.top_after for c in cycles if full(c)]
     if tops:
@@ -502,29 +531,16 @@ def water_flow_samples(water: tuple[str, list[tuple[int, float]]], draws: list[D
 
 
 def fit_cold_model(prior: dict, samples: list[list[float]]) -> dict:
-    """Learn cold = a + b * outdoor average from (average, measured cold) pairs.
+    """cold = a + b * outdoor average: the profile's line, lowered where the tank showed colder water.
 
-    The slope is only learned once the samples span at least 4 °C of outdoor average (i.e. over the seasons);
-    until then only the offset moves. Both stay blended with the prior so a handful of showers cannot swing it."""
+    A sample is (outdoor average, coldest bottom reading of a day - 1): an upper bound for the mains water, so it
+    can only pull the offset down and cannot tell the slope. ``prior`` is the profile's line (not last night's), so
+    kept samples count once instead of again every night. The second lowest sample below the line sets the offset,
+    so one odd reading does not, and never more than ``COLD_MAX_LOWER`` below the profile."""
     a0, b0 = prior["a"]["v"], prior["b"]["v"]
-    n = len(samples)
-    if n == 0:
-        return prior
-    xs = [x for x, _ in samples]
-    ys = [y for _, y in samples]
-    if n >= 8 and max(xs) - min(xs) >= 4:
-        mx, my = statistics.mean(xs), statistics.mean(ys)
-        sxx = sum((x - mx) ** 2 for x in xs)
-        b = sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / sxx
-        b = min(1.0, max(0.3, b))
-        a = my - b * mx
-    else:
-        b = b0
-        a = statistics.median([y - b0 * x for x, y in zip(xs, ys)])
-    w0 = min(prior["a"]["n"], MAX_PRIOR_WEIGHT)
-    blend = lambda old, new: (w0 * old + n * new) / (w0 + n)
-    return {"a": {"v": round(blend(a0, a), 3), "n": prior["a"]["n"]},
-            "b": {"v": round(blend(b0, b), 3), "n": prior["b"]["n"]}}
+    below = sorted(y - b0 * x for x, y in samples if y - b0 * x < a0)
+    a = max(a0 - COLD_MAX_LOWER, below[COLD_MIN_SAMPLES - 1]) if len(below) >= COLD_MIN_SAMPLES else a0
+    return {"a": {"v": round(a, 3), "n": prior["a"]["n"]}, "b": {"v": b0, "n": prior["b"]["n"]}}
 
 
 def shower_heat_kwh(per_minute: float, minutes: float, volume: float) -> float:

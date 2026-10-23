@@ -248,24 +248,70 @@ def test_smart_controller_varying_targets_and_top_ups():
 
 
 def test_cold_water_from_outdoor_average():
-    """cold = a + b * 3-week outdoor average is learned from (average, measured) pairs; the table is smooth."""
-    rnd = random.Random(3)
-    pairs = []
-    for _ in range(60):
-        x = rnd.uniform(3, 22)
-        pairs.append([x, 8.0 + 0.6 * x + rnd.uniform(-0.7, 0.7)])
+    """cold = a + b * 3-week outdoor average: the profile's line, only lowered by colder samples; the table is
+    smooth."""
     prior = {"a": {"v": 9.0, "n": 10}, "b": {"v": 0.6, "n": 10}}
-    cm = model.fit_cold_model(prior, pairs)
-    assert abs(cm["b"]["v"] - 0.6) < 0.08 and abs(cm["a"]["v"] - 8.2) < 0.9, cm
-    # a narrow range (one season) only moves the offset
-    narrow = [[x, y] for x, y in pairs if 15 <= x <= 17]
-    cm2 = model.fit_cold_model(prior, narrow)
-    assert cm2["b"]["v"] == 0.6, cm2
+    # the bottom after a shower, far above the mains water (the samples behind 25 °C in October, #10)
+    warm = [[16.9, 32.3], [16.79, 32.3], [16.8, 20.3], [16.61, 35.9], [16.14, 36.9], [15.85, 26.2]]
+    assert model.fit_cold_model(prior, warm) == prior
+    one = warm + [[16.0, 16.6]]                          # one reading below the line (a = 7.0) does not move it
+    assert model.fit_cold_model(prior, one)["a"]["v"] == 9.0
+    two = one + [[15.0, 16.2]]                           # a second one does: a = 7.2, the higher of the two
+    cm = model.fit_cold_model(prior, two)
+    assert abs(cm["a"]["v"] - 7.2) < 0.01 and cm["b"]["v"] == 0.6, cm
+    assert model.fit_cold_model(prior, two) == cm        # kept samples count once, however often it is fitted
+    low = [[10.0, 6.0], [10.0, 6.5]]                     # a sensor reading low: at most 4 °C below the profile
+    assert model.fit_cold_model(prior, low)["a"]["v"] == 5.0
     p = model.new_params("generic")
     assert abs(model.cold_for(p, 10, 286, 17.2) - (9.0 + 0.6 * 17.2)) < 0.01
     # no jump at a month boundary
     d1, d2 = model.cold_for(p, 10, 304), model.cold_for(p, 11, 305)
     assert abs(d1 - d2) < 0.3, (d1, d2)
+
+
+def learn_nightly(p, rows, energy, ema):
+    """Learn night after night, as the integration does."""
+    start = rows[0].minute
+    for night in range(1, (rows[-1].minute - start) // 1440 + 1):
+        end = start + night * 1440
+        res, _ = model.learn(p, [r for r in rows if r.minute < end], volume=200, shower_temp=38, since=end - 1440,
+                             energy_by_hour=energy, previous_cycle=None, month_of=month_of, ema_of=lambda m: ema)
+        p = res.params
+    return p
+
+
+def test_bottom_after_a_shower_does_not_warm_the_cold_water():
+    """#10: after most showers the bottom stays well above the mains water (here up to 38 °C with 15 °C mains).
+    Taken for the mains itself, that pushed the cold water to 25 °C within two weeks."""
+    rows, energy, _ = simulate(days=14, cold=15.0)
+    p = learn_nightly(model.new_params("generic"), rows, energy, ema=10.0)    # the generic line: 9 + 0.6 * 10
+    assert len(p["cold_samples"]) >= 10
+    assert p["cold_model"]["a"]["v"] == 9.0 and model.cold_for(p, 10, None, 10.0) == 15.0, p["cold_model"]
+    assert p["cold"]["10"] == model.COLD_GENERIC["10"]
+
+
+def test_colder_mains_water_lowers_the_cold_water():
+    """Mains water colder than the profile: the coldest bottom readings pull the line and the month down."""
+    rows, energy, _ = simulate(days=14, cold=11.0)
+    p = learn_nightly(model.new_params("generic"), rows, energy, ema=10.0)    # the line says 15
+    assert 11.0 <= model.cold_for(p, 10, None, 10.0) <= 12.5, p["cold_model"]
+    assert 11.0 <= p["cold"]["10"] < model.COLD_GENERIC["10"] - 2, p["cold"]
+
+
+def test_cold_water_learned_too_warm_is_repaired():
+    """Parameters saved by 0.13.1 and earlier: months pushed above the profile go back, the line is refitted from
+    the kept samples without counting them again every night (a 7.24 had become 13.09 from six samples)."""
+    p = model.new_params("weheat_200")
+    del p["cold_version"]
+    p["cold"]["10"], p["cold"]["01"] = 25.0, 8.5                 # pushed up / learned below the profile
+    p["cold_model"] = {"a": {"v": 13.087, "n": 40}, "b": {"v": 0.604, "n": 40}}
+    p["cold_samples"] = [[16.9, 32.3], [16.79, 32.3], [16.8, 20.3], [16.61, 35.9], [16.14, 36.9], [15.85, 26.2]]
+    q = model.ensure_params(p)
+    assert q["cold"]["10"] == 19.7 and q["cold"]["01"] == 8.5
+    assert q["cold_model"] == model.PROFILES["weheat_200"]["cold_model"] and q["cold_version"] == 2
+    assert len(q["cold_samples"]) == 6
+    q["cold"]["10"] = 18.0                                       # learned the new way: left alone from now on
+    assert model.ensure_params(q)["cold"]["10"] == 18.0
 
 
 if __name__ == "__main__":
