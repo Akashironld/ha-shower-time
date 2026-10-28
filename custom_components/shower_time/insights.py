@@ -232,6 +232,9 @@ FILL_RECLASSIFY_K = 4.0       # a use already taken for a shower becomes a fill 
                               # first minutes of a shower can fall fast
 COIL_TOP_DROP = 1.0           # K the top falls while the bottom is still warm (or falls less) = no water drawn
 COIL_BOTTOM_ABOVE_COLD = 15.0
+COIL_MAX_K = 4.0              # ... but only while less than this has left the tank: by then a coil has dipped the top,
+                              # where a long shower first uses up the hot layer (the top falls once ~10 K has gone,
+                              # with the bottom still warm on its way down)
 BATH_SIGNAL_MINUTES = 10      # a bathroom signal this long before or during the use counts
 HUMIDITY_RISE = 3.0           # %RH above the lowest value of the last 15 minutes
 POWER_RISE = 1.0              # W above the usual (median) power of the last day, and at least 30 % more
@@ -296,8 +299,10 @@ class UseSession:
             return False
         if top is not None and bottom is not None and self.start_top is not None and self.start_bottom is not None:
             top_drop, bottom_drop = self.start_top - top, self.start_bottom - bottom
-            warm_bottom = cold is not None and bottom > cold + COIL_BOTTOM_ABOVE_COLD
-            if top_drop >= COIL_TOP_DROP and (top_drop > bottom_drop or warm_bottom):
+            warm_bottom = (cold is not None and bottom > cold + COIL_BOTTOM_ABOVE_COLD
+                           and self.drawn < COIL_MAX_K)
+            # a steady flow on the water meter says water ran: never heat leaving through the coil
+            if top_drop >= COIL_TOP_DROP and (top_drop > bottom_drop or warm_bottom) and not self.water_seen:
                 self.kind = "coil"               # heat left without water: not a use after all
                 return False
         rate = self.drawn / max(1.0, t - self.start)
@@ -383,7 +388,8 @@ def gap_use(params: dict, before: tuple[float, float | None], after: tuple[float
         return None
     if before[1] is not None and after[1] is not None:
         top_drop, bottom_drop = before[0] - after[0], before[1] - after[1]
-        if top_drop >= COIL_TOP_DROP and (top_drop > bottom_drop or after[1] > cold + COIL_BOTTOM_ABOVE_COLD):
+        warm_bottom = after[1] > cold + COIL_BOTTOM_ABOVE_COLD and drop < COIL_MAX_K
+        if top_drop >= COIL_TOP_DROP and (top_drop > bottom_drop or warm_bottom):
             return "coil", round(drop, 2), 0.0
     minutes = drop / per_minute if per_minute > 0 else 0.0
     kind = "shower" if drop >= confirm_k else "tap"
@@ -611,8 +617,11 @@ def draw_kind(params: dict, rows: list[model.Row], start: int, minutes: int, col
         bottom_drop = first.bottom - min(r.bottom for r in seg if r.bottom is not None)
         top_drop = first.top - min(r.top for r in seg)
         dipped = next((r for r in seg if first.top - r.top >= COIL_TOP_DROP), None)
-        if dipped is not None and (top_drop > bottom_drop or (dipped.bottom is not None
-                                                              and dipped.bottom > cold + COIL_BOTTOM_ABOVE_COLD)):
+        warm_bottom = (dipped is not None and dipped.bottom is not None
+                       and dipped.bottom > cold + COIL_BOTTOM_ABOVE_COLD
+                       and model.tank_average(params, first.top, first.bottom)
+                       - model.tank_average(params, dipped.top, dipped.bottom) < COIL_MAX_K)
+        if dipped is not None and (top_drop > bottom_drop or warm_bottom):
             return "coil"
     heat = draw_heat(params, rows, start, minutes)
     if heat >= FILL_MIN_K and heat / max(1, minutes) >= fill_rate:

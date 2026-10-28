@@ -143,7 +143,8 @@ every 3 minutes; real showers run at 0.6 times and up).
 
 Water drawn from the tank is replaced by cold water at the bottom, so the top stays hot while you shower. When the
 top falls while the bottom is still warm — a heat pump starting a reheat, or heat taken out through the coil — no
-water was drawn and it is not counted at all.
+water was drawn and it is not counted at all. That is only judged while little heat has left the tank, and never while
+the water meter shows water running: a long shower that uses up the hot layer cools the top too.
 
 A **bath** counts as a session too: hot water that leaves at about twice the pace of your showers (learned from
 them) shows as **FILLING** while it runs, and once it took the heat of six shower minutes or more it goes in the

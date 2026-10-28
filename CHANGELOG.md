@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.13.3 — A long shower is no longer lost
+
+**Recommended for everyone** — a long shower that used up the hot layer of the tank could vanish from the log: it was taken for heat leaving through the coil, and its heat showed as cooling in the *Since reheat* bar (#10).
+
+### Fixes
+- **A long shower is no longer taken for the coil** (#10). When the top of the tank cools while its bottom is still warm, the heat left without water: a heat pump starting a reheat, or heat taken out through the coil. But a long shower does the same once it has used up the hot layer: on a 200 L tank, 17 minutes into a 20-minute shower the top began to fall while the bottom was still above 30 °C on its way down, and the whole shower was dropped. Now that only counts as the coil while less than 4 K has left the tank (a coil dips the top long before that), and never while the water meter shows water running. The same goes for uses found in the history and uses hidden by a gap in the readings.
+
+A shower lost this way does not come back in the log.
+
+### After updating
+Update in HACS and restart Home Assistant. Nothing to set.
+
 ## v0.13.2 — Cold water no longer learned too warm
 
 **Recommended for everyone** — the cold water temperature the integration learned crept up to 25 °C within days. The shower time shown was too high because of it, the heat and cost of a shower too low, and washing up could count as a shower again (#10).

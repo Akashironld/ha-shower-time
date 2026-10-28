@@ -253,6 +253,40 @@ def test_end_of_a_long_shower_is_still_a_shower():
     assert s.kind == "shower"
 
 
+# a real 20-minute shower (#10, 5-minute readings): the hot layer runs out, the top starts to fall while the
+# bottom is still above cold water + 15 K on its way down
+LONG_SHOWER = [(0, 55.9, 54.1), (5, 55.8, 52.4), (10, 55.7, 47.4), (15, 55.5, 37.1), (20, 54.0, 23.6),
+               (25, 53.5, 21.8), (30, 53.1, 21.1)]
+
+
+def long_shower_steps():
+    """LONG_SHOWER read every minute, as a heat pump that reports often would show it."""
+    steps = []
+    for (t0, a0, b0), (t1, a1, b1) in zip(LONG_SHOWER, LONG_SHOWER[1:]):
+        for k in range(1, t1 - t0 + 1):
+            x = k / (t1 - t0)
+            steps.append((t0 + k, a0 + (a1 - a0) * x, b0 + (b1 - b0) * x))
+    return steps
+
+
+def test_a_long_shower_that_uses_up_the_hot_layer_is_no_coil():
+    s, at = run_use(long_shower_steps(), start=LONG_SHOWER[0][1:], cold=15.4)
+    assert at is not None and s.kind == "shower" and s.final(20, 40) == "shower"
+    p = model.new_params("weheat_200")
+    rows = [model.Row(minute=1000 + t, top=a, bottom=b, heating=False) for t, a, b in [(0, 55.9, 54.1)] + long_shower_steps()]
+    assert insights.draw_kind(p, rows, 1000, 20, cold=15.4) == "shower"
+    # the same shower hidden by a gap, with the readings back while the bottom is still warm
+    assert insights.gap_use(p, (55.9, 54.1), (54.9, 31.7), 15.4, 0.67)[0] == "shower"
+
+
+def test_water_running_is_never_a_coil():
+    p = model.new_params("weheat_200")
+    s = insights.UseSession(start=0.0, start_avg=model.tank_average(p, 43.5, 21.7), start_top=43.5, start_bottom=21.7)
+    for t, top, bottom in [(2, 41.0, 21.5), (4, 37.0, 20.5)]:
+        s.update(t, model.tank_average(p, top, bottom), False, top=top, bottom=bottom, cold=17.0, water_active=True)
+    assert s.kind != "coil"
+
+
 def test_confirm_threshold_is_learned_between_taps_and_showers():
     assert insights.learn_confirm_k([7, 6, 12], [0.3]) == insights.SHOWER_CONFIRM_K       # too few yet
     k = insights.learn_confirm_k([3.3, 6.5, 12.4, 6.5, 12.8, 3.2, 6.6, 5.5], [0.25, 0.76, 0.3, 0.24, 0.34, 0.3])
