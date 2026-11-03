@@ -138,8 +138,10 @@ use below that threshold (3+ minutes, 1.2+ K) still counts as a shower at the ti
 and when you have a bathroom signal or water meter, only when it saw the bathroom in use or a shower-like flow, so
 washing your hands at that hour stays a tap. Washing up with the tap on and off can take as much heat as a shower,
 but slowly: a use of 6 minutes or more that takes heat at less than 0.35 times a shower's pace stays a tap, unless
-the bathroom signal saw it (judged while the bottom of the tank is still warm and the tank sensors report at least
-every 3 minutes; real showers run at 0.6 times and up).
+the bathroom signal rose with it (judged while the bottom of the tank is still warm and the tank sensors report at
+least every 3 minutes; real showers run at 0.6 times and up). With a water meter that was reading during the use, a
+shower needs at least 3 minutes of steady, shower-like flow: washing up in bursts stays a tap, even with the bathroom
+still humid from a shower before. A metered shower lasts as long as the water ran.
 
 Water drawn from the tank is replaced by cold water at the bottom, so the top stays hot while you shower. When the
 top falls while the bottom is still warm — a heat pump starting a reheat, or heat taken out through the coil — no

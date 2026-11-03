@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.13.4 — The water meter tells washing up from a shower
+
+**Recommended for everyone with a water meter or a bathroom signal** — a water meter or humidity sensor that was not loaded yet when Home Assistant started was never used, and washing up after a shower could count as a second shower (#10).
+
+### Fixes
+- **A water meter or bathroom signal that loads late is still used** (#10). Which kind of signal it is follows from its unit, and that was looked at once, at startup. A sensor that was not loaded yet, or unavailable without its unit, then stayed unused for good: a water meter was ignored, and a humidity sensor was taken for a fan's power and never switched on. Now its kind is taken from the first real reading.
+- **Washing up is no shower when the water meter saw no shower's flow** (#10). A shower runs for minutes without a break; washing up comes in short bursts. When the water meter was reading during a use and never saw at least 3 minutes of steady, shower-like flow, the use counts as a tap, whatever heat left the tank. Its heat no longer teaches the integration what a shower takes.
+- **The humidity of an earlier shower no longer vouches for washing up** (#10). A bathroom signal still on from a shower before kept a slow use counting as a shower. Only a signal that rose with the use itself (or up to 10 minutes before) does that now.
+- **A metered shower lasts as long as the water ran.** The tank reports minutes late, so the use it sees runs on after the water stopped. With a water meter, a shower's minutes, heat and cost now follow from the minutes the water ran.
+
+### After updating
+Update in HACS and restart Home Assistant. Nothing to set. Uses logged before stay as they are.
+
 ## v0.13.3 — A long shower is no longer lost
 
 **Recommended for everyone** — a long shower that used up the hot layer of the tank could vanish from the log: it was taken for heat leaving through the coil, and its heat showed as cooling in the *Since reheat* bar (#10).

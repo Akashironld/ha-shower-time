@@ -515,6 +515,10 @@ WATER_SHOWER_FLOW = (4.0, 16.0)   # L/min a shower draws from the mains (hot and
 WATER_STEADY_MINUTES = 2.0        # that long without a break = a shower, not a sink being filled
 WATER_GAP_MINUTES = 2.0           # a meter total that has not moved for this long: the water is off
 FAST_FLOW_FACTOR = 1.6            # this many times the shower head's flow: a bath tap, not a shower
+WATER_SHOWER_RUN = 3.0            # a shower flows this long without a break; washing up comes in short bursts
+WATER_LEAD_MINUTES = 3.0          # the meter sees the water before the tank does
+BATH_LEAD_MINUTES = 10.0          # a bathroom signal that rose this long before a use belongs to it; one from
+                                  # earlier is the humidity (or fan) of a shower before
 
 
 class WaterSignal:
@@ -527,10 +531,13 @@ class WaterSignal:
         self.flow_since: float | None = None      # start of the current steady flow
         self.last_flow_at: float | None = None    # last moment a shower-like flow was seen
         self.flow = 0.0
+        self.heard_at: float | None = None        # last reading of any value: the meter is working
+        self.runs: list[list[float]] = []         # [start, end] of the shower-like flows of the last hours
 
     def feed(self, t: float, value) -> None:
         if value is None:
             return
+        self.heard_at = t
         v = float(value)
         if self.kind == "total":
             prev, self.last = self.last, (t, v)
@@ -553,9 +560,12 @@ class WaterSignal:
                 if self.flow_since is None:
                     self.flow_since = t
                 self.last_flow_at = t
+                self._run(t)
             else:
                 if lo <= was <= hi:
                     self.last_flow_at = t            # the water ran until this moment
+                    if self.flow_since is not None:
+                        self._run(t)
                 self.flow_since = None
             return
         # a meter total moves while water runs; a pause of WATER_GAP_MINUTES means the water was off
@@ -563,8 +573,28 @@ class WaterSignal:
             if self.flow_since is None or (self.last_flow_at is not None and t - self.last_flow_at > WATER_GAP_MINUTES):
                 self.flow_since = began if began is not None else t
             self.last_flow_at = t
+            self._run(t)
         else:
             self.flow_since = None                   # a trickle or a garden hose: not a shower
+
+    def _run(self, t: float) -> None:
+        """The shower-like flow that began at flow_since lasted until t."""
+        if self.runs and self.runs[-1][0] == self.flow_since:
+            self.runs[-1][1] = t
+        else:
+            self.runs.append([self.flow_since, t])
+        self.runs = [r for r in self.runs if r[1] >= t - 180]
+
+    def runs_between(self, t0: float, t1: float) -> list[tuple[float, float]]:
+        """The shower-like flows between t0 and t1, cut to that window (one still running lasts until t1)."""
+        out = []
+        for s, e in self.runs:
+            if self.kind == "rate" and s == self.flow_since and self.flowing(t1):
+                e = max(e, t1)                   # a flow sensor holds its value while the water keeps running
+            s, e = max(s, t0), min(e, t1)
+            if e > s:
+                out.append((s, e))
+        return out
 
     def flowing(self, t: float) -> bool:
         if self.kind == "rate":

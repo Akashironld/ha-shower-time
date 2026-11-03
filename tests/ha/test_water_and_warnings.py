@@ -208,3 +208,73 @@ async def setup_entry_named(hass: HomeAssistant, options: dict):
     assert await hass.config_entries.async_setup(e.entry_id)
     await hass.async_block_till_done()
     return e
+
+
+FLOW = "sensor.water_flow"
+FLOW_ATTRS = {"unit_of_measurement": "L/min", "device_class": "volume_flow_rate"}
+HUMIDITY_ATTRS = {"unit_of_measurement": "%", "device_class": "humidity"}
+
+
+async def flow_minute(hass: HomeAssistant, freezer, flow: float, bottom: float | None) -> None:
+    freezer.tick(timedelta(minutes=1))
+    hass.states.async_set(FLOW, str(flow), FLOW_ATTRS)
+    if bottom is not None:
+        tank(hass, 55.0, bottom)
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+
+
+async def test_signals_that_load_after_startup_are_still_followed(hass: HomeAssistant, deps) -> None:
+    """#10: at startup a water meter or humidity sensor may not be loaded yet, or unavailable without its unit.
+    Their kind comes from the first real state, not from a guess at setup (a humidity sensor taken for a fan)."""
+    hass.states.async_set(HUMIDITY, "unavailable", {})
+    entry = await setup_entry(hass, {"water_sensor": FLOW, "bathroom_sensor": HUMIDITY})
+    m = entry.runtime_data
+    assert m.water_signal is None and m.bath_signal is None
+    hass.states.async_set(FLOW, "0", FLOW_ATTRS)
+    hass.states.async_set(HUMIDITY, "60", HUMIDITY_ATTRS)
+    await hass.async_block_till_done()
+    assert m.water_signal.kind == "rate" and m.bath_signal.kind == "humidity"
+
+
+async def test_washing_up_in_bursts_after_a_shower_is_no_shower(hass: HomeAssistant, deps, freezer) -> None:
+    """#10: the dishes right after a shower. The bathroom is still humid from the shower, the tank loses a shower's
+    heat, but the water meter only saw short bursts: a tap, not a second shower."""
+    hass.states.async_set(FLOW, "0", FLOW_ATTRS)
+    hass.states.async_set(HUMIDITY, "60", HUMIDITY_ATTRS)
+    entry = await setup_entry(hass, {"water_sensor": FLOW, "bathroom_sensor": HUMIDITY})
+    freezer.tick(timedelta(minutes=30))
+    tank(hass, 55.0, 50.0)
+    await hass.async_block_till_done()
+    for humidity in ("66", "69"):                             # the shower before: humid since 12 minutes, still rising
+        freezer.tick(timedelta(minutes=4 if humidity == "69" else 0))
+        hass.states.async_set(HUMIDITY, humidity, HUMIDITY_ATTRS)
+        await hass.async_block_till_done()
+    freezer.tick(timedelta(minutes=8))
+    tank(hass, 55.0, 50.0)
+    await hass.async_block_till_done()
+    bottom = 50.0
+    for flow in (5.0, 0.0, 6.0, 0.0, 5.0, 0.0, 6.0, 0.0):    # the tap on and off
+        bottom -= 1.2
+        await flow_minute(hass, freezer, flow, bottom)
+    await wait(hass, freezer, 7)
+    assert state(hass, "sensor.hot_water_showers_today") == "0"
+    other = entry.runtime_data.ledger.other
+    assert other[-1]["kind"] == "tap" and other[-1]["rule"] == "water" and other[-1]["drawn"] >= 1.8
+
+
+async def test_a_metered_shower_lasts_as_long_as_the_water_ran(hass: HomeAssistant, deps, freezer) -> None:
+    """#10: the tank reports minutes late, so the use it sees runs on after the water stopped. With a water meter
+    the shower lasts as long as the water ran."""
+    hass.states.async_set(FLOW, "0", FLOW_ATTRS)
+    await setup_entry(hass, {"water_sensor": FLOW})
+    freezer.tick(timedelta(minutes=30))
+    tank(hass, 55.0, 50.0)
+    await hass.async_block_till_done()
+    bottom = 50.0
+    for i in range(9):                                        # 6 minutes of water, the tank falls for 9
+        bottom -= 2.0
+        await flow_minute(hass, freezer, 7.0 if i < 6 else 0.0, bottom)
+    await wait(hass, freezer, 7)
+    assert state(hass, "sensor.hot_water_showers_today") == "1"
+    assert state(hass, "sensor.hot_water_last_shower") == "6"

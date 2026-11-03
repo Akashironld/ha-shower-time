@@ -216,15 +216,8 @@ class ShowerTimeManager:
             # a reference in minutes only (before 0.5.1) depends on the model it was computed with: rebuild it
             self.full_ref = stored.get("full_ref") if self.full_ref_avg is not None else None
         watch = [e for e in (self.top, self.bottom, self.heating, self.bath, self.water) if e]
-        if self.water:
-            kind = self._water_kind()
-            if kind is not None:
-                self.water_signal = insights.WaterSignal(kind[0])
-                self._water_factor = kind[1]
         self._note_downtime()
-        if self.bath:
-            self.bath_signal = insights.BathSignal(self._bath_kind())
-            self.entry.async_create_background_task(self.hass, self._seed_bath(), f"{DOMAIN}_bath")
+        self._resolve_signals()
         self._unsubs.append(async_track_state_change_event(self.hass, watch, self._state_changed))
         self._unsubs.append(async_track_state_change_event(self.hass, self._device_temperatures(), self._temp_changed))
         self._unsubs.append(async_track_time_change(self.hass, self._nightly, hour=LEARN_HOUR, minute=LEARN_MINUTE, second=0))
@@ -319,6 +312,7 @@ class ShowerTimeManager:
         if self.heating:
             st = self.hass.states.get(self.heating)
             self.reheating = bool(st and str(st.state).lower() in self.heating_states)
+        self._resolve_signals()
         self._feed_bath()
         self._feed_water()
         self._detect_use()
@@ -430,25 +424,47 @@ class ShowerTimeManager:
         if start and end:
             minutes = (end - start).total_seconds() / 60
             kind = use.final(minutes, MAX_SHOWER_MINUTES) if use else "tap"
+            # a water meter that was reading during the use is the best witness: a shower flows for minutes without
+            # a break, washing up comes in bursts (#10). None: no meter, or it said nothing during the use
+            runs = None
+            if use is not None and self.water_signal is not None and self.water_signal.heard_at is not None:
+                t0 = use.start - insights.WATER_LEAD_MINUTES
+                if self.water_signal.heard_at >= t0:
+                    runs = self.water_signal.runs_between(t0, end.timestamp() / 60)
+            metered = runs is not None and max((e - s for s, e in runs), default=0.0) >= insights.WATER_SHOWER_RUN
+            no_shower_flow = runs is not None and not metered
             signal = None
             if use is not None and (self.bath_signal is not None or self.water_signal is not None):
                 # a humidity sensor can rise after the water stopped
                 signal = use.bath_seen or use.water_seen or self.signal_active()
-            by_habit = kind == "tap" and use is not None and insights.short_shower(
+            by_habit = kind == "tap" and use is not None and not no_shower_flow and insights.short_shower(
                 use.drawn, minutes, self._shower_time_of_day(start), signal)
             if by_habit:
                 kind = "shower"                    # short, but at the hour this household showers
             bathroom = use is not None and self.bath_signal is not None and (use.bath_seen or self.bath_active())
-            slow = (kind == "shower" and not bathroom and use is not None and self.estimate is not None
+            # only a bathroom signal that rose with this use says it was a shower: one from before is the humidity
+            # (or fan) of an earlier shower, still on while the dishes are done
+            fresh = (bathroom and self.bath_signal.rose_at is not None
+                     and self.bath_signal.rose_at >= use.start - insights.BATH_LEAD_MINUTES)
+            slow = (kind == "shower" and not fresh and not metered and use is not None and self.estimate is not None
                     and insights.too_slow_for_a_shower(use.drawn, minutes, self.estimate.per_minute, use.start_bottom,
                                                        self.estimate.cold, use.readings))
             if slow:
                 kind = "tap"                       # heat enough, but at a fraction of a shower's pace: washing up
+            dry = kind == "shower" and no_shower_flow
+            if dry:
+                kind = "tap"                       # the meter was reading and never saw a shower's flow
+            elif kind == "shower" and metered:
+                ran = sum(max(0.0, e - max(s, use.start)) for s, e in runs)
+                # the tank reports late: the minutes the water really ran (a meter total misses the first minute
+                # after a quiet spell, so only a clear difference counts)
+                if ran + insights.WATER_GAP_MINUTES < minutes:
+                    minutes, end = ran, start + timedelta(minutes=ran)
             # why it counts as what it is (for the diagnostics): the heat that left, the signals that saw it
             why = {} if use is None else {"drawn": round(use.drawn, 2), "seen": [
-                s for s, on in (("bathroom", bathroom), ("water_meter", use.water_seen)) if on]}
-            if by_habit or slow:
-                why["rule"] = "slow" if slow else "habit"
+                s for s, on in (("bathroom", bathroom), ("water_meter", use.water_seen or metered)) if on]}
+            if by_habit or slow or dry:
+                why["rule"] = "slow" if slow else "water" if dry else "habit"
             if kind == "shower":
                 entry = self.ledger.shower_ended(self, start, end, self.estimate, min_minutes=2.0, extra=why)
                 if entry is not None:
@@ -463,7 +479,7 @@ class ShowerTimeManager:
             elif kind == "coil":
                 self.coil_events += 1
             elif use is not None and use.drawn >= 0.15:   # below that nothing measurable left the tank
-                if kind == "tap" and not slow:             # a slow use says nothing about a tap's heat
+                if kind == "tap" and not slow and not dry: # a slow or dry use says nothing about a tap's heat
                     self._remember_use("tap", use.drawn)
                 entry = self.ledger.other_ended(self, kind, start, minutes, use.drawn * self.volume * model.CP, **why)
                 self._fire("hot_water_used", {**entry, "currency": self.ledger.currency or None})
@@ -530,13 +546,30 @@ class ShowerTimeManager:
             cb()
 
     # ------------------------------------------------------------------ what kind of hot water use
-    def _bath_kind(self) -> str:
+    @callback
+    def _resolve_signals(self) -> None:
+        """Follow the water meter and the bathroom signal once their kind is known. It follows from the unit of a
+        real state: at startup a sensor may not be loaded yet, or unavailable without its unit (#10)."""
+        if self.water and self.water_signal is None:
+            kind = self._water_kind()
+            if kind is not None:
+                self.water_signal = insights.WaterSignal(kind[0])
+                self._water_factor = kind[1]
+        if self.bath and self.bath_signal is None:
+            kind = self._bath_kind()
+            if kind is not None:
+                self.bath_signal = insights.BathSignal(kind)
+                self.entry.async_create_background_task(self.hass, self._seed_bath(), f"{DOMAIN}_bath")
+
+    def _bath_kind(self) -> str | None:
         domain = self.bath.split(".")[0]
         if domain != "sensor":
             return "on_off"
         st = self.hass.states.get(self.bath)
-        dc = st.attributes.get("device_class") if st else None
-        unit = str(st.attributes.get("unit_of_measurement") or "") if st else ""
+        if st is None or st.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
+            return None
+        dc = st.attributes.get("device_class")
+        unit = str(st.attributes.get("unit_of_measurement") or "")
         return "humidity" if dc == "humidity" or unit == "%" else "power"
 
     def _bath_value(self, st):
@@ -587,7 +620,9 @@ class ShowerTimeManager:
 
     def _water_kind(self) -> tuple[str, float] | None:
         st = self.hass.states.get(self.water)
-        unit = str((st.attributes.get("unit_of_measurement") if st else "") or "").replace(" ", "").lower()
+        if st is None or st.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
+            return None
+        unit = str(st.attributes.get("unit_of_measurement") or "").replace(" ", "").lower()
         rates = {"l/min": 1.0, "l/h": 1 / 60, "m³/h": 1000 / 60, "m3/h": 1000 / 60, "gal/min": 3.785}
         totals = {"l": 1.0, "m³": 1000.0, "m3": 1000.0, "gal": 3.785}
         if unit in rates:
