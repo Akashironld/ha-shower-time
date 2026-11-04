@@ -314,6 +314,18 @@ def test_cold_water_learned_too_warm_is_repaired():
     assert model.ensure_params(q)["cold"]["10"] == 18.0
 
 
+def test_shower_head_flow_is_learned_from_the_shower_flow_only():
+    """#10: the tank keeps falling after a shower and a tap used right after it falls in the same draw. Only the
+    longest unbroken shower-like flow is the shower head: not the bursts and trickles after it."""
+    rate = [(100, 6.6), (108, 0.0), (112, 2.8), (113, 0.0), (115, 4.2), (116, 0.0), (118, 1.5), (120, 0.0)]
+    draw = model.Draw(start=99, minutes=24, top_start=55.0, bottom_start=50.0, bottom_low=30.0)
+    assert [round(x, 1) for x in model.water_flow_samples(("rate", rate), [draw])] == [6.6]
+    bursts = [(100, 4.8), (101, 1.5), (102, 6.4), (103, 1.2), (104, 4.9), (105, 0.0)]     # washing up
+    assert model.water_flow_samples(("rate", bursts), [model.Draw(99, 10, 55.0, 50.0, 40.0)]) == []
+    total = [(99, 1000.0)] + [(100 + i, 1000.0 + 7.0 * (i + 1)) for i in range(8)] + [(112, 1060.0), (113, 1063.0)]
+    assert [round(x, 1) for x in model.water_flow_samples(("total", total), [draw])] == [7.0]
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

@@ -87,7 +87,7 @@ class ShowerActiveSensor(ShowerTimeEntity, BinarySensorEntity):
 
     @property
     def is_on(self):
-        return self.manager.use_kind() == "shower"
+        return self.manager.use_kind() == "shower" and self.manager.shower_stopped_at() is None
 
 
 class EnoughTodaySensor(ShowerTimeEntity, BinarySensorEntity):

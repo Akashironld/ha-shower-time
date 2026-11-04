@@ -186,7 +186,8 @@ class ShowerLedger:
         """The shower going on right now (once recognised as one): minutes so far and what that hot water cost."""
         if not m.showering or self.session_start is None or m.estimate is None or m.use_kind() != "shower":
             return None
-        minutes = max(0.0, (now - self.session_start).total_seconds() / 60)
+        stopped = m.shower_stopped_at()               # a water meter saw the shower stop: the minutes stop too
+        minutes = max(0.0, (min(now, stopped or now) - self.session_start).total_seconds() / 60)
         heat = model.shower_heat_kwh(m.estimate.per_minute, minutes, m.volume)
         price = self.tank_price
         if price is None:

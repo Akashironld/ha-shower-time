@@ -511,11 +511,14 @@ class BathSignal:
         return self.active_at is not None and t - self.active_at <= BATH_SIGNAL_MINUTES
 
 
-WATER_SHOWER_FLOW = (4.0, 16.0)   # L/min a shower draws from the mains (hot and cold together)
+WATER_SHOWER_FLOW = model.SHOWER_FLOW
 WATER_STEADY_MINUTES = 2.0        # that long without a break = a shower, not a sink being filled
 WATER_GAP_MINUTES = 2.0           # a meter total that has not moved for this long: the water is off
 FAST_FLOW_FACTOR = 1.6            # this many times the shower head's flow: a bath tap, not a shower
-WATER_SHOWER_RUN = 3.0            # a shower flows this long without a break; washing up comes in short bursts
+WATER_SHOWER_RUN = model.SHOWER_FLOW_MINUTES
+WATER_TRICKLE = 0.5               # L/min below this a flow sensor shows no water running
+WATER_TAIL_LITRES = 1.0           # this much water after a shower's flow stopped: a tap used after it ...
+WATER_TAIL_GAP_MINUTES = 1.0      # ... counted from this long after it stopped (a tap closing slowly is the shower)
 WATER_LEAD_MINUTES = 3.0          # the meter sees the water before the tank does
 BATH_LEAD_MINUTES = 10.0          # a bathroom signal that rose this long before a use belongs to it; one from
                                   # earlier is the humidity (or fan) of a shower before
@@ -533,12 +536,19 @@ class WaterSignal:
         self.flow = 0.0
         self.heard_at: float | None = None        # last reading of any value: the meter is working
         self.runs: list[list[float]] = []         # [start, end] of the shower-like flows of the last hours
+        # (time, litres, flow after it): the water that ran, any flow; litres count on from any start
+        self.used: list[tuple[float, float, float]] = []
 
     def feed(self, t: float, value) -> None:
         if value is None:
             return
         self.heard_at = t
         v = float(value)
+        if self.kind == "rate":
+            litres = self.used[-1][1] + self.used[-1][2] * min(t - self.used[-1][0], 60.0) if self.used else 0.0
+            self._use(t, litres, max(0.0, v))
+        else:
+            self._use(t, v, 0.0)
         if self.kind == "total":
             prev, self.last = self.last, (t, v)
             if prev is None or t <= prev[0] or v < prev[1]:
@@ -584,6 +594,38 @@ class WaterSignal:
         else:
             self.runs.append([self.flow_since, t])
         self.runs = [r for r in self.runs if r[1] >= t - 180]
+
+    def _use(self, t: float, litres: float, flow: float) -> None:
+        self.used.append((t, litres, flow))
+        older = [p for p in self.used if p[0] < t - 180]
+        self.used = older[-1:] + [p for p in self.used if p[0] >= t - 180]
+
+    def _litres_at(self, t: float) -> float:
+        before = [p for p in self.used if p[0] <= t]
+        if not before:
+            return self.used[0][1] if self.used else 0.0
+        tp, lp, fp = before[-1]
+        if self.kind == "rate":
+            return lp + fp * min(t - tp, 60.0)       # a flow sensor's value holds until the next one
+        after = [p for p in self.used if p[0] > t]
+        if after and after[0][0] > tp:
+            return lp + (after[0][1] - lp) * (t - tp) / (after[0][0] - tp)
+        return lp
+
+    def litres_between(self, t0: float, t1: float) -> float:
+        """Litres that ran between t0 and t1, any flow (a tap too)."""
+        return max(0.0, self._litres_at(t1) - self._litres_at(t0)) if t1 > t0 else 0.0
+
+    def water_times(self, t0: float, t1: float) -> tuple[float, float] | None:
+        """First and last moment water ran between t0 and t1, any flow."""
+        found = []
+        for (ta, la, fa), nxt in zip(self.used, self.used[1:] + [None]):
+            tb = nxt[0] if nxt else t1
+            running = fa > WATER_TRICKLE if self.kind == "rate" else nxt is not None and nxt[1] > la
+            s, e = max(ta, t0), min(tb, t1)
+            if running and e > s:
+                found.append((s, e))
+        return (found[0][0], found[-1][1]) if found else None
 
     def runs_between(self, t0: float, t1: float) -> list[tuple[float, float]]:
         """The shower-like flows between t0 and t1, cut to that window (one still running lasts until t1)."""

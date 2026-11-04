@@ -141,7 +141,9 @@ but slowly: a use of 6 minutes or more that takes heat at less than 0.35 times a
 the bathroom signal rose with it (judged while the bottom of the tank is still warm and the tank sensors report at
 least every 3 minutes; real showers run at 0.6 times and up). With a water meter that was reading during the use, a
 shower needs at least 3 minutes of steady, shower-like flow: washing up in bursts stays a tap, even with the bathroom
-still humid from a shower before. A metered shower lasts as long as the water ran.
+still humid from a shower before. A metered shower lasts as long as the water ran: from its first to its last steady
+flow. Water used after that (the sink, while the tank still falls) is logged as a separate tap with its share of the
+heat, and the card switches from *Showering* to *Hot water* once the meter saw the shower stop.
 
 Water drawn from the tank is replaced by cold water at the bottom, so the top stays hot while you shower. When the
 top falls while the bottom is still warm — a heat pump starting a reheat, or heat taken out through the coil — no

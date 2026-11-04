@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.13.5 — A tap after a shower is a tap
+
+**Recommended for everyone with a water meter** — a tap used right after a shower counted as part of the shower, the card kept saying *Showering* after the water had stopped, and the shower-head flow was learned too low (#10). Without a water meter nothing changes.
+
+### Fixes
+- **A tap used right after a shower is logged as a tap** (#10). The tank reports minutes late and keeps falling after the water stopped, so a sink used right after a shower fell into the same use. With a water meter, the shower now runs from its first to its last steady flow of 3 minutes or more; water that ran after that is logged as a separate tap, with its share of the heat by the litres. Short bursts after the shower no longer add to its minutes either.
+- **The card stops saying *Showering* when the water meter sees the shower stop** (#10). Its minutes stop with it; while the tank still falls it shows *Hot water*. The *Showering* sensor turns off, *Hot water in use* stays on until the use ends.
+- **The shower-head flow is learned from the shower's flow only** (#10). It was the median of every flow the meter saw while the tank fell, so the trickles and bursts of a tap after the shower pulled it down (5.6 L/min learned against 6.6 measured). Now only the longest unbroken shower-like flow of 3 minutes or more in a shower counts.
+
+### After updating
+Update in HACS and restart Home Assistant. Nothing to set. The shower-head flow moves to the right value over the next nights, as it is learned again.
+
 ## v0.13.4 — The water meter tells washing up from a shower
 
 **Recommended for everyone with a water meter or a bathroom signal** — a water meter or humidity sensor that was not loaded yet when Home Assistant started was never used, and washing up after a shower could count as a second shower (#10).

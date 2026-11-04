@@ -40,6 +40,8 @@ COLD_GENERIC = {"01": 8.0, "02": 8.0, "03": 9.5, "04": 11.5, "05": 14.0, "06": 1
 COLD_BELOW_BOTTOM = 1.0    # mains water is taken this far below the coldest bottom reading of a use
 COLD_MAX_LOWER = 4.0       # the bottom lowers the profile's cold water by this much at most (a sensor reading low)
 COLD_MIN_SAMPLES = 2       # days below the line before the line moves: one odd reading does not
+SHOWER_FLOW = (4.0, 16.0)  # L/min a shower draws from the mains (hot and cold together)
+SHOWER_FLOW_MINUTES = 3.0  # a shower's flow runs this long without a break; taps and washing up come in bursts
 
 PROFILES: dict[str, dict] = {
     # Sensible starting point for any stratified tank with a top and bottom sensor.
@@ -515,18 +517,31 @@ def water_flow_samples(water: tuple[str, list[tuple[int, float]]], draws: list[D
             v = x
         return v
 
+    def flows(a: int, b: int) -> list[tuple[int, int, float]]:
+        """(from, until, L/min) between a and b: a flow sensor's value holds until the next, a total's rate is
+        the change between two readings."""
+        if kind == "rate":
+            pts = [(a, value_at(a))] + [(m, x) for m, x in series if a < m < b]
+            return [(m, n, x) for (m, x), (n, _) in zip(pts, pts[1:] + [(b, None)]) if x is not None and n > m]
+        pts = [(a, value_at(a))] + [(m, x) for m, x in series if a < m < b] + [(b, value_at(b))]
+        pts = [(m, x) for m, x in pts if x is not None]
+        return [(m, n, (y - x) / (n - m)) for (m, x), (n, y) in zip(pts, pts[1:]) if n > m and y >= x]
+
+    lo, hi = SHOWER_FLOW
     for d in draws:
         if d.minutes < 4:
             continue
-        a, b = d.start + 1, d.start + d.minutes          # skip the first minute: the tank reacts a bit late
-        if kind == "rate":
-            vals = [x for m, x in series if a <= m <= b and x > 0.5]
-            if len(vals) >= 2:
-                out.append(statistics.median(vals))
-        else:
-            v0, v1 = value_at(a), value_at(b)
-            if v0 is not None and v1 is not None and v1 > v0:
-                out.append((v1 - v0) / (b - a))
+        # the tank keeps falling after the water stopped, and a tap used right after counts in the same draw: only
+        # the longest unbroken shower-like flow in it is the shower head (#10)
+        best: list[tuple[int, int, float]] = []
+        run: list[tuple[int, int, float]] = []
+        for seg in flows(d.start + 1, d.start + d.minutes):     # skip the first minute: the tank reacts late
+            run = run + [seg] if lo <= seg[2] <= hi and (not run or run[-1][1] == seg[0]) else \
+                ([seg] if lo <= seg[2] <= hi else [])
+            if run and run[-1][1] - run[0][0] > (best[-1][1] - best[0][0] if best else 0):
+                best = run
+        if best and best[-1][1] - best[0][0] >= SHOWER_FLOW_MINUTES:
+            out.append(sum((n - m) * x for m, n, x in best) / (best[-1][1] - best[0][0]))
     return [x for x in out if 2.0 <= x <= 25.0]
 
 

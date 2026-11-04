@@ -94,7 +94,8 @@ class MinutesSensor(ShowerTimeEntity, SensorEntity):
             "live_countdown": m.live_offset > 0,
             "low_threshold": m.low_minutes,
             "current_shower": m.ledger.running(m, dt_util.utcnow()),
-            "hot_water_use": {"kind": m.use_kind(), "bathroom_signal": m.bath_active(),
+            # after the shower stopped on the water meter the tank may still fall, or a tap run: hot water, no shower
+            "hot_water_use": {"kind": "unknown" if m.shower_stopped_at() else m.use_kind(), "bathroom_signal": m.bath_active(),
                               "water_meter": m.water_active()} if m.showering else None,
             "problems": m.problems(),
             "other_today": m.ledger.other_today(),

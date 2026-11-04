@@ -278,3 +278,40 @@ async def test_a_metered_shower_lasts_as_long_as_the_water_ran(hass: HomeAssista
     await wait(hass, freezer, 7)
     assert state(hass, "sensor.hot_water_showers_today") == "1"
     assert state(hass, "sensor.hot_water_last_shower") == "6"
+
+
+async def test_a_tap_after_a_metered_shower_is_a_tap_and_the_shower_stops_counting(hass: HomeAssistant, deps,
+                                                                                   freezer) -> None:
+    """#10: 8 minutes of shower, then the sink: the tank falls for minutes after the water stopped, so it is all one
+    use. The live minutes stop when the meter saw the shower stop; the sink is logged as a tap with its share of
+    the heat, by the litres."""
+    hass.states.async_set(FLOW, "0", FLOW_ATTRS)
+    entry = await setup_entry(hass, {"water_sensor": FLOW})
+    m = entry.runtime_data
+    freezer.tick(timedelta(minutes=30))
+    tank(hass, 55.0, 50.0)
+    await hass.async_block_till_done()
+    bottom = 50.0
+    for _ in range(8):                                        # m1..m8: the shower, 6.6 L/min
+        bottom -= 2.0
+        await flow_minute(hass, freezer, 6.6, bottom)
+    for _ in range(3):                                        # m9..m11: the water is off, the tank still falls
+        bottom -= 0.5
+        await flow_minute(hass, freezer, 0.0, bottom)
+    assert state(hass, "binary_sensor.hot_water_hot_water_in_use") == "on"   # the tank still falls
+    assert state(hass, "binary_sensor.hot_water_showering") == "off"         # but nobody showers any more
+    assert m.shower_stopped_at() is not None and m.use_kind() == "shower"
+    live = m.ledger.running(m, dt_util.utcnow())["minutes"]
+    assert live <= 9.5
+    attrs = hass.states.get("sensor.hot_water_shower_time").attributes
+    assert attrs["hot_water_use"]["kind"] == "unknown"                       # "hot water", no longer "showering"
+    for flow in (4.2, 0.0, 2.8, 0.0):                         # m12..m15: the sink
+        bottom -= 0.5
+        await flow_minute(hass, freezer, flow, bottom)
+    assert m.ledger.running(m, dt_util.utcnow())["minutes"] == live          # a short burst does not restart it
+    await wait(hass, freezer, 7)
+    assert state(hass, "sensor.hot_water_showers_today") == "1"
+    assert state(hass, "sensor.hot_water_last_shower") == "8"
+    shower, tap = m.ledger.log[-1], m.ledger.other[-1]
+    assert tap["kind"] == "tap" and tap["rule"] == "tail" and tap["minutes"] == 3.0
+    assert abs(tap["drawn"] / (shower["drawn"] + tap["drawn"]) - 7.0 / 59.8) < 0.01   # 7 of 59.8 litres
