@@ -35,7 +35,13 @@
           "electricity_sensor": "Electricity used for hot water (energy sensor)",
           "cop": "COP for hot water",
           "price_sensor": "Electricity price sensor",
-          "bathroom_sensor": "Bathroom signal (optional)"
+          "bathroom_sensor": "Bathroom signal (optional)",
+          "tank_type": "Tank type",
+          "learn_sensor_heights": "Learn where the sensors sit",
+          "height_outlet": "Height of the hot water outlet",
+          "height_top_sensor": "Height of the top sensor",
+          "height_bottom_sensor": "Height of the bottom sensor",
+          "height_cold_inlet": "Height of the cold water inlet"
         },
         "data_description": {
           "profile": "Where the model starts before it has learned from your own showers.",
@@ -48,14 +54,22 @@
           "electricity_sensor": "Optional. Together with the heat sensor this lets the integration learn the COP for hot water.",
           "cop": "Leave empty to learn it from the heat and electricity meters (2.5 without them). Fill in to always use this COP: the heat pump's own COP for hot water, as its app shows it (electric boiler: 1.0).",
           "price_sensor": "Optional, choose your own (e.g. from your energy supplier or evcc). With dynamic tariffs the price at the moment the tank is reheated is used, not when you shower.",
-          "bathroom_sensor": "Recognises a shower within a minute instead of after a few: a bathroom humidity sensor (rising), the power of the bathroom fan (running harder than usual), or a fan, light or motion sensor that switches on. Without it showers are told apart from washing up by how much heat they take, which takes a few minutes."
+          "bathroom_sensor": "Recognises a shower within a minute instead of after a few: a bathroom humidity sensor (rising), the power of the bathroom fan (running harder than usual), or a fan, light or motion sensor that switches on. Without it showers are told apart from washing up by how much heat they take, which takes a few minutes.",
+          "tank_type": "With a known tank the model knows how much hot water sits above the top sensor. Not listed? Pick 'Other tank' and fill in the heights below, or leave them empty for the simple model.",
+          "learn_sensor_heights": "Refines the sensor heights from showers that went deep into the tank. Recommended, also for a known tank: a sensor pocket often measures a bit higher or lower than the drawing says.",
+          "height_outlet": "Optional, in mm from the floor (see the tank's spec sheet). Fill in the outlet, top and bottom sensor together; they replace the tank type's heights.",
+          "height_top_sensor": "Optional, in mm from the floor.",
+          "height_bottom_sensor": "Optional, in mm from the floor.",
+          "height_cold_inlet": "Optional, in mm from the floor. Empty = 230 mm."
         }
       }
     },
     "error": {
       "same_sensor": "Top and bottom must be different sensors.",
       "head_flow_missing": "Fill in the flow.",
-      "water_missing": "Pick the water meter."
+      "water_missing": "Pick the water meter.",
+      "heights_incomplete": "Fill in the outlet, the top sensor and the bottom sensor together (or leave all three empty).",
+      "heights_order": "The outlet must be higher than the top sensor, and the top sensor higher than the bottom sensor."
     },
     "abort": {
       "already_configured": "This tank is already set up."
@@ -84,7 +98,13 @@
           "legionella_temperature": "Legionella temperature",
           "legionella_days": "Legionella: warn after",
           "bathroom_sensor": "Bathroom signal (optional)",
-          "bathtub": "There is a bath on this tank"
+          "bathtub": "There is a bath on this tank",
+          "tank_type": "Tank type",
+          "learn_sensor_heights": "Learn where the sensors sit",
+          "height_outlet": "Height of the hot water outlet",
+          "height_top_sensor": "Height of the top sensor",
+          "height_bottom_sensor": "Height of the bottom sensor",
+          "height_cold_inlet": "Height of the cold water inlet"
         },
         "data_description": {
           "flow_source": "Optional. With the flow the integration works out the temperature you shower at and the litres. A water meter measures it while you shower. Don't know it? Choose 'Fill in myself' and measure it in a minute with a bucket (see below), or pick the type of shower head.",
@@ -97,14 +117,22 @@
           "legionella_days": "Days without such a heat-up before 'Legionella heat-up overdue' turns on. Default 8: a weekly program plus a day.",
           "bathroom_sensor": "Recognises a shower within a minute instead of after a few: a bathroom humidity sensor (rising), the power of the bathroom fan (running harder than usual), or a fan, light or motion sensor that switches on. Without it showers are told apart from washing up by how much heat they take, which takes a few minutes.",
           "bathtub": "Off when you only have showers and taps: filling a bucket or a sink fast is then never counted as a bath.",
-          "water_sensor": "A meter total (litres, m³) or a flow sensor (L/min). Recognises a shower live by a steady flow of water and makes its length exact; with 'Water meter' above it also measures the shower-head flow."
+          "water_sensor": "A meter total (litres, m³) or a flow sensor (L/min). Recognises a shower live by a steady flow of water and makes its length exact; with 'Water meter' above it also measures the shower-head flow.",
+          "tank_type": "With a known tank the model knows how much hot water sits above the top sensor. Not listed? Pick 'Other tank' and fill in the heights below, or leave them empty for the simple model.",
+          "learn_sensor_heights": "Refines the sensor heights from showers that went deep into the tank. Recommended, also for a known tank: a sensor pocket often measures a bit higher or lower than the drawing says.",
+          "height_outlet": "Optional, in mm from the floor (see the tank's spec sheet). Fill in the outlet, top and bottom sensor together; they replace the tank type's heights.",
+          "height_top_sensor": "Optional, in mm from the floor.",
+          "height_bottom_sensor": "Optional, in mm from the floor.",
+          "height_cold_inlet": "Optional, in mm from the floor. Empty = 230 mm."
         }
       }
     },
     "error": {
       "same_sensor": "Top and bottom must be different sensors.",
       "head_flow_missing": "Fill in the flow.",
-      "water_missing": "Pick the water meter."
+      "water_missing": "Pick the water meter.",
+      "heights_incomplete": "Fill in the outlet, the top sensor and the bottom sensor together (or leave all three empty).",
+      "heights_order": "The outlet must be higher than the top sensor, and the top sensor higher than the bottom sensor."
     }
   },
   "selector": {
@@ -128,6 +156,13 @@
         "normal": "Normal (≈ 8 L/min)",
         "rain": "Rain shower (≈ 12 L/min)",
         "manual": "Fill in myself"
+      }
+    },
+    "tank_type": {
+      "options": {
+        "other": "Other tank",
+        "weheat_wbl200": "Weheat WBL-200 (200 L)",
+        "weheat_wbl300": "Weheat WBL-300 (300 L)"
       }
     }
   },

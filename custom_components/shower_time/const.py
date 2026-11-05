@@ -18,6 +18,16 @@ DEFAULT_LOW = 10
 DEFAULT_HEATING_STATES = "dhw, legionella_prevention, heating_dhw, on, heat"
 PROFILES = ["generic", "weheat_200"]
 
+# Where the tank sensors sit (layer model): a known tank type, heights typed in, and/or learned from showers
+CONF_TANK_TYPE = "tank_type"
+TANK_TYPE_OPTIONS = ["other", "weheat_wbl200", "weheat_wbl300"]
+CONF_LEARN_HEIGHTS = "learn_sensor_heights"
+DEFAULT_LEARN_HEIGHTS = True
+CONF_H_OUTLET = "height_outlet"
+CONF_H_TOP = "height_top_sensor"
+CONF_H_BOTTOM = "height_bottom_sensor"
+CONF_H_INLET = "height_cold_inlet"
+
 LEARN_HOUR, LEARN_MINUTE = 3, 45
 HISTORY_DAYS = 10
 STORAGE_VERSION = 1

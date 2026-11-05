@@ -331,3 +331,98 @@ if __name__ == "__main__":
         if name.startswith("test_"):
             fn()
             print("ok ", name)
+
+
+# --------------------------------------------------------------------------- layer model / sensor heights (#14)
+
+def test_tank_types_give_the_spec_sheet_heights():
+    g = model.new_geometry("weheat_wbl300", None, True)
+    assert g["source"] == "weheat_wbl300" and g["learn"]
+    assert 0.75 < g["top"] < 0.82 and 0.28 < g["bottom"] < 0.34      # 1220 / 560 mm of 120..1522 mm
+    g2 = model.new_geometry("weheat_wbl200", None, False)
+    assert 0.55 < g2["top"] < 0.62 and not g2["learn"]
+
+
+def test_typed_heights_replace_the_tank_type_and_unknown_tank_waits():
+    g = model.new_geometry("weheat_wbl200", {"outlet": 1500, "top": 1300, "bottom": 400, "inlet": None}, True)
+    assert g["source"] == "manual" and g["top"] > 0.8
+    assert model.new_geometry("other", None, True) is None           # unknown tank: the simple model, as before
+    assert model.new_geometry("other", {"outlet": 1000, "top": 400, "bottom": 600}, True) is None   # upside down
+
+
+def test_layer_litres_follow_the_hot_water():
+    g = model.new_geometry("weheat_wbl300", None, True)
+    kw = dict(cold=15.5, shower_temp=38.0, volume=300)
+    full = model.layer_litres(g, 45.5, 45.4, hot=45.5, **kw)
+    mid = model.layer_litres(g, 45.4, 22.0, hot=45.5, **kw)
+    low = model.layer_litres(g, 30.0, 16.0, hot=45.5, **kw)
+    assert 300 < full < 380                                          # 300 L at 45.5 makes ~400 L at 38 at most
+    assert full > mid > low >= 0
+    assert model.layer_litres(g, 36.0, 16.0, hot=36.0, **kw) == 0.0
+
+
+def test_estimate_uses_the_layer_model_and_keeps_degrees_consistent():
+    p = model.new_params("generic")
+    plain = model.estimate(p, 45.6, 45.4, volume=300, shower_temp=38.0, month=11, head_flow=5.0)
+    p["geo"] = model.new_geometry("weheat_wbl300", None, True)
+    e = model.estimate(p, 45.6, 45.4, volume=300, shower_temp=38.0, month=11, head_flow=5.0)
+    assert e.liters > plain.liters * 1.4                             # Pat28: 164 L was far too little
+    assert abs(e.average - e.minutes * e.per_minute - e.empty_at) < 1e-6
+    assert model.estimate(p, 45.6, None, volume=300, shower_temp=38.0, month=11).minutes == \
+        model.estimate(model.new_params("generic"), 45.6, None, volume=300, shower_temp=38.0, month=11).minutes
+
+
+def test_layer_litres_formula_matches_a_sum_over_the_column():
+    g = model.new_geometry("weheat_wbl200", None, True)
+    for top, bottom, hot in ((52.0, 51.5, 52.0), (51.0, 30.0, 52.0), (44.0, 18.0, 52.0)):
+        z0 = model.fit_thermocline(top, bottom, hot, 15.0, g["top"], g["bottom"])
+        n, zi = 4000, g["inlet"]
+        temps = [model.layer_temp(zi + (1 - zi) * (i + 0.5) / n, hot, 15.0, z0) for i in range(n)]
+        summed = sum((t - 15.0) / 23.0 for t in temps if t > 38.0) * 200 * (1 - zi) / n
+        exact = model.layer_litres(g, top, bottom, hot=hot, cold=15.0, shower_temp=38.0, volume=200)
+        assert abs(exact - summed) < 1.0
+
+
+def test_a_timer_reheat_with_a_hot_top_does_not_raise_phi():
+    """#14: a reheat at 13:00 while the top is still 42.7 is not the tank running empty."""
+    p = model.new_params("generic")
+    p["phi"] = {"v": 0.5, "n": 5}
+    rows, m = [], 0
+    for day in range(3):
+        for i in range(1440):
+            heating = 780 <= i < 840
+            top = 42.7 if not heating else 42.7 + (i - 780) * 0.05
+            bottom = 22.7 if not heating else 22.7 + (i - 780) * 0.4
+            if i >= 840:
+                top, bottom = 45.6, 45.4
+            rows.append(model.Row(m, top, bottom, heating))
+            m += 1
+    res, _ = model.learn(p, rows, volume=300, shower_temp=38.0, since=0, energy_by_hour=None,
+                         previous_cycle=None, month_of=lambda t: 11)
+    assert res.params["phi"]["v"] <= 0.5
+
+
+def _shower_rows(g, true_top, true_bottom, hot=50.0, cold=15.0, flow=6.0, volume=200):
+    """Readings before and after showers of different depths, made with the layer model at the true heights."""
+    draws = []
+    for start_z0, minutes in ((0.35, 10), (0.45, 12), (0.50, 10), (0.55, 14), (0.40, 15), (0.60, 9)):
+        z1 = start_z0 + flow * minutes * (38 - cold) / (hot - cold) / volume
+        r = lambda z0: [round(model.layer_temp(z, hot, cold, z0), 1) for z in (true_top, true_bottom)]
+        draws.append(r(start_z0) + r(z1) + [hot, cold, minutes, flow, 38.0])
+    return draws
+
+
+def test_sensor_heights_are_learned_from_deep_showers():
+    g = model.new_geometry("weheat_wbl200", None, True)               # spec says top at ~0.58
+    g["draws"] = _shower_rows(g, true_top=0.74, true_bottom=g["bottom"])
+    learned = model.learn_geometry(g, 200)
+    assert learned["n"] >= model.GEO_MIN_DRAWS
+    assert abs(learned["top"] - 0.74) < 0.05
+    fixed = model.learn_geometry({**g, "learn": False}, 200)
+    assert fixed["top"] == g["top"]                                   # learning off: heights stay
+
+
+def test_too_few_deep_showers_keep_the_heights():
+    g = model.new_geometry("weheat_wbl200", None, True)
+    g["draws"] = _shower_rows(g, true_top=0.74, true_bottom=g["bottom"])[:2]
+    assert model.learn_geometry(g, 200)["top"] == g["top"]

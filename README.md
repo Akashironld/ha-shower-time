@@ -54,6 +54,20 @@ It was developed and validated on 13 months of minute data of a Weheat heat pump
 tank (449 reheat cycles, 471 showers). That data is available as the *Weheat 200 L* starting profile;
 other tanks start from a generic profile and learn their own behaviour.
 
+### Where the sensors sit
+
+Many tanks do not have their sensors at the very top and bottom. The Weheat WBL-200, for example, has its top sensor
+about halfway up, with some 80 L of hot water above it that the sensors cannot see. When you choose your **tank type**
+(Weheat WBL-200 or WBL-300) or fill in the **sensor heights** from your tank's spec sheet, the integration models the
+tank as a hot layer on cold water with a boundary layer between them, placed with both readings, and counts the
+hot water above the top sensor too. Without that information it uses the simple model, as before.
+
+With **Learn where the sensors sit** on (the default), it refines the top sensor's height from showers that reached
+the boundary layer: the height that best predicts the top reading after each shower. A sensor pocket often measures
+higher than the drawing says. On two WBL-200 tanks the top sensor behaved as if it sat at 0.65 and 0.77 of the water
+column instead of the 0.59 the drawing gives. The learned heights are shown on the *Learned model* sensor
+(`sensor_heights`).
+
 | What it learns | From |
 | --- | --- |
 | Heat per minute of showering (≈ shower flow) | heat drawn between two full reheats vs. the minutes cold water was coming in |
@@ -276,6 +290,9 @@ The setup has two screens. Only the first one needs input; the second is filled 
 | Setting | What it adds | Without it | Weheat example |
 | --- | --- | --- | --- |
 | **Starting knowledge** | Where the model starts before it has learned from your showers | *Generic tank* | *Weheat 200 L* (suggested automatically) |
+| **Tank type** | Knows how much hot water sits above the top sensor (see *Where the sensors sit*) | The simple model | *Weheat WBL-200* or *WBL-300* (suggested automatically) |
+| **Learn where the sensors sit** | Refines the top sensor's height from deep showers | The heights stay as set | on |
+| **Sensor heights** (outlet, top, bottom, cold inlet; mm from the floor) | For a tank that is not listed, from its spec sheet; they replace the tank type's heights | — | WBL-300: 1572, 1220, 560, 230 |
 | **Entity that shows reheating** + **states** | Exact reheat moments, "Reheating" sensor, "Full again at" | Reheats are recognised from the temperature rising | `sensor.blackbird_p80_heat_pump` with `dhw, legionella_prevention` |
 | **Heat delivered to hot water** (energy) | Learns how your tank layers; more precise flow | Fixed layering from the starting knowledge | `sensor.…_energy_output_dhw` |
 | **Outdoor temperature sensor** | Cold water temperature from the 3-week outdoor average | Learned monthly table | `sensor.…_outside_temperature` |

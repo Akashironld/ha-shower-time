@@ -35,7 +35,13 @@
           "electricity_sensor": "Stroomverbruik voor warm water (energiesensor)",
           "cop": "COP voor warm water",
           "price_sensor": "Stroomprijs-sensor",
-          "bathroom_sensor": "Badkamersignaal (optioneel)"
+          "bathroom_sensor": "Badkamersignaal (optioneel)",
+          "tank_type": "Type boiler",
+          "learn_sensor_heights": "Leren waar de sensoren zitten",
+          "height_outlet": "Hoogte warmwateruitgang",
+          "height_top_sensor": "Hoogte bovenste sensor",
+          "height_bottom_sensor": "Hoogte onderste sensor",
+          "height_cold_inlet": "Hoogte koudwaterinlaat"
         },
         "data_description": {
           "profile": "Waar het model mee begint voordat het van jullie eigen douches heeft geleerd.",
@@ -48,14 +54,22 @@
           "electricity_sensor": "Optioneel. Samen met de warmtesensor leert de integratie hiermee de COP voor warm water.",
           "cop": "Leeg laten om hem te leren uit de warmte- en stroommeter (2,5 zonder meters). Vul in om altijd deze COP te gebruiken: de COP voor warm water van de warmtepomp zelf, zoals de app hem toont (elektrische boiler: 1,0).",
           "price_sensor": "Optioneel, kies je eigen sensor (bijvoorbeeld van je energieleverancier of evcc). Bij een dynamisch tarief telt de prijs op het moment dat het vat opwarmt, niet als je doucht.",
-          "bathroom_sensor": "Herkent een douche binnen een minuut in plaats van na een paar minuten: een vochtigheidssensor in de badkamer (stijgend), het vermogen van de badkamerventilatie (harder dan normaal), of een ventilator, lamp of bewegingssensor die aangaat. Zonder dit onderscheidt de integratie douches van de afwas aan hoeveel warmte ze kosten; dat duurt een paar minuten."
+          "bathroom_sensor": "Herkent een douche binnen een minuut in plaats van na een paar minuten: een vochtigheidssensor in de badkamer (stijgend), het vermogen van de badkamerventilatie (harder dan normaal), of een ventilator, lamp of bewegingssensor die aangaat. Zonder dit onderscheidt de integratie douches van de afwas aan hoeveel warmte ze kosten; dat duurt een paar minuten.",
+          "tank_type": "Bij een bekende boiler weet het model hoeveel warm water er boven de bovenste sensor zit. Staat de jouwe er niet bij? Kies 'Andere boiler' en vul de hoogtes hieronder in, of laat ze leeg voor het eenvoudige model.",
+          "learn_sensor_heights": "Verfijnt de sensorhoogtes aan de hand van douches die diep in de boiler kwamen. Aangeraden, ook bij een bekende boiler: een dompelbuis meet vaak iets hoger of lager dan de tekening zegt.",
+          "height_outlet": "Optioneel, in mm vanaf de vloer (zie het specificatieblad van de boiler). Vul uitgang, bovenste en onderste sensor samen in; ze vervangen de hoogtes van het boilertype.",
+          "height_top_sensor": "Optioneel, in mm vanaf de vloer.",
+          "height_bottom_sensor": "Optioneel, in mm vanaf de vloer.",
+          "height_cold_inlet": "Optioneel, in mm vanaf de vloer. Leeg = 230 mm."
         }
       }
     },
     "error": {
       "same_sensor": "Boven en onder moeten verschillende sensoren zijn.",
       "head_flow_missing": "Vul het debiet in.",
-      "water_missing": "Kies de watermeter."
+      "water_missing": "Kies de watermeter.",
+      "heights_incomplete": "Vul de uitgang, de bovenste en de onderste sensor samen in (of laat ze alle drie leeg).",
+      "heights_order": "De uitgang moet hoger zitten dan de bovenste sensor, en de bovenste sensor hoger dan de onderste."
     },
     "abort": {
       "already_configured": "Deze boiler is al ingesteld."
@@ -84,7 +98,13 @@
           "legionella_temperature": "Legionellatemperatuur",
           "legionella_days": "Legionella: waarschuwen na",
           "bathroom_sensor": "Badkamersignaal (optioneel)",
-          "bathtub": "Er zit een bad op dit vat"
+          "bathtub": "Er zit een bad op dit vat",
+          "tank_type": "Type boiler",
+          "learn_sensor_heights": "Leren waar de sensoren zitten",
+          "height_outlet": "Hoogte warmwateruitgang",
+          "height_top_sensor": "Hoogte bovenste sensor",
+          "height_bottom_sensor": "Hoogte onderste sensor",
+          "height_cold_inlet": "Hoogte koudwaterinlaat"
         },
         "data_description": {
           "flow_source": "Optioneel. Met het debiet berekent de integratie op welke temperatuur jullie douchen en hoeveel liter dat is. Een watermeter meet het tijdens het douchen. Weet je het niet? Kies 'Zelf invullen' en meet het in een minuut met een emmer (zie hieronder), of kies het type douchekop.",
@@ -97,14 +117,22 @@
           "legionella_days": "Aantal dagen zonder zo'n opwarming voordat 'Legionella-opwarming te lang geleden' aangaat. Standaard 8: een wekelijks programma plus een dag.",
           "bathroom_sensor": "Herkent een douche binnen een minuut in plaats van na een paar minuten: een vochtigheidssensor in de badkamer (stijgend), het vermogen van de badkamerventilatie (harder dan normaal), of een ventilator, lamp of bewegingssensor die aangaat. Zonder dit onderscheidt de integratie douches van de afwas aan hoeveel warmte ze kosten; dat duurt een paar minuten.",
           "bathtub": "Uit als je alleen douches en kranen hebt: snel een emmer of wasbak vullen telt dan nooit als bad.",
-          "water_sensor": "Een teller (liter, m³) of debietsensor (L/min). Herkent een douche live aan een stabiele waterstroom en maakt de duur exact; met 'Watermeter' hierboven meet hij ook het debiet van de douchekop."
+          "water_sensor": "Een teller (liter, m³) of debietsensor (L/min). Herkent een douche live aan een stabiele waterstroom en maakt de duur exact; met 'Watermeter' hierboven meet hij ook het debiet van de douchekop.",
+          "tank_type": "Bij een bekende boiler weet het model hoeveel warm water er boven de bovenste sensor zit. Staat de jouwe er niet bij? Kies 'Andere boiler' en vul de hoogtes hieronder in, of laat ze leeg voor het eenvoudige model.",
+          "learn_sensor_heights": "Verfijnt de sensorhoogtes aan de hand van douches die diep in de boiler kwamen. Aangeraden, ook bij een bekende boiler: een dompelbuis meet vaak iets hoger of lager dan de tekening zegt.",
+          "height_outlet": "Optioneel, in mm vanaf de vloer (zie het specificatieblad van de boiler). Vul uitgang, bovenste en onderste sensor samen in; ze vervangen de hoogtes van het boilertype.",
+          "height_top_sensor": "Optioneel, in mm vanaf de vloer.",
+          "height_bottom_sensor": "Optioneel, in mm vanaf de vloer.",
+          "height_cold_inlet": "Optioneel, in mm vanaf de vloer. Leeg = 230 mm."
         }
       }
     },
     "error": {
       "same_sensor": "Boven en onder moeten verschillende sensoren zijn.",
       "head_flow_missing": "Vul het debiet in.",
-      "water_missing": "Kies de watermeter."
+      "water_missing": "Kies de watermeter.",
+      "heights_incomplete": "Vul de uitgang, de bovenste en de onderste sensor samen in (of laat ze alle drie leeg).",
+      "heights_order": "De uitgang moet hoger zitten dan de bovenste sensor, en de bovenste sensor hoger dan de onderste."
     }
   },
   "selector": {
@@ -128,6 +156,13 @@
         "normal": "Normaal (≈ 8 L/min)",
         "rain": "Regendouche (≈ 12 L/min)",
         "manual": "Zelf invullen"
+      }
+    },
+    "tank_type": {
+      "options": {
+        "other": "Andere boiler",
+        "weheat_wbl200": "Weheat WBL-200 (200 L)",
+        "weheat_wbl300": "Weheat WBL-300 (300 L)"
       }
     }
   },

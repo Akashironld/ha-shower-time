@@ -191,7 +191,7 @@ class ModelSensor(ShowerTimeEntity, SensorEntity):
     """What has been learned so far (state: shower flow in L/min)."""
 
     _attr_entity_category = EntityCategory.DIAGNOSTIC
-    _unrecorded_attributes = frozenset({"stratification", "cold_water_by_month", "cold_water_model", "observations",
+    _unrecorded_attributes = frozenset({"stratification", "sensor_heights", "cold_water_by_month", "cold_water_model", "observations",
                                         "last_learn_samples", "head_flow_learned", "head_flow_observations"})
     _attr_native_unit_of_measurement = "L/min"
     _attr_icon = "mdi:brain"
@@ -220,6 +220,8 @@ class ModelSensor(ShowerTimeEntity, SensorEntity):
             "head_flow_observations": p["head_flow"]["n"],
             "typical_shower_minutes": p["duration"]["v"],
             "empty_factor_phi": p["phi"]["v"],
+            "tank_type": m.tank_type,
+            "sensor_heights": _heights(p.get("geo")),
             "standing_loss_k_per_h": p["loss"]["v"],
             "stratification": {k: v["v"] for k, v in p["w"].items()},
             "cold_water_by_month": p["cold"],
@@ -232,6 +234,14 @@ class ModelSensor(ShowerTimeEntity, SensorEntity):
             "last_learn_samples": m.last_samples,
         }
 
+
+
+def _heights(geo: dict | None) -> dict | None:
+    """Where the model puts the sensors (share of the water column from the bottom), and what it started from."""
+    if not geo:
+        return None
+    return {"source": geo["source"], "learning": geo["learn"], "top": geo["top"], "bottom": geo["bottom"],
+            "start": geo["start"], "deep_showers": geo["n"], "fit_error_k": geo.get("error")}
 
 
 class _LogSensor(ShowerTimeEntity, SensorEntity):

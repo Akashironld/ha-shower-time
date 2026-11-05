@@ -141,3 +141,64 @@ async def test_card_becomes_a_dashboard_resource_old_and_new_style(hass: HomeAss
         assert [dict(i) for i in res.async_items() if i["url"].startswith(CARD_URL)] == [before], style
     hass.data.pop("lovelace")
     await _async_register_resource(hass, CARD_URL + "?v=3")        # no dashboards: nothing to do, no error
+
+
+async def test_a_known_tank_type_counts_the_water_above_the_top_sensor(hass: HomeAssistant, deps) -> None:
+    """#14: a Weheat WBL-200 holds hot water above its top sensor; the old model left it out."""
+    plain = await setup_entry(hass, top=52.8, bottom=52.5)
+    simple = float(hass.states.get("sensor.hot_water_shower_time").state)
+    assert hass.states.get("sensor.hot_water_learned_model").attributes["sensor_heights"] is None
+    await hass.config_entries.async_unload(plain.entry_id)
+    await hass.config_entries.async_remove(plain.entry_id)
+    await hass.async_block_till_done()
+    await setup_entry(hass, data={"tank_type": "weheat_wbl200", "learn_sensor_heights": True}, top=52.8, bottom=52.5)
+    layered = float(hass.states.get("sensor.hot_water_shower_time").state)
+    heights = hass.states.get("sensor.hot_water_learned_model").attributes["sensor_heights"]
+    assert heights["source"] == "weheat_wbl200" and heights["learning"]
+    assert layered > simple * 1.3
+
+
+async def _tank_history(hass: HomeAssistant, freezer) -> None:
+    """Recorded: a low tank, a reheat to 52.8 / 52.5, then a shower that cooled the bottom."""
+    from datetime import timedelta
+    from .conftest import tank
+    for top, bottom, minutes in ((44.0, 20.0, 30), (50.0, 40.0, 20), (52.8, 52.5, 60), (52.6, 30.0, 10)):
+        tank(hass, top, bottom)
+        await hass.async_block_till_done()
+        freezer.tick(timedelta(minutes=minutes))
+    await async_wait_recording_done(hass)
+
+
+async def test_layer_model_is_right_straight_after_install(hass: HomeAssistant, deps, freezer) -> None:
+    """The full-tank readings and the hot layer come from the history: no waiting for the next reheat (#14)."""
+    await _tank_history(hass, freezer)
+    entry = await setup_entry(hass, data={"tank_type": "weheat_wbl200"}, top=52.6, bottom=30.0)
+    m = entry.runtime_data
+    await hass.async_block_till_done(wait_background_tasks=True)
+    assert m.full_ref_state == [52.8, 52.5]
+    assert m.hot_top >= 52.6
+    full = m.ref_minutes()
+    assert 0 < m.fill_percent() < 100 and full > m.estimate.minutes
+
+
+async def test_layer_model_after_updating_from_an_older_version(hass: HomeAssistant, deps, freezer, hass_storage) -> None:
+    """Stored data from 0.13 has a reference but no full-tank readings: they are looked up once at startup."""
+    from custom_components.shower_time import model
+    await _tank_history(hass, freezer)
+    entry_id = "old_entry"
+    hass_storage[f"shower_time.{entry_id}"] = {"version": 1, "key": f"shower_time.{entry_id}", "data": {
+        "profile": "generic", "params": model.new_params("generic"), "full_ref": 20.0, "full_ref_avg": 52.0,
+        "full_ref_at": "2026-10-15T10:00:00+00:00"}}
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+    from .conftest import TOP, BOTTOM, tank
+    tank(hass, 52.6, 30.0)
+    entry = MockConfigEntry(domain="shower_time", title="Hot water", unique_id=TOP, entry_id=entry_id,
+                            data={"top_sensor": TOP, "bottom_sensor": BOTTOM, "tank_volume": 200,
+                                  "temperature_mode": "auto", "profile": "generic", "flow_source": "unknown",
+                                  "tank_type": "weheat_wbl200"})
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done(wait_background_tasks=True)
+    m = entry.runtime_data
+    assert m.full_ref_state == [52.8, 52.5]
+    assert m.params.get("geo") and 0 < m.fill_percent() < 100

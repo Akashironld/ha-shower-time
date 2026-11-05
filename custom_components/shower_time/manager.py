@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import copy
 from dataclasses import asdict, replace
 from datetime import date, datetime, timedelta, timezone
 import logging
@@ -46,6 +47,13 @@ from .const import (
     WATER_MIN_OBSERVATIONS,
     CONF_HEATING,
     CONF_HEATING_STATES,
+    CONF_H_BOTTOM,
+    CONF_H_INLET,
+    CONF_H_OUTLET,
+    CONF_H_TOP,
+    CONF_LEARN_HEIGHTS,
+    CONF_TANK_TYPE,
+    DEFAULT_LEARN_HEIGHTS,
     CONF_LEGIONELLA_DAYS,
     CONF_LEGIONELLA_TEMP,
     CONF_LOW,
@@ -143,9 +151,20 @@ class ShowerTimeManager:
         self.energy: str | None = cfg.get(CONF_ENERGY) or None
         self.low_minutes: float = float(cfg.get(CONF_LOW, DEFAULT_LOW))
         self.profile: str = cfg.get(CONF_PROFILE, "generic")
+        # where the tank sensors sit (layer model); entries from before 0.14 get the Weheat tank they have
+        self.tank_type: str = cfg.get(CONF_TANK_TYPE) or self._guess_tank_type()
+        heights = {"outlet": cfg.get(CONF_H_OUTLET), "top": cfg.get(CONF_H_TOP), "bottom": cfg.get(CONF_H_BOTTOM),
+                   "inlet": cfg.get(CONF_H_INLET)}
+        self.geo_setup: dict | None = (model.new_geometry(self.tank_type, heights,
+                                                          bool(cfg.get(CONF_LEARN_HEIGHTS, DEFAULT_LEARN_HEIGHTS)))
+                                       if self.bottom else None)
+        self.hot_top: float | None = None           # the hot layer: hottest top since the last reheat
+        self._hot_at: datetime | None = None
+        self._hot_stored = False                    # the hot layer came from the store (else: from the history)
 
         self._store: Store = Store(hass, STORAGE_VERSION, f"{DOMAIN}.{entry.entry_id}")
         self.params: dict = model.new_params(self.profile)
+        self._apply_geometry()
         self.processed_until: int = 0
         self.last_cycle: model.Cycle | None = None
         self.last_learn: str | None = None
@@ -159,6 +178,7 @@ class ShowerTimeManager:
         # 100 % = the shower minutes right after the last reheat; the fill level drops with use and standing loss
         self.full_ref: float | None = None          # minutes at the last reheat (kept for display/compat)
         self.full_ref_avg: float | None = None      # tank average temperature right after the last reheat
+        self.full_ref_state: list[float] | None = None   # top and bottom right after the last reheat
         self.full_ref_at: str | None = None
         self.top_ups: list[dict] = []           # partial reheats since the last complete one
         self._heat_from: tuple[datetime, float] | None = None
@@ -216,6 +236,7 @@ class ShowerTimeManager:
             self.last_cycle = model.Cycle(**lc) if lc else None
             self.last_learn = stored.get("last_learn")
             self.last_samples = stored.get("last_samples", {})
+            self._apply_geometry()
         if stored:
             self.habits = stored.get("habits") or self.habits
             self.loss_samples = stored.get("loss_samples") or []
@@ -227,9 +248,13 @@ class ShowerTimeManager:
             self.legionella_at = stored.get("legionella_at")
             self.learn_failures = stored.get("learn_failures", 0)
             self.alive_at = stored.get("alive_at")
+            self.hot_top = stored.get("hot_top")
+            self._hot_stored = self.hot_top is not None
+            self._hot_at = dt_util.parse_datetime(stored["hot_at"]) if stored.get("hot_at") else None
             self.use_stats = {**self.use_stats, **(stored.get("use_stats") or {})}
             self.ledger.load(stored.get("ledger"))
             self.full_ref_avg = stored.get("full_ref_avg")
+            self.full_ref_state = stored.get("full_ref_state")
             self.full_ref_at = stored.get("full_ref_at")
             self.top_ups = stored.get("top_ups") or []
             # a reference in minutes only (before 0.5.1) depends on the model it was computed with: rebuild it
@@ -249,7 +274,9 @@ class ShowerTimeManager:
         if self.outdoor:
             self.entry.async_create_background_task(self.hass, self._refresh_ema(update=True), f"{DOMAIN}_ema")
         self.update()
-        if self.full_ref is None:               # find the last reheat in the history once
+        # find the last reheat in the history once; with the layer model also when its readings are not known yet
+        # (updated from an older version), so the fill level and the hot layer are right straight away
+        if self.full_ref is None or (self.params.get("geo") and (not self.full_ref_state or not self._hot_stored)):
             self.entry.async_create_background_task(self.hass, self._init_full_ref(), f"{DOMAIN}_full_ref")
         if self.legionella_at is None:          # the last legionella-proof heat-up, from the statistics
             self.entry.async_create_background_task(self.hass, self._init_legionella(), f"{DOMAIN}_legionella")
@@ -289,6 +316,30 @@ class ShowerTimeManager:
         st = self.hass.states.get(entity) if entity else None
         unit = str((st.attributes.get("unit_of_measurement") if st else "") or "").replace(" ", "")
         return unit in ("°F", "F", "℉")
+
+    # ------------------------------------------------------------------ sensor heights
+    def _guess_tank_type(self) -> str:
+        ent = er.async_get(self.hass).async_get(self.top)
+        if ent is not None and ent.platform == "weheat":
+            return {200: "weheat_wbl200", 300: "weheat_wbl300"}.get(round(self.volume), "other")
+        return "other"
+
+    def _apply_geometry(self) -> None:
+        """Use the sensor heights from the settings; keep what was learned while the settings stay the same."""
+        if not model.same_geometry_setup(self.params.get("geo"), self.geo_setup):
+            self.params["geo"] = copy.deepcopy(self.geo_setup)
+        elif self.geo_setup is None:
+            self.params.pop("geo", None)
+
+    def _follow_hot_layer(self) -> None:
+        now = dt_util.utcnow()
+        minutes = (now - self._hot_at).total_seconds() / 60 if self._hot_at else 0.0
+        self.hot_top = model.hot_layer(self.params, self.top_value, self.hot_top, minutes, self.reheating)
+        self._hot_at = now
+
+    def draw_flow(self) -> float | None:
+        """L/min a shower draws at the shower temperature, when known (a fixed temperature and a known head)."""
+        return self.head_flow()[0] if self.temp_mode == "fixed" else None
 
     # ------------------------------------------------------------------ shower-head flow
     def head_flow(self) -> tuple[float | None, str]:
@@ -348,9 +399,11 @@ class ShowerTimeManager:
         else:
             head = self.head_flow()[0] if self.temp_mode == "auto" else None
             now = dt_util.now()
+            self._follow_hot_layer()
             self.estimate = model.estimate(self.params, self.top_value, self.bottom_value, volume=self.volume,
                                            shower_temp=self.shower_temp, month=now.month, head_flow=head,
-                                           doy=now.timetuple().tm_yday, ema=self.ema_now)
+                                           doy=now.timetuple().tm_yday, ema=self.ema_now, hot=self.hot_top,
+                                           draw_flow=self.draw_flow())
             self._track_full(self.estimate.minutes)
             self.ledger.on_estimate(self, self.estimate)
             self._classify_use()
@@ -1080,6 +1133,9 @@ class ShowerTimeManager:
         self.full_ref = minutes
         if self.estimate is not None:
             self.full_ref_avg = self.estimate.average
+        # the readings themselves: with the layer model the tank average alone does not give back the minutes
+        self.full_ref_state = ([self.top_value, self.bottom_value]
+                               if self.top_value is not None and self.bottom_value is not None else None)
         self.full_ref_at = dt_util.now().isoformat(timespec="seconds")
         self.top_ups = []
         self._ref_low = minutes
@@ -1142,6 +1198,13 @@ class ShowerTimeManager:
         e = self.estimate
         if e is None:
             return self.full_ref
+        if self.full_ref_state and self.params.get("geo"):
+            # layer model: the minutes in the tank as it was then (its empty point moves with the tank's state)
+            top, bottom = self.full_ref_state
+            now = dt_util.now()
+            return model.estimate(self.params, top, bottom, volume=self.volume, shower_temp=self.shower_temp,
+                                  month=now.month, doy=now.timetuple().tm_yday, ema=self.ema_now, hot=top,
+                                  draw_flow=self.draw_flow()).minutes
         if self.full_ref_avg is not None:
             return max(0.0, (self.full_ref_avg - e.empty_at) / e.per_minute)
         return self.full_ref
@@ -1219,21 +1282,27 @@ class ShowerTimeManager:
         return int(round(max(0.0, min(100.0, 100 * e.minutes / ref))))
 
     async def _init_full_ref(self) -> None:
-        """First run: the minutes at the end of the last reheat in the past two days."""
+        """First run (and the first run of a version with the layer model): the minutes at the end of the last
+        reheat in the past two days, the tank readings then, and the hot layer now, all from the history, so the
+        fill level is right from the start."""
         try:
             points = await self.async_history(48, with_average=True)
         except Exception:  # noqa: BLE001
             points = []
-        ref = low = prev = ts = avg = None
-        for t, v, a in points:                  # same rules as _track_full, replayed over the history
+        ref = low = prev = ts = avg = state = None
+        for t, v, a, top, bot in points:        # same rules as _track_full, replayed over the history
             if ref is None:
                 ref = low = prev = v
-                ts, avg = t, a
+                ts, avg, state = t, a, [top, bot]
                 continue
             low = min(low, v)
             if (v > prev and v >= low + 3) or v > ref:
-                ref, ts, low, avg = v, t, v, a
+                ref, ts, low, avg, state = v, t, v, a, [top, bot]
             prev = v
+        if not self._hot_stored and getattr(self, "_hist_hot", None) is not None:
+            self.hot_top = max(self.hot_top or 0.0, self._hist_hot)
+            self._hot_stored = True
+        self.full_ref_state = state if state and None not in state else None
         if ref is None and self.estimate:
             ref = self.estimate.minutes
         if ref is not None:
@@ -1251,12 +1320,13 @@ class ShowerTimeManager:
         """Shower minutes over the last ``hours``, recomputed with the current model from the tank sensors.
 
         Works from day one: the tank sensors usually have far more history than this integration.
-        Returns [[timestamp_ms, minutes], ...] every 5 minutes (only where the value changes).
+        Returns [[timestamp_ms, minutes], ...] every 5 minutes (only where the value changes); ``with_average``
+        adds the tank average, the top and the bottom reading to each point.
         """
         now = dt_util.utcnow()
         cached = getattr(self, "_hist_cache", None)
         if cached and cached[0] == hours and (now - cached[1]).total_seconds() < 300:
-            return cached[2] if with_average else [[t, v] for t, v, _ in cached[2]]
+            return cached[2] if with_average else [p[:2] for p in cached[2]]
         start = now - timedelta(hours=hours)
         recorder = get_instance(self.hass)
         series = {}
@@ -1268,8 +1338,10 @@ class ShowerTimeManager:
                 series[ent] = [(st.last_changed.timestamp(), _temp(st, f)) for st in res.get(ent, [])]
         head = self.head_flow()[0] if self.temp_mode == "auto" else None
 
+        rate = self.draw_flow()
+
         def compute() -> list[list[float]]:
-            out, i, j, top, bot, last = [], 0, 0, None, None, None
+            out, i, j, top, bot, last, hot = [], 0, 0, None, None, None, None
             tops, bots = series.get(self.top, []), series.get(self.bottom, []) if self.bottom else []
             t = start.timestamp()
             while t <= now.timestamp():
@@ -1281,21 +1353,23 @@ class ShowerTimeManager:
                     j += 1
                 if top is not None and (not self.bottom or bot is not None):
                     local = dt_util.as_local(datetime.fromtimestamp(t, timezone.utc))
+                    hot = model.hot_layer(self.params, top, hot, 5.0, False)
                     e = model.estimate(self.params, top, bot, volume=self.volume, shower_temp=self.shower_temp,
                                        month=local.month, head_flow=head, doy=local.timetuple().tm_yday,
-                                       ema=self._ema_on(local.date().isoformat()))
+                                       ema=self._ema_on(local.date().isoformat()), hot=hot, draw_flow=rate)
                     v = round(e.minutes)
                     if v != last:
-                        out.append([int(t * 1000), v, round(e.average, 2)])
+                        out.append([int(t * 1000), v, round(e.average, 2), top, bot])
                         last = v
                 t += 300
             if out and out[-1][0] < int(now.timestamp() * 1000):
-                out.append([int(now.timestamp() * 1000), last, out[-1][2]])
+                out.append([int(now.timestamp() * 1000), last, *out[-1][2:]])
+            self._hist_hot = hot                    # the hot layer now, as the history shows it
             return out
 
         result = await self.hass.async_add_executor_job(compute)
         self._hist_cache = (hours, now, result)
-        return result if with_average else [[t, v] for t, v, _ in result]
+        return result if with_average else [p[:2] for p in result]
 
     # ------------------------------------------------------------------ learning
     def _data(self) -> dict:
@@ -1303,12 +1377,14 @@ class ShowerTimeManager:
             "profile": self.profile, "params": self.params, "processed_until": self.processed_until,
             "last_cycle": asdict(self.last_cycle) if self.last_cycle else None, "last_learn": self.last_learn,
             "last_samples": self.last_samples, "full_ref": self.full_ref, "full_ref_avg": self.full_ref_avg,
+            "full_ref_state": self.full_ref_state,
             "full_ref_at": self.full_ref_at, "top_ups": self.top_ups, "ledger": self.ledger.to_dict(),
             "habits": self.habits, "loss_samples": self.loss_samples, "drip_nights": self.drip_nights,
             "use_stats": self.use_stats, "loss_backfilled": self.loss_backfilled,
             "reheat_log": self.reheat_log, "reheat_since": self.reheat_since,
             "legionella_at": self.legionella_at,
             "learn_failures": self.learn_failures, "alive_at": self.alive_at,
+            "hot_top": self.hot_top, "hot_at": self._hot_at.isoformat() if self._hot_at else None,
         }
 
     async def _first_learn(self, _now) -> None:
@@ -1387,7 +1463,8 @@ class ShowerTimeManager:
             lambda: model.learn(self.params, rows, volume=self.volume, shower_temp=self.shower_temp,
                                 since=self.processed_until, energy_by_hour=energy, previous_cycle=self.last_cycle,
                                 month_of=lambda t: _local(t).month, doy_of=lambda t: _local(t).timetuple().tm_yday,
-                                water=water, ema_of=ema_of if self.outdoor else None, draw_kind=draw_kind))
+                                water=water, ema_of=ema_of if self.outdoor else None, draw_kind=draw_kind,
+                                draw_flow=self.draw_flow()))
         self.params = result.params
         self.last_cycle = last
 

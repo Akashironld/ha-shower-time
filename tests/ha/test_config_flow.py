@@ -132,3 +132,11 @@ async def test_a_bathroom_signal_emptied_at_setup_is_not_suggested_later(hass: H
     assert entry.data["bathroom_sensor"] is None
     result = await hass.config_entries.options.async_init(entry.entry_id)
     assert _suggested(result)["bathroom_sensor"] is None
+
+
+def test_sensor_heights_must_be_complete_and_in_order():
+    from custom_components.shower_time.config_flow import _check_flow
+    from custom_components.shower_time.const import CONF_H_BOTTOM, CONF_H_OUTLET, CONF_H_TOP
+    assert _check_flow({CONF_H_TOP: 1200}) == {CONF_H_TOP: "heights_incomplete"}
+    assert _check_flow({CONF_H_OUTLET: 1500, CONF_H_TOP: 400, CONF_H_BOTTOM: 1200}) == {CONF_H_TOP: "heights_order"}
+    assert _check_flow({CONF_H_OUTLET: 1572, CONF_H_TOP: 1220, CONF_H_BOTTOM: 560}) == {}

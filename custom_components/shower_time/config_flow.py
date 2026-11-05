@@ -27,6 +27,14 @@ from .const import (
     FLOW_SOURCES,
     TEMP_MODES,
     CONF_HEATING,
+    CONF_H_BOTTOM,
+    CONF_H_INLET,
+    CONF_H_OUTLET,
+    CONF_H_TOP,
+    CONF_LEARN_HEIGHTS,
+    CONF_TANK_TYPE,
+    DEFAULT_LEARN_HEIGHTS,
+    TANK_TYPE_OPTIONS,
     CONF_HEATING_STATES,
     CONF_LEGIONELLA_DAYS,
     CONF_LEGIONELLA_TEMP,
@@ -63,6 +71,8 @@ PRICE = selector.EntitySelector(selector.EntitySelectorConfig(domain=["sensor", 
 COP = selector.NumberSelector(selector.NumberSelectorConfig(min=0.8, max=6, step=0.1, mode=selector.NumberSelectorMode.BOX))
 LEGIONELLA_TEMP = selector.NumberSelector(selector.NumberSelectorConfig(min=50, max=75, step=1, unit_of_measurement="°C", mode=selector.NumberSelectorMode.BOX))
 LEGIONELLA_DAYS = selector.NumberSelector(selector.NumberSelectorConfig(min=1, max=60, step=1, unit_of_measurement="d", mode=selector.NumberSelectorMode.BOX))
+TANK_TYPE = selector.SelectSelector(selector.SelectSelectorConfig(options=TANK_TYPE_OPTIONS, translation_key="tank_type", mode=selector.SelectSelectorMode.DROPDOWN))
+HEIGHT = selector.NumberSelector(selector.NumberSelectorConfig(min=10, max=3000, step=1, unit_of_measurement="mm", mode=selector.NumberSelectorMode.BOX))
 PROFILE = selector.SelectSelector(selector.SelectSelectorConfig(options=PROFILES, translation_key="profile", mode=selector.SelectSelectorMode.DROPDOWN))
 
 OPTIONS = vol.Schema({
@@ -74,6 +84,12 @@ OPTIONS = vol.Schema({
     vol.Optional(CONF_WATER): WATER,
     vol.Required(CONF_LOW): LOW,
     vol.Optional(CONF_BOTTOM): TEMP,
+    vol.Required(CONF_TANK_TYPE): TANK_TYPE,
+    vol.Required(CONF_LEARN_HEIGHTS): selector.BooleanSelector(),
+    vol.Optional(CONF_H_OUTLET): HEIGHT,
+    vol.Optional(CONF_H_TOP): HEIGHT,
+    vol.Optional(CONF_H_BOTTOM): HEIGHT,
+    vol.Optional(CONF_H_INLET): HEIGHT,
     vol.Optional(CONF_HEATING): ANY,
     vol.Optional(CONF_HEATING_STATES, default=DEFAULT_HEATING_STATES): selector.TextSelector(),
     vol.Optional(CONF_ENERGY): ENERGY,
@@ -115,7 +131,7 @@ def suggest_bathroom(hass: HomeAssistant) -> str | None:
 def suggest(hass: HomeAssistant, top: str, volume: float) -> dict[str, Any]:
     """Look at the device of the top sensor for a reheat state and a hot-water energy meter."""
     reg = er.async_get(hass)
-    out: dict[str, Any] = {CONF_PROFILE: "generic"}
+    out: dict[str, Any] = {CONF_PROFILE: "generic", CONF_TANK_TYPE: "other", CONF_LEARN_HEIGHTS: DEFAULT_LEARN_HEIGHTS}
     if bath := suggest_bathroom(hass):
         out[CONF_BATH] = bath
     ent = reg.async_get(top)
@@ -123,6 +139,9 @@ def suggest(hass: HomeAssistant, top: str, volume: float) -> dict[str, Any]:
         return out
     if ent.platform == "weheat" and abs(volume - 200) < 1:
         out[CONF_PROFILE] = "weheat_200"
+        out[CONF_TANK_TYPE] = "weheat_wbl200"
+    if ent.platform == "weheat" and abs(volume - 300) < 1:
+        out[CONF_TANK_TYPE] = "weheat_wbl300"
     if not ent.device_id:
         return out
     siblings = er.async_entries_for_device(reg, ent.device_id)
@@ -188,6 +207,12 @@ class ShowerTimeConfigFlow(ConfigFlow, domain=DOMAIN):
         sug = suggest(self.hass, self._data[CONF_TOP], float(self._data[CONF_VOLUME]))
         schema = vol.Schema({
             vol.Required(CONF_PROFILE, default=sug[CONF_PROFILE]): PROFILE,
+            vol.Required(CONF_TANK_TYPE, default=sug[CONF_TANK_TYPE]): TANK_TYPE,
+            vol.Required(CONF_LEARN_HEIGHTS, default=DEFAULT_LEARN_HEIGHTS): selector.BooleanSelector(),
+            vol.Optional(CONF_H_OUTLET): HEIGHT,
+            vol.Optional(CONF_H_TOP): HEIGHT,
+            vol.Optional(CONF_H_BOTTOM): HEIGHT,
+            vol.Optional(CONF_H_INLET): HEIGHT,
             vol.Optional(CONF_HEATING): ANY,
             vol.Optional(CONF_HEATING_STATES, default=DEFAULT_HEATING_STATES): selector.TextSelector(),
             vol.Optional(CONF_ENERGY): ENERGY,
@@ -224,6 +249,8 @@ class ShowerTimeOptionsFlow(OptionsFlow):
         cur.setdefault(CONF_FLOW_SOURCE, "unknown")
         cur.setdefault(CONF_LOW, DEFAULT_LOW)
         cur.setdefault(CONF_BATHTUB, DEFAULT_BATHTUB)
+        cur.setdefault(CONF_TANK_TYPE, suggest(self.hass, cur[CONF_TOP], float(cur.get(CONF_VOLUME, DEFAULT_VOLUME)))[CONF_TANK_TYPE])
+        cur.setdefault(CONF_LEARN_HEIGHTS, DEFAULT_LEARN_HEIGHTS)
         cur.setdefault(CONF_LEGIONELLA_TEMP, DEFAULT_LEGIONELLA_TEMP)
         cur.setdefault(CONF_LEGIONELLA_DAYS, DEFAULT_LEGIONELLA_DAYS)
         if CONF_BATH not in cur and (bath := suggest_bathroom(self.hass)):
@@ -233,6 +260,11 @@ class ShowerTimeOptionsFlow(OptionsFlow):
 
 
 def _check_flow(user_input: dict[str, Any]) -> dict[str, str]:
+    heights = [user_input.get(k) for k in (CONF_H_OUTLET, CONF_H_TOP, CONF_H_BOTTOM)]
+    if any(heights) and not all(heights):
+        return {CONF_H_TOP: "heights_incomplete"}
+    if all(heights) and not heights[0] > heights[1] > heights[2]:
+        return {CONF_H_TOP: "heights_order"}
     source = user_input.get(CONF_FLOW_SOURCE, "unknown")
     if source == "manual" and not user_input.get(CONF_HEAD_FLOW):
         return {CONF_HEAD_FLOW: "head_flow_missing"}

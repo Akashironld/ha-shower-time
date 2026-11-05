@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.14.0 — Hot water above the top sensor
+
+**Recommended for everyone with a Weheat WBL-200 or WBL-300 tank, or a tank whose sensors are not at the very top and bottom** — the hot water above the top sensor was not counted, so a full tank showed far too few minutes and litres (#14). On a full WBL-300 at 46 °C the card showed about 164 L, roughly half of what it holds.
+
+### Improvements
+- **Tank type and sensor heights** (#14). Choose *Weheat WBL-200* or *WBL-300* (suggested automatically for a Weheat heat pump with a 200 or 300 L tank), or fill in the heights of the outlet and the sensors from your tank's spec sheet. The integration then models the tank as a hot layer on cold water with a boundary layer between them, placed with both readings, and counts the hot water above the top sensor. Without a tank type or heights nothing changes.
+- **Learns where the top sensor really sits** (#14). A sensor pocket often measures higher than the drawing says. With *Learn where the sensors sit* on (the default) the height is refined each night from the showers that reached the boundary layer. On two WBL-200 tanks it moved from 0.59 to 0.65 and 0.77 of the water column. The heights are shown on the *Learned model* sensor and in the diagnostics.
+
+### Fixes
+- **A reheat on a timer no longer makes the tank look empty sooner** (#14). A reheat that starts while the top could still give a shower was taken as the tank running empty, so a heat pump that reheats at a fixed time each day taught the model to stop counting while there was hot water left. Such a reheat now only lowers that point; only a reheat that starts with the top really down at shower temperature can raise it.
+
+### After updating
+Update in HACS and restart Home Assistant. With a Weheat heat pump and a 200 or 300 L tank the tank type is picked for you; check it under **Configure**. Another tank: fill in the heights there if you know them. The minutes and litres change right away; the top sensor's height is refined over the following days as showers reach the boundary layer.
+
 ## v0.13.6 — A bath is no shower, washing up no coil
 
 **Recommended for everyone with a bath, a water meter or a bathroom signal** — a bath counted as a shower once it was done, and with a water meter washing up in a nearly empty tank was lost as *cooled* (#10).

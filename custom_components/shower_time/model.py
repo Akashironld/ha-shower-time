@@ -145,6 +145,120 @@ def cold_for(params: dict, month: int, doy: int | None = None, ema: float | None
     return _cold_table(params, month, doy)
 
 
+
+# --------------------------------------------------------------------------- layer model (sensor heights)
+#
+# A tank whose sensors are not at the very top and bottom holds hot water the sensors do not see. With their
+# heights known the tank is a hot layer on cold water with a thermocline between them:
+#     T(z) = cold + (hot - cold) * S((z - z0) / d),   z = share of the water column from the bottom, S = logistic
+# z0 is placed to fit both readings (when they allow a range: the highest, fewest litres). The usable water is
+# everything above the point where T falls to the shower temperature, counted as the mixed water it makes.
+
+# Weheat spec sheet "Buffertanks & Boilertanks" (versions 280224, 080824 and 050225 agree), mm from the floor.
+TANK_TYPES: dict[str, dict] = {
+    "weheat_wbl200": {"outlet": 1212, "top": 730, "bottom": 480, "inlet": 230},
+    "weheat_wbl300": {"outlet": 1572, "top": 1220, "bottom": 560, "inlet": 230},
+}
+THERMOCLINE = 0.075        # d: width of the thermocline as a share of the column (measured 0.084 on a WBL-200)
+LAYER_FIT_TOL = 0.5        # K: readings fitted this well count as fitting
+GEO_MIN_DRAWS = 4          # showers that reached the thermocline before the top sensor's height moves
+GEO_KEEP = 80              # showers kept for learning it
+
+
+def new_geometry(tank_type: str | None, heights: dict | None, learn: bool) -> dict | None:
+    """Sensor heights from what was typed in (``heights``: outlet, top, bottom and optionally inlet, mm from the
+    floor) or else the tank type's spec sheet; None (the simple model) without either. The water column is taken
+    to run from 110 mm below the cold inlet to 50 mm below the hot outlet (the domed ends hold little)."""
+    h = heights if heights and all(heights.get(k) for k in ("outlet", "top", "bottom")) else None
+    if h and not h["outlet"] > h["top"] > h["bottom"] > 0:
+        h = None
+    source = "manual" if h else tank_type
+    h = h or TANK_TYPES.get(tank_type)
+    if not h:
+        return None
+    inlet = h.get("inlet") or 230
+    lo, hi = max(0.0, inlet - 110), h["outlet"] - 50
+    z = lambda mm: round(min(0.98, max(0.0, (mm - lo) / max(hi - lo, 1.0))), 4)
+    zt, zb = z(h["top"]), z(h["bottom"])
+    return {"source": source, "learn": bool(learn), "start": [zt, zb], "inlet": z(inlet), "top": zt, "bottom": zb,
+            "range": [round(max(zb + 0.1, zt - 0.1), 4), round(min(0.97, zt + 0.3), 4)], "draws": [], "n": 0}
+
+
+def same_geometry_setup(a: dict | None, b: dict | None) -> bool:
+    """Both from the same settings, so what was learned can stay."""
+    key = lambda g: g and (g["source"], g["start"], g["learn"])
+    return key(a) == key(b)
+
+
+def _logistic(x: float) -> float:
+    return 1.0 / (1.0 + math.exp(-max(-40.0, min(40.0, x))))
+
+
+def _softplus(x: float) -> float:
+    return x if x > 40 else math.log1p(math.exp(x))
+
+
+def layer_temp(z: float, hot: float, cold: float, z0: float) -> float:
+    return cold + (hot - cold) * _logistic((z - z0) / THERMOCLINE)
+
+
+def fit_thermocline(top: float, bottom: float, hot: float, cold: float, zt: float, zb: float) -> float:
+    best, best_err, highest = 0.0, 1e9, None
+    for i in range(-40, 241):
+        z0 = i / 200.0
+        e = math.hypot(layer_temp(zt, hot, cold, z0) - top, layer_temp(zb, hot, cold, z0) - bottom)
+        if e < best_err:
+            best, best_err = z0, e
+        if e <= LAYER_FIT_TOL:
+            highest = z0
+    return highest if highest is not None else best
+
+
+def layer_litres(geo: dict, top: float, bottom: float, *, hot: float | None, cold: float, shower_temp: float,
+                 volume: float) -> float:
+    """Mixed litres at ``shower_temp`` the tank still makes. ``hot`` = the hottest the top was since the last
+    reheat (less the standing loss): the water above the top sensor once the thermocline passed it. The integral
+    of the logistic above the shower-temperature point (and above the cold inlet: the water below it stays)."""
+    hot = max(hot or top, top)
+    if hot <= shower_temp or shower_temp <= cold:
+        return 0.0
+    z0 = fit_thermocline(top, bottom, hot, cold, geo["top"], geo["bottom"])
+    q = (shower_temp - cold) / (hot - cold)
+    z_from = max(geo["inlet"], z0 + THERMOCLINE * math.log(q / (1 - q)))
+    d = THERMOCLINE
+    share = d * (_softplus((1 - z0) / d) - _softplus((z_from - z0) / d))
+    return max(0.0, share) * volume / q
+
+
+def _top_after(geo: dict, zt: float, draw: list, volume: float) -> float:
+    """The top reading a shower should leave: the thermocline moves up by the hot water it drew."""
+    bt, bb, _at, _ab, hot, cold, minutes, flow, ts = draw
+    z0 = fit_thermocline(bt, bb, hot, cold, zt, geo["bottom"])
+    drawn = flow * minutes * (ts - cold) / max(hot - cold, 1.0)
+    return layer_temp(zt, hot, cold, z0 + drawn / volume)
+
+
+def learn_geometry(geo: dict, volume: float) -> dict:
+    """The top sensor's height from the showers in ``geo['draws']``: the height that best predicts the top
+    reading after each shower (that it fell, or that it did not). Heights within 10 % of the best error count as
+    good; of those the one nearest to where it is now, so it does not drift on noise. The bottom sensor stays: it
+    sits in the zone the cold inlet stirs up, which the thermocline does not describe."""
+    geo = copy.deepcopy(geo)
+    # a draw: [top before, bottom before, top after, bottom after, hot, cold, minutes, flow, shower temp]
+    deep = [d for d in geo["draws"] if d[1] < d[4] - 1.0 or d[3] < d[4] - 1.0]   # reached the thermocline
+    geo["n"] = len(deep)
+    if not geo["learn"] or len(deep) < GEO_MIN_DRAWS:
+        return geo
+    lo, hi = geo["range"]
+    cur = geo["top"]
+    errs = [(sum((_top_after(geo, z, d, volume) - d[2]) ** 2 for d in deep) / len(deep), z)
+            for z in [lo + i * (hi - lo) / 20 for i in range(21)] + [cur]]
+    best = min(e for e, _ in errs)
+    geo["top"] = round(min((z for e, z in errs if e <= best * 1.1 + 0.01), key=lambda z: abs(z - cur)), 4)
+    geo["error"] = round(math.sqrt(best), 2)
+    return geo
+
+
 @dataclass
 class Estimate:
     minutes: float
@@ -177,22 +291,37 @@ def shower_minute(params: dict, cold: float, shower_temp: float, volume: float) 
 
 
 def estimate(params: dict, top: float, bottom: float | None, *, volume: float, shower_temp: float,
-             month: int, head_flow: float | None = None, doy: int | None = None, ema: float | None = None) -> Estimate:
+             month: int, head_flow: float | None = None, doy: int | None = None, ema: float | None = None,
+             hot: float | None = None, draw_flow: float | None = None) -> Estimate:
     """``shower_temp`` is the fixed temperature or the 38 °C reference in auto mode.
     ``head_flow`` (L/min) is the known shower-head flow, if any: it only changes the litres and the
-    reported shower temperature, never the minutes (those come from the learned heat per minute)."""
+    reported shower temperature, never the minutes (those come from the learned heat per minute).
+    With sensor heights (``params['geo']``) and a bottom sensor the minutes come from the layer model; ``hot`` is
+    then the hottest the top was since the last reheat (None: the top now), and the minutes are the litres over
+    ``draw_flow`` (L/min a shower draws at ``shower_temp``, when known) or the learned flow. ``empty_at`` is the
+    tank average the minutes run down to, so everything that counts in tank-average degrees keeps working."""
     cold = cold_for(params, month, doy, ema)
     flow = params["flow"]["v"]
     per_minute = shower_minute(params, cold, shower_temp, volume)
     empty = cold + params["phi"]["v"] * (shower_temp + 2 - cold)
     avg = tank_average(params, top, bottom)
-    minutes = max(0.0, (avg - empty) / per_minute) if top >= shower_temp + 2 else 0.0
+    geo = params.get("geo")
+    if geo and bottom is not None:
+        rate = draw_flow or flow
+        minutes = layer_litres(geo, top, bottom, hot=hot, cold=cold, shower_temp=shower_temp, volume=volume) / rate
+        empty = avg - minutes * per_minute
+    else:
+        minutes = max(0.0, (avg - empty) / per_minute) if top >= shower_temp + 2 else 0.0
     if bottom is None or top - bottom < 3:
         hot = 1.0 if top >= shower_temp + 2 else 0.0
     else:
         hot = min(1.0, max(0.0, (avg - bottom) / (top - bottom)))
     full = params.get("full_temp")
-    full_minutes = max(0.0, (full - empty) / per_minute) if full else None
+    if full and geo and bottom is not None:
+        full_minutes = layer_litres(geo, full, full, hot=full, cold=cold, shower_temp=shower_temp,
+                                    volume=volume) / (draw_flow or flow)
+    else:
+        full_minutes = max(0.0, (full - empty) / per_minute) if full else None
     duration = params["duration"]["v"]
     temp, sensed, litre_flow = shower_temp, False, flow
     if head_flow:
@@ -324,6 +453,33 @@ def _lowest_bottom(rows: list[Row], d: Draw) -> float | None:
     return min(lows) if lows else None
 
 
+def _hot_before(rows: list[Row], minute: int, loss_k_h: float) -> float:
+    """The hot layer before ``minute``: the hottest top since the last reheat (at most 24 h back), less the
+    standing loss since then."""
+    best, at = None, None
+    for r in rows:
+        if r.minute >= minute:
+            break
+        if r.minute < minute - 1440:
+            continue
+        if r.heating:
+            best, at = None, None                  # a reheat: start again after it
+            continue
+        if best is None or r.top >= best:
+            best, at = r.top, r.minute
+    if best is None:
+        prev = [r.top for r in rows if r.minute < minute]
+        return prev[-1] if prev else 0.0
+    return best - loss_k_h * (minute - at) / 60
+
+
+def hot_layer(params: dict, top: float, hot: float | None, minutes: float, reheating: bool) -> float:
+    """Follow the hot layer live: the top while reheating, else the hottest top since, less the standing loss."""
+    if reheating or hot is None:
+        return top
+    return max(top, hot - params["loss"]["v"] * minutes / 60)
+
+
 def _blend(old: dict, samples: list[float], limits: tuple[float, float]) -> dict:
     if not samples:
         return old
@@ -344,7 +500,7 @@ class LearnResult:
 def learn(params: dict, rows: list[Row], *, volume: float, shower_temp: float, since: int,
           energy_by_hour: dict[int, float] | None, previous_cycle: Cycle | None,
           month_of, water: tuple[str, list[tuple[int, float]]] | None = None,
-          doy_of=None, ema_of=None, draw_kind=None) -> tuple[LearnResult, Cycle | None]:
+          doy_of=None, ema_of=None, draw_kind=None, draw_flow: float | None = None) -> tuple[LearnResult, Cycle | None]:
     """Update ``params`` with everything that happened after minute ``since``.
 
     ``month_of(minute) -> int`` maps a minute to the local month (1-12).
@@ -355,6 +511,8 @@ def learn(params: dict, rows: list[Row], *, volume: float, shower_temp: float, s
     without water). Only showers then teach the shower length; for the flow the heat of taps is taken off, and an
     interval with heat leaving without water (or a bath) is not used. Every draw still keeps standing-loss
     blocks clean.
+    ``draw_flow`` (L/min at ``shower_temp``) is how much a shower draws, for learning the sensor heights; None =
+    the learned flow.
     Returns the result and the last complete cycle (kept for the next run).
     """
     p = ensure_params(copy.deepcopy(params))
@@ -369,7 +527,7 @@ def learn(params: dict, rows: list[Row], *, volume: float, shower_temp: float, s
     draws = find_draws(rows)
     kinds = {d.start: (draw_kind(d) if draw_kind else "shower") for d in draws}
     s: dict[str, list] = {"w20": [], "w30": [], "w45": [], "veff_factor": [], "phi": [], "flow": [],
-                          "loss": [], "duration": [], "head_flow": [], "cold": {}, "cold_pairs": [], "reheat_rate": []}
+                          "loss": [], "duration": [], "head_flow": [], "cold": {}, "cold_pairs": [], "reheat_rate": [], "phi_upper": []}
     full = lambda c: c.bottom_after is None or c.top_after - c.bottom_after <= 2.5
     veff = volume * p["veff_factor"]["v"]
     # An energy meter is only trusted for stratification and flow once its scale against the tank is known;
@@ -395,9 +553,15 @@ def learn(params: dict, rows: list[Row], *, volume: float, shower_temp: float, s
                 w = (avg - c.bottom_before) / (c.top_before - c.bottom_before)
                 key = "w20" if c.bottom_before < 25 else ("w30" if c.bottom_before < 35 else "w45")
                 s[key].append(w)
-        if has_bottom and c.bottom_before is not None and c.top_before <= shower_temp + 5:
+        if has_bottom and c.bottom_before is not None:
             avg = tank_average(p, c.top_before, c.bottom_before)
-            s["phi"].append(min(1.1, max(0.3, (avg - cold) / (shower_temp + 2 - cold))))
+            ratio = (avg - cold) / (shower_temp + 2 - cold)
+            if c.top_before <= shower_temp + 1:
+                s["phi"].append(min(1.1, max(0.3, ratio)))      # the hot water had really run out
+            elif c.top_before >= shower_temp + 2:
+                # a reheat on a timer or a hysteresis while the top could still give a shower: empty lies below
+                # this, so it only caps phi (#14)
+                s["phi_upper"].append(ratio)
 
     # heat drawn between two full reheats against the visible shower minutes -> flow
     chain = sorted({c.start: c for c in ([previous_cycle] if previous_cycle else []) +
@@ -477,6 +641,27 @@ def learn(params: dict, rows: list[Row], *, volume: float, shower_temp: float, s
         p["w"][key] = _blend(p["w"][key], s["w" + key], LIMITS["w"])
     for key in ("veff_factor", "phi", "flow", "loss", "duration", "head_flow", "reheat_rate"):
         p[key] = _blend(p[key], s[key], LIMITS[key])
+    cap = statistics.median(s["phi_upper"]) if len(s["phi_upper"]) >= 2 else None
+    if cap is not None and cap < p["phi"]["v"]:                 # two or more: one odd night does not lower it
+        p["phi"]["v"] = round(max(LIMITS["phi"][0], cap), 4)
+
+    if p.get("geo") and has_bottom:                  # sensor heights from the showers (layer model)
+        geo = p["geo"]
+        by = {r.minute: r for r in rows}
+        for d in draws:
+            if d.start < since or d.minutes < 5 or kinds[d.start] != "shower":
+                continue
+            b = by.get(d.start - 1) or next((r for r in reversed(rows) if r.minute < d.start), None)
+            seg = [r for r in rows if d.start + d.minutes <= r.minute <= d.start + d.minutes + 10]
+            if b is None or b.bottom is None or not seg or b.heating or any(r.heating for r in seg):
+                continue
+            a = min(seg, key=lambda r: tank_average(p, r.top, r.bottom))
+            hot = _hot_before(rows, d.start, p["loss"]["v"])
+            cold = cold_at(d.start)
+            geo["draws"].append([b.top, b.bottom, a.top, a.bottom, round(hot, 2), round(cold, 2), d.minutes,
+                                 round(draw_flow or p["flow"]["v"], 3), shower_temp])
+        geo["draws"] = geo["draws"][-GEO_KEEP:]
+        p["geo"] = learn_geometry(geo, volume)
     prof = PROFILES.get(p.get("profile"), PROFILES["generic"])
     for m, low in s["cold"].items():                 # an upper bound: it only ever lowers the month
         if low < p["cold"][m]:

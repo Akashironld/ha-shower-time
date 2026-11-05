@@ -284,3 +284,20 @@ async def test_a_slow_use_the_bathroom_signal_saw_is_a_shower(hass: HomeAssistan
     await _slow_use(hass, freezer, m)
     assert state(hass, "sensor.hot_water_showers_today") == "1"
     assert m.ledger.log[-1]["seen"] == ["bathroom"] and "rule" not in m.ledger.log[-1]
+
+
+async def test_layer_model_keeps_the_full_tank_reference_through_the_day(hass: HomeAssistant, deps, freezer) -> None:
+    """With the layer model the empty point moves with the tank's state; the 100 % reference must not: it is the
+    minutes of the tank as it was right after the reheat (#14)."""
+    entry = await setup_entry(hass, data={"tank_type": "weheat_wbl200"}, top=52.8, bottom=52.5)
+    m = entry.runtime_data
+    await hass.async_block_till_done(wait_background_tasks=True)
+    m._set_ref(m.estimate.minutes)
+    ref = m.ref_minutes()
+    assert abs(ref - m.estimate.minutes) < 0.01
+    for top, bottom in ((52.7, 40.0), (52.5, 25.0), (48.0, 18.0)):
+        await step(hass, freezer, 15, top, bottom)
+        assert abs(m.ref_minutes() - ref) < 0.01
+    split = m.since_reheat()
+    assert split["reference_minutes"] == round(ref, 1)
+    assert 0 < m.fill_percent() < 60
