@@ -43,7 +43,7 @@ class MinutesSensor(ShowerTimeEntity, SensorEntity):
         "typical_shower_minutes", "full_tank_minutes", "full_reference_minutes", "full_reference_at", "hot_fraction",
         "tank_average", "cold_water_source", "outdoor_average", "flow", "shower_temperature_mode", "head_flow_source",
         "today_showers", "today_minutes", "today_cost", "today_electricity_kwh", "week_showers", "week_minutes",
-        "week_cost", "last", "currency", "hot_water_price_per_kwh", "cop", "cop_heat_pump", "cop_source", "since_reheat", "standing_loss_per_day",
+        "week_cost", "today_baths", "today_bath_cost", "last", "currency", "hot_water_price_per_kwh", "cop", "cop_heat_pump", "cop_source", "since_reheat", "standing_loss_per_day",
         "reheat_full_at", "reheat_one_shower_at", "live_countdown", "low_threshold", "current_shower",
         "hot_water_use", "other_today", "forecast", "learned_at", "observations"})
 

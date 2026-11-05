@@ -7,6 +7,7 @@ was already in the tank. A shower costs the heat it takes out times that blended
 """
 from __future__ import annotations
 
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 import logging
 from typing import TYPE_CHECKING
@@ -22,6 +23,27 @@ if TYPE_CHECKING:
     from .manager import ShowerTimeManager
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _today() -> datetime:
+    return dt_util.now().replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def _since(entries: list[dict], since: datetime) -> list[dict]:
+    key = since.isoformat(timespec="minutes")
+    return [e for e in entries if e["start"] >= key]
+
+
+def _recent(entries: list[dict]) -> list[dict]:
+    """The entries of the last LOG_DAYS days."""
+    cutoff = (dt_util.now() - timedelta(days=LOG_DAYS)).isoformat()
+    return [e for e in entries if e["start"] >= cutoff]
+
+
+def _cost(entries: list[dict]) -> float | None:
+    """What the entries cost together: 0 without entries, None when none of them has a price."""
+    costs = [e["cost"] for e in entries if e.get("cost") is not None]
+    return round(sum(costs), 2) if costs else (0.0 if not entries else None)
 
 
 def parse_price(state) -> tuple[float | None, str]:
@@ -188,101 +210,87 @@ class ShowerLedger:
             return None
         stopped = m.shower_stopped_at()               # a water meter saw the shower stop: the minutes stop too
         minutes = max(0.0, (min(now, stopped or now) - self.session_start).total_seconds() / 60)
-        heat = model.shower_heat_kwh(m.estimate.per_minute, minutes, m.volume)
-        price = self.tank_price
-        if price is None:
-            p, _ = self.price_now(m)
-            price = p / self.cop(m) if p is not None else None
+        e = self._entry(m, self.session_start, "shower", minutes,
+                        model.shower_heat_kwh(m.estimate.per_minute, minutes, m.volume), self.heat_price(m))
         return {"started": dt_util.as_local(self.session_start).isoformat(timespec="seconds"),
-                "minutes": round(minutes, 1), "heat_kwh": round(heat, 2),
-                "electricity_kwh": round(heat / self.cop(m), 2),
-                "cost": round(heat * price, 2) if price is not None else None}
+                **{k: e[k] for k in ("minutes", "heat_kwh", "electricity_kwh", "cost")}}
 
     def bath_ended(self, m: ShowerTimeManager, start: datetime, duration: float, minutes: float,
-                   est: model.Estimate) -> dict:
+                   est: model.Estimate, **extra) -> dict:
         """Log a bath as a session: ``minutes`` is its heat in shower minutes, ``duration`` how long it ran."""
         return self._add(m, start, minutes, est.per_minute, self.tank_price, "live", kind="bath",
-                         duration=round(duration, 1))
+                         duration=round(duration, 1), **extra)
 
     def estimated_ended(self, m: ShowerTimeManager, start: datetime, minutes: float, est: model.Estimate) -> dict:
         """Log a session hidden by a gap in the tank readings: its length follows from the heat it took."""
         return self._add(m, start, minutes, est.per_minute, self.tank_price, "live", estimated=True)
 
+    def heat_price(self, m: ShowerTimeManager) -> float | None:
+        """What a kWh of heat in the tank costs: the price it was heated at, else the electricity price now."""
+        return self.tank_price if self.tank_price is not None else self._price_now(m)
+
+    def _price_now(self, m: ShowerTimeManager) -> float | None:
+        price, cur = self.price_now(m)
+        self.currency = cur or self.currency
+        return price / self.cop(m) if price is not None else None
+
+    def _entry(self, m: ShowerTimeManager, start: datetime, kind: str, minutes: float, heat_kwh: float,
+               price: float | None, **extra) -> dict:
+        return {"start": dt_util.as_local(start).isoformat(timespec="minutes"), "kind": kind,
+                "minutes": round(minutes, 1), "heat_kwh": round(heat_kwh, 2),
+                "electricity_kwh": round(heat_kwh / self.cop(m), 2),
+                "cost": round(heat_kwh * price, 2) if price is not None else None, **extra}
+
     def _add(self, m: ShowerTimeManager, start: datetime, minutes: float, per_minute: float,
              heat_price: float | None, source: str, kind: str = "shower", **extra) -> dict:
-        heat = model.shower_heat_kwh(per_minute, minutes, m.volume)
-        cop = self.cop(m)
-        if heat_price is None:
-            price, cur = self.price_now(m)
-            heat_price = price / cop if price is not None else None
-            self.currency = cur or self.currency
-        entry = {"start": dt_util.as_local(start).isoformat(timespec="minutes"), "minutes": round(minutes, 1),
-                 "heat_kwh": round(heat, 2), "electricity_kwh": round(heat / cop, 2),
-                 "cost": round(heat * heat_price, 2) if heat_price is not None else None, "source": source,
-                 "kind": kind, **extra}
-        self.log.append(entry)
-        self.log.sort(key=lambda e: e["start"])
-        cutoff = (dt_util.now() - timedelta(days=LOG_DAYS)).isoformat()
-        self.log = [e for e in self.log if e["start"] >= cutoff]
-        if source == "live":
+        price = heat_price if heat_price is not None else self._price_now(m)
+        entry = self._entry(m, start, kind, minutes, model.shower_heat_kwh(per_minute, minutes, m.volume), price,
+                            source=source, **extra)
+        self.log = _recent(sorted(self.log + [entry], key=lambda e: e["start"]))
+        if source == "live" and kind == "shower":        # a bath is other hot water in the totals (#10)
             t = self.totals
             t["showers"] += 1
-            t["minutes"] = round(t["minutes"] + entry["minutes"], 1)
-            t["heat_kwh"] = round(t["heat_kwh"] + entry["heat_kwh"], 3)
-            t["electricity_kwh"] = round(t["electricity_kwh"] + entry["electricity_kwh"], 3)
-            if entry["cost"] is not None:
-                t["cost"] = round(t["cost"] + entry["cost"], 2)
+            for key, digits in (("minutes", 1), ("heat_kwh", 3), ("electricity_kwh", 3), ("cost", 2)):
+                if entry[key] is not None:
+                    t[key] = round(t[key] + entry[key], digits)
         m.request_save()
         return entry
 
     def other_ended(self, m: ShowerTimeManager, kind: str, start: datetime, minutes: float, heat_kwh: float,
                     **extra) -> dict:
-        """Log hot water that was not a shower (washing up, a tap, a bath or bucket), with what it cost."""
-        cop = self.cop(m)
-        price = self.tank_price
-        if price is None:
-            p, cur = self.price_now(m)
-            price = p / cop if p is not None else None
-            self.currency = cur or self.currency
-        entry = {"start": dt_util.as_local(start).isoformat(timespec="minutes"), "kind": kind,
-                 "minutes": round(minutes, 1), "heat_kwh": round(heat_kwh, 2),
-                 "electricity_kwh": round(heat_kwh / cop, 2),
-                 "cost": round(heat_kwh * price, 2) if price is not None else None, **extra}
-        cutoff = (dt_util.now() - timedelta(days=LOG_DAYS)).isoformat()
-        self.other = [e for e in self.other if e["start"] >= cutoff] + [entry]
+        """Log hot water that was not a shower (washing up, a tap, a bucket), with what it cost."""
+        entry = self._entry(m, start, kind, minutes, heat_kwh, self.heat_price(m), **extra)
+        self.other = _recent(self.other) + [entry]
         m.request_save()
         return entry
 
     def other_today(self) -> dict:
-        today = dt_util.now().replace(hour=0, minute=0, second=0, microsecond=0).isoformat(timespec="minutes")
-        t = [e for e in self.other if e["start"] >= today]
-        costs = [e["cost"] for e in t if e.get("cost") is not None]
-        kinds: dict[str, int] = {}
-        for e in t:
-            kinds[e["kind"]] = kinds.get(e["kind"], 0) + 1
+        """Today's hot water that was not a shower: washing up, taps, buckets and baths."""
+        t = _since(self.other + self.baths(), _today())
         return {"count": len(t), "heat_kwh": round(sum(e["heat_kwh"] for e in t), 2),
-                "electricity_kwh": round(sum(e["electricity_kwh"] for e in t), 2),
-                "cost": round(sum(costs), 2) if costs else (0.0 if not t else None), "by_kind": kinds}
+                "electricity_kwh": round(sum(e["electricity_kwh"] for e in t), 2), "cost": _cost(t),
+                "by_kind": dict(Counter(e["kind"] for e in t))}
 
     # ------------------------------------------------------------------ summaries
-    def _since(self, since: datetime) -> list[dict]:
-        key = since.isoformat(timespec="minutes")
-        return [e for e in self.log if e["start"] >= key]
+    def showers(self) -> list[dict]:
+        """The showers in the log. A bath is logged there too, as a session (the habits count its heat), but it is
+        no shower: not in the shower counts, the last shower or the minutes showered (#10)."""
+        return [e for e in self.log if e.get("kind", "shower") != "bath"]
+
+    def baths(self) -> list[dict]:
+        return [e for e in self.log if e.get("kind") == "bath"]
 
     def summary(self) -> dict:
-        now = dt_util.now()
-        today = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        week = today - timedelta(days=today.weekday())
-        t, w = self._since(today), self._since(week)
-        costs_t = [e["cost"] for e in t if e.get("cost") is not None]
-        costs_w = [e["cost"] for e in w if e.get("cost") is not None]
+        today = _today()
+        showers = self.showers()
+        t, w = _since(showers, today), _since(showers, today - timedelta(days=today.weekday()))
+        baths = _since(self.baths(), today)
         return {
-            "today_showers": len(t), "today_minutes": round(sum(e["minutes"] for e in t)),
-            "today_cost": round(sum(costs_t), 2) if costs_t else (0.0 if not t else None),
+            "today_showers": len(t), "today_minutes": round(sum(e["minutes"] for e in t)), "today_cost": _cost(t),
             "today_electricity_kwh": round(sum(e["electricity_kwh"] for e in t), 2),
-            "week_showers": len(w), "week_minutes": round(sum(e["minutes"] for e in w)),
-            "week_cost": round(sum(costs_w), 2) if costs_w else (0.0 if not w else None),
-            "last": self.log[-1] if self.log else None,
+            "week_showers": len(w), "week_minutes": round(sum(e["minutes"] for e in w)), "week_cost": _cost(w),
+            "today_baths": len(baths), "today_bath_cost": _cost(baths),
+            "last": showers[-1] if showers else None,
         }
 
     def needs_reprice(self, m: ShowerTimeManager) -> bool:

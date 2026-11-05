@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 from homeassistant.core import HomeAssistant
+from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import async_fire_time_changed
 
 from custom_components.shower_time import model
@@ -105,14 +106,17 @@ async def test_bathroom_signal_recognises_a_shower_at_once(hass: HomeAssistant, 
     assert started["event_type"] == "shower_started" and started["bathroom_signal"] is True
 
 
-async def test_a_bath_counts_as_a_session_even_with_the_bathroom_signal(hass: HomeAssistant, deps, freezer) -> None:
+async def test_a_bath_is_a_session_but_no_shower(hass: HomeAssistant, deps, freezer) -> None:
     """The bathroom signal makes a bath look like a shower at first; its pace (far above a shower's) makes it a
-    fill while it runs, and once done a session of its own: counted like a shower, in shower minutes of heat."""
+    fill while it runs, and once done a session of its own, in shower minutes of heat. It is no shower (#10): not
+    in the shower counts or the minutes showered, but other hot water, as it was while it ran."""
     hass.states.async_set(HUMIDITY, "60", {"unit_of_measurement": "%", "device_class": "humidity"})
     entry = await setup_entry(hass, {"bathroom_sensor": HUMIDITY})
     m = entry.runtime_data
     per_minute = m.estimate.per_minute
     await start_reading(hass, freezer)
+    await hass.async_block_till_done(wait_background_tasks=True)   # the startup's own reference is set first
+    m._set_ref(m.estimate.minutes)                           # the tank is full: "since reheat" starts here
     freezer.tick(timedelta(minutes=1))
     hass.states.async_set(HUMIDITY, "66", {"unit_of_measurement": "%", "device_class": "humidity"})
     await hass.async_block_till_done()
@@ -122,16 +126,26 @@ async def test_a_bath_counts_as_a_session_even_with_the_bathroom_signal(hass: Ho
         await step(hass, freezer, 1, 55.0, bottom)
     assert hass.states.get(IN_USE).attributes["kind"] == "fill"
     assert state(hass, SHOWERING) == "off"
+    other_running = m.since_reheat()["other_minutes"]
+    assert other_running > 0                                   # while it runs: tap / bucket
     await wait(hass, freezer, 6)
-    assert state(hass, "sensor.hot_water_showers_today") == "1"
+    assert state(hass, "sensor.hot_water_showers_today") == "0"
+    assert state(hass, "sensor.hot_water_last_shower") == "unknown"
     last = m.ledger.log[-1]
     assert last["kind"] == "bath" and last["minutes"] > last["duration"]   # more heat than its minutes of running
-    assert float(state(hass, "sensor.hot_water_other_hot_water_today")) == 0
+    other = hass.states.get("sensor.hot_water_other_hot_water_today")
+    assert float(other.state) == last["heat_kwh"] and other.attributes["by_kind"] == {"bath": 1}
+    assert m.ledger.totals["showers"] == 0
     assert hass.states.get(EVENT).attributes["event_type"] == "shower_ended"
     assert hass.states.get(EVENT).attributes["kind"] == "bath"
-    split = m.since_reheat()
-    if split is not None:                                      # the bath is not cooling
-        assert split["showered_minutes"] > 0 and split["other_minutes"] == 0
+    split = m.since_reheat()                                   # still other hot water once done, not showered
+    assert split["showered_minutes"] == 0 and split["other_minutes"] >= 0.95 * other_running
+    assert split["bath_minutes"] == split["other_minutes"]
+    attrs = hass.states.get("sensor.hot_water_shower_time").attributes
+    assert attrs["today_baths"] == 1 and attrs["last"] is None         # the card: "+ bath" under today's showers
+    assert last["drawn"] > 0 and last["seen"] == ["bathroom"]           # why it counted, for the diagnostics
+    # one showers after the other, not after a bath: a use right after it is no shower by habit
+    assert not m._shower_time_of_day(dt_util.utcnow())
 
 
 async def test_a_bucket_stays_other_hot_water(hass: HomeAssistant, entry, freezer) -> None:

@@ -257,10 +257,12 @@ async def test_washing_up_in_bursts_after_a_shower_is_no_shower(hass: HomeAssist
     for flow in (5.0, 0.0, 6.0, 0.0, 5.0, 0.0, 6.0, 0.0):    # the tap on and off
         bottom -= 1.2
         await flow_minute(hass, freezer, flow, bottom)
+        # the humidity of the shower before does not make it a shower while it runs either
+        assert entry.runtime_data.use_kind() != "shower"
     await wait(hass, freezer, 7)
     assert state(hass, "sensor.hot_water_showers_today") == "0"
     other = entry.runtime_data.ledger.other
-    assert other[-1]["kind"] == "tap" and other[-1]["rule"] == "water" and other[-1]["drawn"] >= 1.8
+    assert other[-1]["kind"] == "tap" and other[-1]["drawn"] >= 1.8
 
 
 async def test_a_metered_shower_lasts_as_long_as_the_water_ran(hass: HomeAssistant, deps, freezer) -> None:
@@ -315,3 +317,73 @@ async def test_a_tap_after_a_metered_shower_is_a_tap_and_the_shower_stops_counti
     shower, tap = m.ledger.log[-1], m.ledger.other[-1]
     assert tap["kind"] == "tap" and tap["rule"] == "tail" and tap["minutes"] == 3.0
     assert abs(tap["drawn"] / (shower["drawn"] + tap["drawn"]) - 7.0 / 59.8) < 0.01   # 7 of 59.8 litres
+
+
+async def flow_and_tank(hass: HomeAssistant, freezer, flow: float, reading: tuple[float, float] | None) -> None:
+    freezer.tick(timedelta(minutes=1))
+    hass.states.async_set(FLOW, str(flow), FLOW_ATTRS)
+    if reading is not None:
+        tank(hass, *reading)
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+
+
+# #10, 4 Nov 19:58: washing up after a bath, the tank nearly empty, read every 2 minutes; the meter per minute
+LOW_TANK_WASHING_UP = [(2.71, None), (6.65, (58.0, 22.6)), (2.51, None), (5.5, (56.8, 21.0)), (5.09, None),
+                       (4.82, (55.3, 20.1)), (4.12, None), (0.0, (53.9, 19.8)), (0.0, None), (2.6, (52.5, 19.5)),
+                       (0.0, None), (3.35, (51.4, 19.3)), (0.0, None), (0.0, (50.3, 19.2)), (0.0, None),
+                       (1.49, (49.7, 19.1)), (0.0, None)]
+
+
+async def test_washing_up_in_a_nearly_empty_tank_is_a_tap(hass: HomeAssistant, deps, freezer) -> None:
+    """#10: in a nearly empty tank the bottom is down near cold water and only the top falls. To the tank sensors
+    that is heat leaving through the coil, and the heat and pace of a shower. The water meter saw the water (on
+    and off, at most 4 minutes at a shower's flow) and the bathroom signal nothing: a tap with its heat, also at
+    the hour this household showers. It was lost as "cooled"."""
+    hass.states.async_set(FLOW, "0", FLOW_ATTRS)
+    hass.states.async_set(HUMIDITY, "58", HUMIDITY_ATTRS)
+    entry = await setup_entry(hass, {"water_sensor": FLOW, "bathroom_sensor": HUMIDITY}, top=59.4, bottom=23.7)
+    m = entry.runtime_data
+    for days in (1, 2):                                       # the evening shower at this time of day
+        m.ledger.log.append({"start": (dt_util.now() - timedelta(days=days)).isoformat(timespec="minutes"),
+                             "minutes": 10.0, "heat_kwh": 1.5, "electricity_kwh": 0.5, "cost": 0.15,
+                             "source": "live", "kind": "shower"})
+    freezer.tick(timedelta(minutes=30))
+    tank(hass, 59.3, 23.6)
+    await hass.async_block_till_done(wait_background_tasks=True)   # the startup's own reference is set first
+    m._set_ref(m.estimate.minutes)
+    left = m.estimate.minutes
+    for i, (flow, reading) in enumerate(LOW_TANK_WASHING_UP):
+        await flow_and_tank(hass, freezer, flow, reading)
+        assert m.use_kind() != "shower"
+        if i >= 3:                                            # the meter saw enough water: no coil after all
+            assert m.use_kind() in (None, "unknown")
+    await wait(hass, freezer, 7)
+    assert m.coil_events == 0 and not m.showering
+    assert state(hass, "sensor.hot_water_showers_today") == "0"
+    tap = m.ledger.other[-1]
+    assert tap["kind"] == "tap" and tap["rule"] == "unseen" and tap["drawn"] > 5
+    split = m.since_reheat()
+    assert split["other_minutes"] >= 0.9 * (left - split["remaining_minutes"]) and split["cooling_minutes"] < 0.5
+
+
+async def test_a_shower_the_bathroom_signal_missed_counts_by_its_flow(hass: HomeAssistant, deps, freezer) -> None:
+    """With a bathroom signal and a water meter, a shower the bathroom signal did not see still counts once the
+    meter saw a shower's flow for longer than a kitchen tap runs."""
+    hass.states.async_set(FLOW, "0", FLOW_ATTRS)
+    hass.states.async_set(HUMIDITY, "58", HUMIDITY_ATTRS)
+    entry = await setup_entry(hass, {"water_sensor": FLOW, "bathroom_sensor": HUMIDITY})
+    m = entry.runtime_data
+    freezer.tick(timedelta(minutes=30))
+    tank(hass, 55.0, 50.0)
+    await hass.async_block_till_done()
+    bottom = 50.0
+    for i in range(11):                                       # 8 minutes of 6.6 L/min, the tank falls for 11
+        bottom -= 2.0 if i < 8 else 0.5
+        await flow_and_tank(hass, freezer, 6.6 if i < 8 else 0.0, (55.0, bottom))
+        if i == 3:
+            assert m.use_kind() == "unknown"                  # 4 minutes: could still be the kitchen tap
+    assert m.use_kind() == "shower"
+    await wait(hass, freezer, 7)
+    assert state(hass, "sensor.hot_water_showers_today") == "1"
+    assert state(hass, "sensor.hot_water_last_shower") == "8"

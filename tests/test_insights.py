@@ -287,6 +287,49 @@ def test_water_running_is_never_a_coil():
     assert s.kind != "coil"
 
 
+# washing up in a nearly empty tank (#10, 4 Nov, read every 2 minutes): the bottom is down near cold water, so the
+# top falls faster than the bottom, as when heat leaves through the coil
+LOW_TANK_START = (59.3, 23.6)
+LOW_TANK_TAP = [(2, 58.0, 22.6), (4, 56.8, 21.0), (6, 55.3, 20.1), (8, 53.9, 19.8), (10, 52.5, 19.5)]
+
+
+def low_tank_use(water_ran=lambda s, top: False, heat_confirms=True, bath=False):
+    p = model.new_params("weheat_200")
+    s = insights.UseSession(start=0.0, start_avg=model.tank_average(p, *LOW_TANK_START),
+                            start_top=LOW_TANK_START[0], start_bottom=LOW_TANK_START[1])
+    for t, top, bottom in LOW_TANK_TAP:
+        s.update(t, model.tank_average(p, top, bottom), bath, top=top, bottom=bottom, cold=14.9,
+                 water_ran=water_ran(s, top), heat_confirms=heat_confirms)
+    return s
+
+
+def test_water_on_the_meter_makes_a_low_tank_use_no_coil():
+    assert low_tank_use().kind == "coil"                          # the tank sensors alone: heat leaving without water
+    s = low_tank_use(lambda s, top: insights.water_explains(12.0 + 4 * s.drawn, s.drawn, 200, top, 14.9))
+    assert s.kind != "coil" and s.drawn > 4
+
+
+def test_water_explains_the_heat_only_with_enough_water():
+    assert insights.water_explains(39.0, 6.45, 200, 49.7, 14.9)   # the washing up: 39 L for 37 L of hot water
+    assert not insights.water_explains(0.5, 0.3, 200, 55.0, 15.0)  # a drip is no water
+    assert not insights.water_explains(8.0, 1.0, 200, 55.0, 15.0)  # a toilet's flush while the heat pump starts
+    assert not insights.water_explains(12.0, 6.0, 200, 40.0, 17.0)  # ... or the coil took 52 L worth of heat
+    assert insights.water_explains(12.0, 0.0, 200, 55.0, 15.0)     # the first reading of a use: nothing left yet
+
+
+def test_a_coil_verdict_gives_way_once_the_meter_saw_the_water():
+    # the meter reports per minute: at the first readings it has seen too little water yet
+    s = low_tank_use(lambda s, top: s.drawn > 2.5)
+    assert s.kind != "coil"
+    assert low_tank_use(lambda s, top: insights.water_explains(8.0, s.drawn, 200, top, 14.9)).kind == "coil"  # a flush
+
+
+def test_without_the_heat_confirming_it_is_no_shower_yet():
+    s = low_tank_use(lambda s, top: True, heat_confirms=False, bath=True)
+    assert s.kind == "unknown" and s.final(10, 40) == "tap"       # a shower's heat, but nothing else says shower
+    assert low_tank_use(lambda s, top: True, bath=True).kind == "shower"
+
+
 def test_confirm_threshold_is_learned_between_taps_and_showers():
     assert insights.learn_confirm_k([7, 6, 12], [0.3]) == insights.SHOWER_CONFIRM_K       # too few yet
     k = insights.learn_confirm_k([3.3, 6.5, 12.4, 6.5, 12.8, 3.2, 6.6, 5.5], [0.25, 0.76, 0.3, 0.24, 0.34, 0.3])

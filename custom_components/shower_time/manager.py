@@ -70,6 +70,25 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 
+def _at(minute: float) -> datetime:
+    """A time in minutes since the epoch (how the signals and the history count time) as a UTC datetime."""
+    return datetime.fromtimestamp(minute * 60, timezone.utc)
+
+
+def _local(minute: float) -> datetime:
+    return dt_util.as_local(_at(minute))
+
+
+def _now_min() -> float:
+    """Now, in minutes since the epoch."""
+    return dt_util.utcnow().timestamp() / 60
+
+
+def _longest(runs: list[tuple[float, float]] | None) -> float | None:
+    """Minutes of the longest of the water meter's shower-like flows; None: the meter said nothing."""
+    return None if runs is None else max((b - a for a, b in runs), default=0.0)
+
+
 def _num(state) -> float | None:
     if state is None or state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN, None, ""):
         return None
@@ -155,7 +174,7 @@ class ShowerTimeManager:
         # changed (minutes), when a tank sensor was unavailable, and when this run started
         self._temp_seen: list[float] = []
         self._unavailable_at: float | None = None
-        self._started_at = dt_util.utcnow().timestamp() / 60
+        self._started_at = _now_min()
         self._gap: dict | None = None               # a gap being closed: the readings before it, the last change
         self._listeners: list[Callable[[], None]] = []
         self._event_listeners: list[Callable[[str, dict], None]] = []
@@ -244,6 +263,10 @@ class ShowerTimeManager:
         self._unsubs.clear()
 
     @callback
+    def _notify(self) -> None:
+        for cb in list(self._listeners):
+            cb()
+
     def add_listener(self, cb: Callable[[], None]) -> Callable[[], None]:
         self._listeners.append(cb)
         return lambda: self._listeners.remove(cb)
@@ -258,6 +281,9 @@ class ShowerTimeManager:
     def _fire(self, kind: str, data: dict) -> None:
         for cb in list(self._event_listeners):
             cb(kind, data)
+
+    def _fire_entry(self, kind: str, entry: dict) -> None:
+        self._fire(kind, {**entry, "currency": self.ledger.currency or None})
 
     def _is_f(self, entity: str | None) -> bool:
         st = self.hass.states.get(entity) if entity else None
@@ -297,18 +323,18 @@ class ShowerTimeManager:
         once, so the half minute before now is left out)."""
         cut = now.timestamp() / 60 - 0.5
         seen = [t for t in self._temp_seen if t <= cut]
-        return datetime.fromtimestamp(max(seen) * 60, timezone.utc) if seen else None
+        return _at(max(seen)) if seen else None
 
     @callback
     def _temp_changed(self, _event: Event) -> None:
-        self._temp_seen = (self._temp_seen + [dt_util.utcnow().timestamp() / 60])[-50:]
+        self._temp_seen = (self._temp_seen + [_now_min()])[-50:]
 
     @callback
     def update(self) -> None:
         self.top_value = _temp(self.hass.states.get(self.top), self._is_f(self.top))
         self.bottom_value = _temp(self.hass.states.get(self.bottom), self._is_f(self.bottom)) if self.bottom else None
         if self.top_value is None or (self.bottom and self.bottom_value is None):
-            self._unavailable_at = dt_util.utcnow().timestamp() / 60
+            self._unavailable_at = _now_min()
         if self.heating:
             st = self.hass.states.get(self.heating)
             self.reheating = bool(st and str(st.state).lower() in self.heating_states)
@@ -328,8 +354,7 @@ class ShowerTimeManager:
             self._track_full(self.estimate.minutes)
             self.ledger.on_estimate(self, self.estimate)
             self._classify_use()
-        for cb in list(self._listeners):
-            cb()
+        self._notify()
 
     # ------------------------------------------------------------------ live countdown
     LIVE_MAX_MINUTES = 4.0          # never count down further than this without a new reading
@@ -379,10 +404,10 @@ class ShowerTimeManager:
                 # between the two readings, since a fan or light may be on for other reasons
                 water = self.water_signal.rose_at if self.water_signal is not None and self.water_active() else None
                 bath = self.bath_signal.rose_at if self.bath_signal is not None and self.bath_active() else None
-                if water is not None and now - timedelta(minutes=15) <= datetime.fromtimestamp(water * 60, timezone.utc) <= now:
-                    self.ledger.session_start = datetime.fromtimestamp(water * 60, timezone.utc)
+                if water is not None and now - timedelta(minutes=15) <= _at(water) <= now:
+                    self.ledger.session_start = _at(water)
                 elif bath is not None and fall_from is not None:
-                    rose_at = datetime.fromtimestamp(bath * 60, timezone.utc)
+                    rose_at = _at(bath)
                     if fall_from <= rose_at <= now:
                         self.ledger.session_start = rose_at
                 self.use = insights.UseSession(
@@ -407,98 +432,84 @@ class ShowerTimeManager:
             self.live_offset = 0.0
         elif self._sensor_at is not None:
             self.live_offset = min(self.LIVE_MAX_MINUTES, (now - self._sensor_at).total_seconds() / 60)
-        for cb in list(self._listeners):
-            cb()
+        self._notify()
 
     @callback
     def _end_shower(self) -> None:
         """A hot water use ended: log it as a shower or as other hot water use (or ignore it: no water)."""
         self.showering = False
-        use, start = self.use, self.ledger.session_start
-        self.use = None
-        end = self._last_fall_at
-        if self.water_signal is not None and self.water_signal.last_flow_at is not None and start and end:
-            flowed = datetime.fromtimestamp(self.water_signal.last_flow_at * 60, timezone.utc)
-            if end < flowed <= dt_util.utcnow():          # the meter saw the water running until later
-                end = flowed
-        if start and end:
-            minutes = (end - start).total_seconds() / 60
-            kind = use.final(minutes, MAX_SHOWER_MINUTES) if use else "tap"
-            # a water meter that was reading during the use is the best witness: a shower flows for minutes without
-            # a break, washing up comes in bursts (#10). None: no meter, or it said nothing during the use
-            runs = self._meter_runs(use, end.timestamp() / 60)
-            metered = runs is not None and max((e - s for s, e in runs), default=0.0) >= insights.WATER_SHOWER_RUN
-            tail = None                            # (start, end, K) of a tap used right after a metered shower
-            drawn = use.drawn if use is not None else 0.0
-            no_shower_flow = runs is not None and not metered
-            signal = None
-            if use is not None and (self.bath_signal is not None or self.water_signal is not None):
-                # a humidity sensor can rise after the water stopped
-                signal = use.bath_seen or use.water_seen or self.signal_active()
-            by_habit = kind == "tap" and use is not None and not no_shower_flow and insights.short_shower(
-                use.drawn, minutes, self._shower_time_of_day(start), signal)
-            if by_habit:
-                kind = "shower"                    # short, but at the hour this household showers
-            bathroom = use is not None and self.bath_signal is not None and (use.bath_seen or self.bath_active())
-            # only a bathroom signal that rose with this use says it was a shower: one from before is the humidity
-            # (or fan) of an earlier shower, still on while the dishes are done
-            fresh = (bathroom and self.bath_signal.rose_at is not None
-                     and self.bath_signal.rose_at >= use.start - insights.BATH_LEAD_MINUTES)
-            slow = (kind == "shower" and not fresh and not metered and use is not None and self.estimate is not None
-                    and insights.too_slow_for_a_shower(use.drawn, minutes, self.estimate.per_minute, use.start_bottom,
-                                                       self.estimate.cold, use.readings))
-            if slow:
-                kind = "tap"                       # heat enough, but at a fraction of a shower's pace: washing up
-            dry = kind == "shower" and no_shower_flow
-            if dry:
-                kind = "tap"                       # the meter was reading and never saw a shower's flow
-            elif kind == "shower" and metered:
-                # the shower runs from its first long flow to its last: short bursts after it are a tap, used while
-                # the tank still falls (it reports minutes late) and so taken into the same use (#10)
-                long = [r for r in runs if r[1] - r[0] >= insights.WATER_SHOWER_RUN]
-                began, stopped = long[0][0], long[-1][1]
-                used_until = end.timestamp() / 60
-                ws = self.water_signal
-                after = ws.water_times(stopped + insights.WATER_TAIL_GAP_MINUTES, used_until)
-                tail_l = ws.litres_between(stopped + insights.WATER_TAIL_GAP_MINUTES, used_until)
-                shower_l = ws.litres_between(began, stopped)
-                if after is not None and tail_l >= insights.WATER_TAIL_LITRES and shower_l > 0:
-                    tail_k = use.drawn * tail_l / (tail_l + shower_l)       # its share of the heat, by the litres
-                    tail, drawn = (after[0], after[1], tail_k), use.drawn - tail_k
-                ran = sum(max(0.0, min(e, stopped) - max(s, use.start)) for s, e in runs)
-                # the tank reports late: the minutes the water really ran (a meter total misses the first minute
-                # after a quiet spell, so only a clear difference counts)
-                if ran + insights.WATER_GAP_MINUTES < minutes:
-                    minutes, end = ran, start + timedelta(minutes=ran)
-            # why it counts as what it is (for the diagnostics): the heat that left, the signals that saw it
-            why = {} if use is None else {"drawn": round(drawn, 2), "seen": [
-                s for s, on in (("bathroom", bathroom), ("water_meter", use.water_seen or metered)) if on]}
-            if by_habit or slow or dry:
-                why["rule"] = "slow" if slow else "water" if dry else "habit"
-            if kind == "shower":
-                entry = self.ledger.shower_ended(self, start, end, self.estimate, min_minutes=2.0, extra=why)
-                if entry is not None:
-                    self._remember_use("shower", drawn)
-                    if minutes >= MIN_SHOWER_MINUTES:           # the pace of a whole shower: tells baths apart
-                        self._remember_use("shower_rate", drawn / minutes)
-                    self._fire("shower_ended", {**entry, "currency": self.ledger.currency or None})
-                if tail is not None and tail[2] >= 0.15:
-                    entry = self.ledger.other_ended(
-                        self, "tap", datetime.fromtimestamp(tail[0] * 60, timezone.utc), tail[1] - tail[0],
-                        tail[2] * self.volume * model.CP, drawn=round(tail[2], 2), seen=["water_meter"], rule="tail")
-                    self._fire("hot_water_used", {**entry, "currency": self.ledger.currency or None})
-            elif (kind == "fill" and self.bathtub and use is not None and self.estimate is not None and self.estimate.per_minute > 0
-                  and use.drawn / self.estimate.per_minute >= insights.BATH_SHOWER_MINUTES):
-                entry = self.ledger.bath_ended(self, start, minutes, use.drawn / self.estimate.per_minute, self.estimate)
-                self._fire("shower_ended", {**entry, "currency": self.ledger.currency or None})
-            elif kind == "coil":
-                self.coil_events += 1
-            elif use is not None and use.drawn >= 0.15:   # below that nothing measurable left the tank
-                if kind == "tap" and not slow and not dry: # a slow or dry use says nothing about a tap's heat
-                    self._remember_use("tap", use.drawn)
-                entry = self.ledger.other_ended(self, kind, start, minutes, use.drawn * self.volume * model.CP, **why)
-                self._fire("hot_water_used", {**entry, "currency": self.ledger.currency or None})
-        self.ledger.session_start = None
+        use, start, end = self.use, self.ledger.session_start, self._last_fall_at
+        e, ws = self.estimate, self.water_signal
+        self.use = self.ledger.session_start = None
+        if use is None or not start or not end:
+            return
+        if ws is not None and ws.last_flow_at is not None and end < _at(ws.last_flow_at) <= dt_util.utcnow():
+            end = _at(ws.last_flow_at)                     # the meter saw the water running until later
+        minutes = (end - start).total_seconds() / 60
+        kind, rule = use.final(minutes, MAX_SHOWER_MINUTES), None
+        # a water meter that was reading during the use is the best witness: a shower flows for minutes without a
+        # break, washing up comes in bursts (#10). None: no meter, or it said nothing during the use
+        runs = self._meter_runs(use, end.timestamp() / 60)
+        longest = _longest(runs)
+        metered = longest is not None and longest >= insights.WATER_SHOWER_RUN
+        no_shower_flow = longest is not None and not metered
+        # with a signal, a short shower must have been seen by it (a humidity sensor can rise after the water stopped)
+        signal = (use.bath_seen or use.water_seen or self.signal_active()) if self.bath_signal or ws else None
+        if kind == "tap" and not no_shower_flow and insights.short_shower(
+                use.drawn, minutes, self._shower_time_of_day(start), signal):
+            kind, rule = "shower", "habit"                 # short, but at the hour this household showers
+        fresh = self._fresh_bathroom(use)
+        if kind == "shower" and not fresh and not metered and e is not None and insights.too_slow_for_a_shower(
+                use.drawn, minutes, e.per_minute, use.start_bottom, e.cold, use.readings):
+            kind, rule = "tap", "slow"                     # heat enough, but at a fraction of a shower's pace
+        if kind == "shower" and no_shower_flow:
+            kind, rule = "tap", "water"                    # the meter was reading and never saw a shower's flow
+        elif kind == "shower" and not fresh and not self._heat_alone_confirms(longest):
+            kind, rule = "tap", "unseen"                   # nor the bathroom, nor a shower's flow long enough (#10)
+        tail, drawn = None, use.drawn                      # tail: (start, end, K) of a tap right after the shower
+        if kind == "shower" and metered:
+            # the shower runs from its first long flow to its last: short bursts after it are a tap, used while the
+            # tank still falls (it reports minutes late) and so taken into the same use (#10)
+            long = [r for r in runs if r[1] - r[0] >= insights.WATER_SHOWER_RUN]
+            began, stopped = long[0][0], long[-1][1]
+            after_from, until = stopped + insights.WATER_TAIL_GAP_MINUTES, end.timestamp() / 60
+            after, tail_l = ws.water_times(after_from, until), ws.litres_between(after_from, until)
+            shower_l = ws.litres_between(began, stopped)
+            if after is not None and tail_l >= insights.WATER_TAIL_LITRES and shower_l > 0:
+                tail_k = use.drawn * tail_l / (tail_l + shower_l)   # its share of the heat, by the litres
+                tail, drawn = (*after, tail_k), use.drawn - tail_k
+            # the tank reports late: the minutes the water really ran (a meter total misses the first minute after a
+            # quiet spell, so only a clear difference counts)
+            ran = sum(max(0.0, min(b, stopped) - max(a, use.start)) for a, b in runs)
+            if ran + insights.WATER_GAP_MINUTES < minutes:
+                minutes, end = ran, start + timedelta(minutes=ran)
+        # why it counts as what it is (for the diagnostics): the heat that left, the signals that saw it, the rule
+        bathroom = self.bath_signal is not None and (use.bath_seen or self.bath_active())
+        why = {"drawn": round(drawn, 2), "seen": [s for s, on in (("bathroom", bathroom),
+                                                                  ("water_meter", use.water_seen or metered)) if on],
+               **({"rule": rule} if rule else {})}
+        if kind == "shower":
+            entry = self.ledger.shower_ended(self, start, end, e, min_minutes=2.0, extra=why)
+            if entry is not None:
+                self._remember_use("shower", drawn)
+                if minutes >= MIN_SHOWER_MINUTES:          # the pace of a whole shower: tells baths apart
+                    self._remember_use("shower_rate", drawn / minutes)
+                self._fire_entry("shower_ended", entry)
+            if tail is not None and tail[2] >= insights.MIN_USE_K:
+                self._fire_entry("hot_water_used", self.ledger.other_ended(
+                    self, "tap", _at(tail[0]), tail[1] - tail[0], tail[2] * self.volume * model.CP,
+                    drawn=round(tail[2], 2), seen=["water_meter"], rule="tail"))
+        elif (kind == "fill" and self.bathtub and e is not None and e.per_minute > 0
+              and use.drawn / e.per_minute >= insights.BATH_SHOWER_MINUTES):
+            self._fire_entry("shower_ended",
+                             self.ledger.bath_ended(self, start, minutes, use.drawn / e.per_minute, e, **why))
+        elif kind == "coil":
+            self.coil_events += 1
+        elif use.drawn >= insights.MIN_USE_K:              # below that nothing measurable left the tank
+            if kind == "tap" and rule is None:             # a slow, dry or unseen use says nothing about a tap's heat
+                self._remember_use("tap", use.drawn)
+            self._fire_entry("hot_water_used", self.ledger.other_ended(
+                self, kind, start, minutes, use.drawn * self.volume * model.CP, **why))
 
     def _meter_runs(self, use: insights.UseSession | None, until: float) -> list[tuple[float, float]] | None:
         """The shower-like flows the water meter saw during a use, or None: no meter, or it said nothing since."""
@@ -507,19 +518,41 @@ class ShowerTimeManager:
             return None
         return ws.runs_between(use.start - insights.WATER_LEAD_MINUTES, until)
 
+    def _fresh_bathroom(self, use: insights.UseSession | None) -> bool:
+        """The bathroom signal rose with this use. Only that says it was a shower: one that rose before is the
+        humidity (or fan) of an earlier shower, still on while the dishes are done."""
+        sig = self.bath_signal
+        return (use is not None and sig is not None and (use.bath_seen or self.bath_active())
+                and sig.rose_at is not None and sig.rose_at >= use.start - insights.BATH_LEAD_MINUTES)
+
+    def _heat_alone_confirms(self, longest: float | None) -> bool:
+        """May a shower's heat make a use a shower without the bathroom signal? Not with a bathroom signal and a
+        water meter that read during the use (``longest``: its longest shower-like flow) but saw no shower's flow
+        of UNSEEN_SHOWER_RUN minutes: the kitchen tap then."""
+        return self.bath_signal is None or longest is None or longest >= insights.UNSEEN_SHOWER_RUN
+
+    def _water_ran(self) -> bool:
+        """The water meter saw the water for the heat the use going on took so far (any flow: a tap goes on and
+        off): it is no coil."""
+        ws, use, e = self.water_signal, self.use, self.estimate
+        if ws is None or use is None or e is None:
+            return False
+        litres = ws.litres_between(use.start - insights.WATER_LEAD_MINUTES, _now_min())
+        return insights.water_explains(litres, use.drawn, self.volume, self.top_value, e.cold)
+
     def shower_stopped_at(self) -> datetime | None:
         """With a water meter: when the shower going on stopped running, while the tank still falls (it reports
         minutes late, and a tap may follow). None while the water runs, or without a meter that saw the shower."""
         if not self.showering or self.use is None or self.use.kind != "shower":
             return None
-        now = dt_util.utcnow().timestamp() / 60
+        now = _now_min()
         runs = self._meter_runs(self.use, now)
         if not runs:
             return None
         long = [r for r in runs if r[1] - r[0] >= insights.WATER_SHOWER_RUN]
         if not long or now - long[-1][1] < insights.WATER_GAP_MINUTES:
             return None
-        return datetime.fromtimestamp(long[-1][1] * 60, timezone.utc)
+        return _at(long[-1][1])
 
     GAP_SETTLE = timedelta(minutes=1)    # after a gap, the tank sensors come back one by one: wait for all
 
@@ -565,7 +598,7 @@ class ShowerTimeManager:
                     bath_at = t if bath_at is None else min(bath_at, t)
         span = (g["last"] - before_at).total_seconds() / 60
         if bath_at is not None:
-            start = datetime.fromtimestamp(bath_at * 60, timezone.utc)
+            start = _at(bath_at)
         else:                                        # somewhere in the gap: its middle
             start = before_at + timedelta(minutes=max(0.0, (span - minutes) / 2))
         if kind == "shower":
@@ -573,13 +606,12 @@ class ShowerTimeManager:
                      if x.get("source") == "live" and x.get("kind", "shower") == "shower" and not x.get("estimated")]
             minutes = insights.gap_minutes(minutes, usual)
             entry = self.ledger.estimated_ended(self, start, minutes, e)
-            self._fire("shower_ended", {**entry, "currency": self.ledger.currency or None})
+            self._fire_entry("shower_ended", entry)
         else:
             entry = self.ledger.other_ended(self, kind, start, 0.0, drop_k * self.volume * model.CP, estimated=True)
-            self._fire("hot_water_used", {**entry, "currency": self.ledger.currency or None})
+            self._fire_entry("hot_water_used", entry)
         _LOGGER.debug("Hot water used during a gap in the tank readings (%.0f min): %s", span, entry)
-        for cb in list(self._listeners):
-            cb()
+        self._notify()
 
     # ------------------------------------------------------------------ what kind of hot water use
     @callback
@@ -618,7 +650,7 @@ class ShowerTimeManager:
     @callback
     def _feed_bath(self) -> None:
         if self.bath_signal is not None:
-            self.bath_signal.feed(dt_util.utcnow().timestamp() / 60, self._bath_value(self.hass.states.get(self.bath)))
+            self.bath_signal.feed(_now_min(), self._bath_value(self.hass.states.get(self.bath)))
 
     async def _seed_bath(self) -> None:
         """The usual power of a bathroom fan is learned from the last day of its history."""
@@ -637,15 +669,14 @@ class ShowerTimeManager:
             _LOGGER.debug("No history for the bathroom signal yet")
 
     def bath_active(self) -> bool:
-        return bool(self.bath_signal and self.bath_signal.active(dt_util.utcnow().timestamp() / 60))
+        return bool(self.bath_signal and self.bath_signal.active(_now_min()))
 
     def water_active(self) -> bool:
-        return bool(self.water_signal and self.water_signal.active(dt_util.utcnow().timestamp() / 60)
-                    and not self.fast_flow())
+        return bool(self.water_signal and self.water_signal.active(_now_min()) and not self.fast_flow())
 
     def fast_flow(self) -> bool:
         """The water meter shows far more than the shower head gives (a bath tap): not a shower."""
-        if self.water_signal is None or not self.water_signal.flowing(dt_util.utcnow().timestamp() / 60):
+        if self.water_signal is None or not self.water_signal.flowing(_now_min()):
             return False
         head = self.head_flow()[0]
         return bool(head) and self.water_signal.flow >= insights.FAST_FLOW_FACTOR * head
@@ -671,7 +702,7 @@ class ShowerTimeManager:
     def _feed_water(self) -> None:
         if self.water_signal is not None:
             v = _num(self.hass.states.get(self.water))
-            self.water_signal.feed(dt_util.utcnow().timestamp() / 60, None if v is None else v * self._water_factor)
+            self.water_signal.feed(_now_min(), None if v is None else v * self._water_factor)
 
     def confirm_k(self) -> float:
         return insights.learn_confirm_k(self.use_stats["shower"], self.use_stats["tap"])
@@ -686,11 +717,11 @@ class ShowerTimeManager:
             t = dt_util.as_local(datetime.fromisoformat(iso))
             return t.hour * 60 + t.minute
         local = dt_util.as_local(at)
-        showers = [tod(e["start"]) for e in self.ledger.log if e.get("kind", "shower") == "shower"]
+        log = self.ledger.showers()                 # one showers after the other, not after a bath (#10)
         taps = [tod(e["start"]) for e in self.ledger.other if e.get("kind") == "tap"]
-        last = self.ledger.log[-1]["start"] if self.ledger.log else None
-        since_last = (at - datetime.fromisoformat(last)).total_seconds() / 60 if last else None
-        return insights.shower_time_of_day(local.hour * 60 + local.minute, showers, taps, since_last)
+        since_last = (at - datetime.fromisoformat(log[-1]["start"])).total_seconds() / 60 if log else None
+        return insights.shower_time_of_day(local.hour * 60 + local.minute, [tod(e["start"]) for e in log], taps,
+                                           since_last)
 
     def _remember_use(self, kind: str, drawn: float) -> None:
         self.use_stats[kind] = (self.use_stats[kind] + [round(drawn, 2)])[-50:]
@@ -706,15 +737,19 @@ class ShowerTimeManager:
         if not self.showering or self.use is None or self.estimate is None:
             return
         if self.water_active() and self.water_signal.rose_at is not None and self.ledger.session_start is not None:
-            began = datetime.fromtimestamp(self.water_signal.rose_at * 60, timezone.utc)
+            began = _at(self.water_signal.rose_at)
             if began < self.ledger.session_start and dt_util.utcnow() - began <= timedelta(minutes=15):
                 self.ledger.session_start = began           # the water was running before the tank showed it
                 self.use.start = self.water_signal.rose_at
         # with a bathroom signal only that one lowers the threshold: a kitchen tap can run as steadily as a shower
         lowers = self.bath_active() if self.bath_signal is not None else self.water_active()
-        if self.use.update(dt_util.utcnow().timestamp() / 60, self.estimate.average, lowers,
+        now = _now_min()
+        if self.use.update(now, self.estimate.average, lowers,
                            self.confirm_k(), top=self.top_value, bottom=self.bottom_value, cold=self.estimate.cold,
-                           fill_rate=self.fill_rate(), fast_flow=self.fast_flow(), water_active=self.water_active()):
+                           fill_rate=self.fill_rate(), fast_flow=self.fast_flow(), water_active=self.water_active(),
+                           water_ran=self._water_ran(),
+                           heat_confirms=(self._heat_alone_confirms(_longest(self._meter_runs(self.use, now)))
+                                          or self._fresh_bathroom(self.use))):
             self._fire("shower_started", {"started": dt_util.as_local(self.ledger.session_start).isoformat(timespec="seconds"),
                                           "confirmed_after_minutes": self.use.confirmed_after,
                                           "bathroom_signal": self.use.bath_seen,
@@ -723,8 +758,7 @@ class ShowerTimeManager:
     @callback
     def _midnight(self, _now) -> None:
         self._update_habits()
-        for cb in list(self._listeners):              # "today" counters start again
-            cb()
+        self._notify()              # "today" counters start again
 
     # ------------------------------------------------------------------ shower habits and today's forecast
     @callback
@@ -867,8 +901,7 @@ class ShowerTimeManager:
             self.legionella_checked = True
         except Exception:  # noqa: BLE001
             _LOGGER.exception("Could not search the history for the last legionella heat-up")
-        for cb in list(self._listeners):
-            cb()
+        self._notify()
 
     def legionella_overdue(self) -> bool | None:
         if not self.legionella_checked:
@@ -1133,9 +1166,11 @@ class ShowerTimeManager:
             return None
         hours = max(0.0, (dt_util.now() - since).total_seconds() / 3600)
         key = dt_util.as_local(since).isoformat(timespec="minutes")
-        showered = sum(x["minutes"] for x in self.ledger.log if x["start"] >= key)
+        showered = sum(x["minutes"] for x in self.ledger.showers() if x["start"] >= key)
         per_min_kwh = e.per_minute * self.volume * model.CP
-        other = sum(x["heat_kwh"] for x in self.ledger.other if x["start"] >= key) / per_min_kwh
+        # a bath is a session of its own, but not a shower: it stays with the tap and bucket it was while it ran (#10)
+        bath = sum(x["heat_kwh"] for x in self.ledger.baths() if x["start"] >= key) / per_min_kwh
+        other = bath + sum(x["heat_kwh"] for x in self.ledger.other if x["start"] >= key) / per_min_kwh
         kind = self.use_kind()
         if kind == "shower" and self.ledger.session_start:
             until = self.shower_stopped_at() or dt_util.utcnow()      # the meter saw the shower stop: no further
@@ -1157,7 +1192,9 @@ class ShowerTimeManager:
         return {"since": self.full_ref_at, "hours": round(hours, 1), "reference_minutes": round(ref, 1),
                 "top_ups": self.top_ups, "last_top_up_at": last_top_up,
                 "remaining_minutes": round(e.minutes, 1), "showered_minutes": round(s["showered"], 1),
-                "other_minutes": round(s["other"], 1), "cooling_minutes": round(cooling, 1),
+                "other_minutes": round(s["other"], 1),
+                "bath_minutes": round(bath * s["other"] / other, 1) if other else 0.0,   # its share of other
+                "cooling_minutes": round(cooling, 1),
                 "reheated_minutes": round(reheated, 1), "total_minutes": round(ref + reheated, 1),
                 "overcounted_minutes": round(s["overcounted"], 1),
                 "cooling_kwh_heat": round(heat, 2),
@@ -1304,7 +1341,7 @@ class ShowerTimeManager:
         end = now - timedelta(minutes=30)
         start = now - timedelta(days=HISTORY_DAYS)
         if self.processed_until:
-            start = max(start, datetime.fromtimestamp(self.processed_until * 60, timezone.utc) - timedelta(hours=6))
+            start = max(start, _at(self.processed_until) - timedelta(hours=6))
         recorder = get_instance(self.hass)
         series = await self._fetch_series(start, end)
         rows = await self.hass.async_add_executor_job(self._rows, series, start, end)
@@ -1327,23 +1364,20 @@ class ShowerTimeManager:
 
         water = self._water_series(series.get(self.water, [])) if self.water and self.flow_source == "water_meter" else None
 
-        def month_of(minute: int) -> int:
-            return dt_util.as_local(datetime.fromtimestamp(minute * 60, timezone.utc)).month
-
-        def doy_of(minute: int) -> int:
-            return dt_util.as_local(datetime.fromtimestamp(minute * 60, timezone.utc)).timetuple().tm_yday
-
         def ema_of(minute: int) -> float | None:
-            return self._ema_on(dt_util.as_local(datetime.fromtimestamp(minute * 60, timezone.utc)).date().isoformat())
+            return self._ema_on(_local(minute).date().isoformat())
 
         confirm_k = self.confirm_k()
         fill_rate = self.fill_rate()
-        taps = [datetime.fromisoformat(e["start"]).timestamp() / 60 for e in self.ledger.other if e.get("kind") == "tap"]
+        # what a use was followed live as (with the bathroom and water signals): a tap, or a bath or bucket being
+        # filled. A bath the water meter told apart can fall slower than the fill rate the history judges by (#10)
+        live = [(datetime.fromisoformat(e["start"]).timestamp() / 60, "tap" if e["kind"] == "tap" else "fill")
+                for e in self.ledger.other + self.ledger.baths() if e.get("kind") in ("tap", "fill", "bath")]
 
         def draw_kind(d: model.Draw) -> str:            # only real showers teach shower length and flow
-            if any(abs(d.start - t) <= 5 for t in taps):
-                return "tap"                            # followed live (with the bathroom and water signals): a tap
-            local = dt_util.as_local(datetime.fromtimestamp(d.start * 60, timezone.utc))
+            if kind := next((k for t, k in live if abs(d.start - t) <= 5), None):
+                return kind
+            local = _local(d.start)
             cold = model.cold_for(self.params, local.month, local.timetuple().tm_yday,
                                   ema_of(d.start) if self.outdoor else None)
             return insights.draw_kind(self.params, rows, d.start, d.minutes, cold, confirm_k, fill_rate,
@@ -1351,9 +1385,9 @@ class ShowerTimeManager:
 
         result, last = await self.hass.async_add_executor_job(
             lambda: model.learn(self.params, rows, volume=self.volume, shower_temp=self.shower_temp,
-                                since=self.processed_until, energy_by_hour=energy,
-                                previous_cycle=self.last_cycle, month_of=month_of, water=water,
-                                doy_of=doy_of, ema_of=ema_of if self.outdoor else None, draw_kind=draw_kind))
+                                since=self.processed_until, energy_by_hour=energy, previous_cycle=self.last_cycle,
+                                month_of=lambda t: _local(t).month, doy_of=lambda t: _local(t).timetuple().tm_yday,
+                                water=water, ema_of=ema_of if self.outdoor else None, draw_kind=draw_kind))
         self.params = result.params
         self.last_cycle = last
 
@@ -1370,16 +1404,14 @@ class ShowerTimeManager:
         if first:
             rows = await self._fetch_rows(end - timedelta(days=HISTORY_DAYS), end)
 
-        def local_of(minute: int) -> datetime:
-            return dt_util.as_local(datetime.fromtimestamp(minute * 60, timezone.utc))
         samples, drips, reheats = await self.hass.async_add_executor_job(
-            lambda: (insights.loss_samples(rows, volume=self.volume, local_of=local_of),
-                     insights.night_drips(rows, local_of=local_of),
-                     insights.reheat_starts(rows, local_of=local_of)))
+            lambda: (insights.loss_samples(rows, volume=self.volume, local_of=_local),
+                     insights.night_drips(rows, local_of=_local),
+                     insights.reheat_starts(rows, local_of=_local)))
         for day, hours in reheats.items():                  # the reheats the history shows, with the live ones
             self.reheat_log[day] = sorted(set(self.reheat_log.get(day, [])) | set(hours))
         if first and rows:
-            self.reheat_since = (local_of(rows[0].minute).date() + timedelta(days=1)).isoformat()
+            self.reheat_since = (_local(rows[0].minute).date() + timedelta(days=1)).isoformat()
         self._prune_reheat_log()
         self._update_reheat_habits()
         self.loss_samples = insights.merge_samples(self.loss_samples, samples)

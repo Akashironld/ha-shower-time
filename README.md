@@ -141,24 +141,30 @@ but slowly: a use of 6 minutes or more that takes heat at less than 0.35 times a
 the bathroom signal rose with it (judged while the bottom of the tank is still warm and the tank sensors report at
 least every 3 minutes; real showers run at 0.6 times and up). With a water meter that was reading during the use, a
 shower needs at least 3 minutes of steady, shower-like flow: washing up in bursts stays a tap, even with the bathroom
-still humid from a shower before. A metered shower lasts as long as the water ran: from its first to its last steady
+still humid from a shower before. With both a bathroom signal and a water meter, a use the bathroom signal did not see
+is a shower only once the meter saw 6 minutes of steady, shower-like flow: a kitchen tap can run that steadily for a
+few minutes, and in a nearly empty tank washing up takes heat at a shower's pace. A metered shower lasts as long as the water ran: from its first to its last steady
 flow. Water used after that (the sink, while the tank still falls) is logged as a separate tap with its share of the
 heat, and the card switches from *Showering* to *Hot water* once the meter saw the shower stop.
 
 Water drawn from the tank is replaced by cold water at the bottom, so the top stays hot while you shower. When the
 top falls while the bottom is still warm — a heat pump starting a reheat, or heat taken out through the coil — no
-water was drawn and it is not counted at all. That is only judged while little heat has left the tank, and never while
-the water meter shows water running: a long shower that uses up the hot layer cools the top too.
+water was drawn and it is not counted at all. That is only judged while little heat has left the tank, and never when
+the water meter saw the water for the heat that left: a long shower that uses up the hot layer cools the top too, and
+in a nearly empty tank the bottom is already down at cold water, so only the top can fall while you wash up.
 
-A **bath** counts as a session too: hot water that leaves at about twice the pace of your showers (learned from
-them) shows as **FILLING** while it runs, and once it took the heat of six shower minutes or more it goes in the
-shower log as a bath — counted in shower minutes of heat (≈), with its cost. A bucket or a filled sink stays other
-hot water. Baths never teach the shower length or flow. No bath on this tank? Turn off *There is a bath on this
-tank* (setup and options): a fast fill then always stays other hot water.
+A **bath** is a session of its own: hot water that leaves at about twice the pace of your showers (learned from
+them), or a water meter running far faster than the shower head, shows as **FILLING** while it runs. Once it took
+the heat of six shower minutes or more it is logged as a bath, in shower minutes of heat (≈), with its cost. It is
+no shower: it counts with *Other hot water today* and, in the *Since reheat* bar, stays under *bath / tap* as it was
+while it ran — not in the shower counts, the last shower or the totals; the card's *Today* tile shows it as
+*+ bath* with its cost. A bucket or a filled sink stays other hot
+water. Baths never teach the shower length or flow. No bath on this tank? Turn off *There is a bath on this tank*
+(setup and options): a fast fill then always stays other hot water.
 
-Showers and baths go in the shower log, the habits and the shower totals. Everything else is counted as *Other hot
-water today* (heat, how often, cost) and fires `hot_water_used` on the Shower event. *Showering* is on only for a
-recognised shower; *Hot water in use* for any use.
+Showers go in the shower counts and totals; showers and baths in the habits. Everything else is counted as *Other
+hot water today* (heat, how often, cost) and fires `hot_water_used` on the Shower event (a bath fires
+`shower_ended`, with kind `bath`). *Showering* is on only for a recognised shower; *Hot water in use* for any use.
 
 **Gaps in the readings.** A heat pump's cloud can stop for a while, a sensor can be unavailable, and right after a
 restart the first readings can be old. When the tank's device sent no temperature for 15 minutes (or a sensor was

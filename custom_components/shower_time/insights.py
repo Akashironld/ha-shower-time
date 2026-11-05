@@ -219,6 +219,7 @@ def reheat_starts(rows: list[model.Row], *, local_of) -> dict[str, list[int]]:
 
 # --------------------------------------------------------------------------- what kind of hot water use
 
+MIN_USE_K = 0.15              # tank average drop (K) below which nothing measurable left the tank
 SHOWER_CONFIRM_K = 1.8        # tank average drop that makes a use a shower (until learned per household)
 BATH_CONFIRM_K = 0.6          # with a bathroom signal a much smaller drop is enough
 FILL_RATE = 1.2               # K/min, far faster than any shower: a bath or bucket filled with hot water only
@@ -235,6 +236,10 @@ COIL_BOTTOM_ABOVE_COLD = 15.0
 COIL_MAX_K = 4.0              # ... but only while less than this has left the tank: by then a coil has dipped the top,
                               # where a long shower first uses up the hot layer (the top falls once ~10 K has gone,
                               # with the bottom still warm on its way down)
+COIL_WATER_SHARE = 0.5        # a water meter that saw at least this share of the water the tank's fall stands for: the
+                              # water ran, so no coil. In a nearly empty tank the bottom is down at cold water and only
+                              # the top can fall: washing up then looks like a coil to the tank sensors (#10)
+COIL_WATER_LITRES = 10.0      # ... and at least this much: a toilet's flush while the heat pump starts is not enough
 BATH_SIGNAL_MINUTES = 10      # a bathroom signal this long before or during the use counts
 HUMIDITY_RISE = 3.0           # %RH above the lowest value of the last 15 minutes
 POWER_RISE = 1.0              # W above the usual (median) power of the last day, and at least 30 % more
@@ -249,6 +254,22 @@ PACE_BOTTOM_ABOVE_COLD = 15.0  # ... and while the bottom is this far above the 
                                # of the heat a shower takes (a second shower shows little at the sensors)
 PACE_READING_MINUTES = 3.0    # ... and when the tank was read at least this often: with sparser readings the start
                               # and end of a use are minutes off, and so is its pace (a Weheat reports every 2)
+UNSEEN_SHOWER_RUN = 6.0       # with a bathroom signal and a water meter, a use the bathroom signal did not see is a
+                              # shower only when the meter saw a shower's flow this long without a break: a kitchen tap
+                              # runs as steadily for a few minutes (washing up: 4), and in a nearly empty tank its heat
+                              # and pace look like a shower's (#10)
+
+
+def water_explains(litres: float, drawn: float, volume: float, top: float | None, cold: float | None) -> bool:
+    """Did the water meter see the water for the heat that left? ``litres`` ran through it during the use (any
+    flow: a tap goes on and off), ``drawn`` (K) is how far the average of the tank (``volume`` L) fell. Hot water
+    leaving at ``top`` is replaced through the meter by cold water, so a real use shows at least that much water;
+    heat leaving through the coil shows none, or only what a toilet took meanwhile."""
+    if litres < COIL_WATER_LITRES:
+        return False
+    if top is None or cold is None or top - cold < 5.0:
+        return True
+    return litres >= COIL_WATER_SHARE * drawn * volume / (top - cold)
 
 
 def too_slow_for_a_shower(drawn: float, minutes: float, per_minute: float | None, bottom: float | None,
@@ -289,20 +310,28 @@ class UseSession:
 
     def update(self, t: float, avg: float | None, bath_active: bool, confirm_k: float = SHOWER_CONFIRM_K, *,
                top: float | None = None, bottom: float | None = None, cold: float | None = None,
-               fill_rate: float = FILL_RATE, fast_flow: bool = False, water_active: bool = False) -> bool:
-        """Feed a new reading; returns True at the moment the use is recognised as a shower."""
+               fill_rate: float = FILL_RATE, fast_flow: bool = False, water_active: bool = False,
+               water_ran: bool = False, heat_confirms: bool = True) -> bool:
+        """Feed a new reading; returns True at the moment the use is recognised as a shower. ``water_ran``: the
+        water meter saw the water for the heat that left so far (``water_explains``); ``heat_confirms`` False: the
+        heat (with or without the bathroom signal) does not make it a shower yet — with a bathroom signal and a
+        water meter, until the bathroom signal rose with the use or the meter saw a shower's flow long enough
+        (``UNSEEN_SHOWER_RUN``)."""
         if avg is not None and self.start_avg is not None:
             self.drawn = max(self.drawn, self.start_avg - avg)
         self.bath_seen = self.bath_seen or bool(bath_active)
         self.water_seen = self.water_seen or bool(water_active)
+        if self.kind == "coil" and water_ran:
+            self.kind = "unknown"                # the meter caught up: water ran for this heat after all
         if self.kind not in ("unknown", "shower"):
             return False
         if top is not None and bottom is not None and self.start_top is not None and self.start_bottom is not None:
             top_drop, bottom_drop = self.start_top - top, self.start_bottom - bottom
             warm_bottom = (cold is not None and bottom > cold + COIL_BOTTOM_ABOVE_COLD
                            and self.drawn < COIL_MAX_K)
-            # a steady flow on the water meter says water ran: never heat leaving through the coil
-            if top_drop >= COIL_TOP_DROP and (top_drop > bottom_drop or warm_bottom) and not self.water_seen:
+            # water on the meter says water ran: never heat leaving through the coil
+            if (top_drop >= COIL_TOP_DROP and (top_drop > bottom_drop or warm_bottom)
+                    and not self.water_seen and not water_ran):
                 self.kind = "coil"               # heat left without water: not a use after all
                 return False
         rate = self.drawn / max(1.0, t - self.start)
@@ -315,7 +344,7 @@ class UseSession:
             if self.drawn >= BATH_CONFIRM_K:
                 self.kind = "fill"
             return False
-        if self.drawn >= (BATH_CONFIRM_K if self.bath_seen else confirm_k):
+        if self.drawn >= (BATH_CONFIRM_K if self.bath_seen else confirm_k) and heat_confirms:
             self.kind = "shower"
             self.confirmed_after = round(t - self.start, 1)
             return True
@@ -350,7 +379,7 @@ def pace_unknown(now: float, prev_reading: float, temp_seen: list[float], starte
     shower minutes; ``temp_seen``: when its temperature sensors last changed — a tank sensor that does not change
     says nothing, the others change every few minutes).
     Changes within half a minute of this reading are left out: one poll writes all sensors at once."""
-    if drop < 0.15:
+    if drop < MIN_USE_K:
         return False
     if unavailable_at is not None and unavailable_at >= prev_reading:
         return True
@@ -384,7 +413,7 @@ def gap_use(params: dict, before: tuple[float, float | None], after: tuple[float
     a0 = model.tank_average(params, before[0], before[1])
     a1 = model.tank_average(params, after[0], after[1])
     drop = a0 - a1 - max(0.0, cooling)
-    if drop < 0.15:
+    if drop < MIN_USE_K:
         return None
     if before[1] is not None and after[1] is not None:
         top_drop, bottom_drop = before[0] - after[0], before[1] - after[1]

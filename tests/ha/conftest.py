@@ -31,6 +31,14 @@ def auto_enable_custom_integrations(recorder_mock, enable_custom_integrations):
     return
 
 
+@pytest.fixture(autouse=True)
+def midday(request):
+    """A test that moves the clock starts at midday in the tests' time zone (US/Pacific), so the hour or so it
+    plays out never crosses midnight: run in the evening there, the "today" counters started again mid-test."""
+    if "freezer" in request.fixturenames:
+        request.getfixturevalue("freezer").move_to("2026-10-15T19:00:00+00:00")
+
+
 @pytest.fixture
 async def deps(hass: HomeAssistant) -> HomeAssistant:
     """Recorder (real, in memory), websocket API, and stand-ins for the web server and frontend."""
@@ -43,9 +51,11 @@ async def deps(hass: HomeAssistant) -> HomeAssistant:
     return hass
 
 
-async def setup_entry(hass: HomeAssistant, options: dict | None = None, data: dict | None = None) -> MockConfigEntry:
-    """``data``: what was filled in at setup besides the tank; ``options``: what was saved in the options since."""
-    tank(hass, 55.0, 49.8)
+async def setup_entry(hass: HomeAssistant, options: dict | None = None, data: dict | None = None,
+                      top: float = 55.0, bottom: float = 49.8) -> MockConfigEntry:
+    """``data``: what was filled in at setup besides the tank; ``options``: what was saved in the options since;
+    ``top``/``bottom``: the tank at startup."""
+    tank(hass, top, bottom)
     entry = MockConfigEntry(
         domain=DOMAIN, title="Hot water", unique_id=TOP,
         data={"top_sensor": TOP, "bottom_sensor": BOTTOM, "tank_volume": 200, "temperature_mode": "auto",

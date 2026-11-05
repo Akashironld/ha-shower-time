@@ -11,7 +11,7 @@ const T = {
         reheating: "REHEATING", inuse: "SHOWERING", hotwater: "HOT WATER", filling: "FILLING", low: "ALMOST GONE", shortat: "EMPTY BY", fullat: "full", selflearning: "self-learning",
         learning: "learning", updated: "updated", today: "Today", lastshower: "Last shower", cooling: "Standing loss",
         perday: "per day", peryear: "/ year", none: "none yet", since: "Since reheat", left: "left", showered: "showered",
-        cooled: "cooled", other: "tap / bucket", reheated: "reheated", bath: "bath", last24: "Last 24 hours", max: "max", ago24: "-24 h", now: "now", yesterday: "yesterday",
+        cooled: "cooled", other: "tap / bucket", bathtap: "bath / tap", bath: "bath", reheated: "reheated", last24: "Last 24 hours", max: "max", ago24: "-24 h", now: "now", yesterday: "yesterday",
         nohist: "no history yet \u2014 fills in by itself", unavailable: "Not available", cold: "cold water", cop: "COP",
         pick: "Pick the 'Shower time' sensor of the Hot Water Shower Time integration.",
         sensed: "sensed", you: "you shower at",
@@ -26,7 +26,7 @@ const T = {
         reheating: "WORDT OPGEWARMD", inuse: "DOUCHT NU", hotwater: "WARM WATER", filling: "BAD / EMMER", low: "BIJNA OP", shortat: "OP OM", fullat: "vol", selflearning: "zelflerend",
         learning: "leert", updated: "bijgewerkt", today: "Vandaag", lastshower: "Laatste douche", cooling: "Afkoeling",
         perday: "per dag", peryear: "/ jaar", none: "nog geen", since: "Sinds opwarmen", left: "over", showered: "gedoucht",
-        cooled: "afgekoeld", other: "kraan / emmer", reheated: "bijgewarmd", bath: "bad", last24: "Laatste 24 uur", max: "max", ago24: "-24 u", now: "nu", yesterday: "gisteren",
+        cooled: "afgekoeld", other: "kraan / emmer", bathtap: "bad / kraan", bath: "bad", reheated: "bijgewarmd", last24: "Laatste 24 uur", max: "max", ago24: "-24 u", now: "nu", yesterday: "gisteren",
         nohist: "nog geen historie \u2014 vult zich vanzelf", unavailable: "Niet beschikbaar", cold: "koud water", cop: "COP",
         pick: "Kies de sensor 'Douchetijd' van de integratie Hot Water Shower Time.",
         sensed: "gemeten", you: "jullie douchen op",
@@ -273,25 +273,28 @@ class ShowerTimeCard extends HTMLElement {
       <div class="sbar"><i class="left" style="width:${p(s.remaining_minutes)}%"></i><i class="used" style="width:${p(s.showered_minutes)}%"></i>${other >= 0.5 ? `<i class="other" style="width:${p(other)}%"></i>` : ""}<i class="cool" style="width:${p(s.cooling_minutes)}%"></i></div>
       <div class="legend"><span><b class="d left"></b>${this._t("left")} ${fmt(s.remaining_minutes)}</span>
         <span><b class="d used"></b>${this._t("showered")} ${fmt(s.showered_minutes)}</span>${other >= 0.5 ? `
-        <span><b class="d other"></b>${this._t("other")} ${fmt(other)}</span>` : ""}
+        <span><b class="d other"></b>${this._t(s.bath_minutes >= 0.5 ? "bathtap" : "other")} ${fmt(other)}</span>` : ""}
         <span><b class="d cool"></b>${this._t("cooled")} ${fmt(s.cooling_minutes)}</span>${added >= 0.5 || topAt ? `
         <span class="plus">+ ${this._t("reheated")} ${fmt(added)}${topAt}</span>` : ""}</div></div>`;
   }
 
   _tiles(a, lang) {
+    // a bath is no shower, but today's hot water all the same: "+ bath" with its cost under the showers
+    const bath = a.today_baths ? `+ ${a.today_baths > 1 ? `${a.today_baths} \u00d7 ` : ""}${this._t("bath")}${
+      this._money(a.today_bath_cost, a, lang) ? ` ${this._money(a.today_bath_cost, a, lang)}` : ""}` : "";
+    const sub = [this._money(a.today_cost, a, lang), bath].filter(Boolean).join(" \u00b7 ");
     const today = a.today_showers === undefined ? "" : `<div class="tile">
         <div class="tl"><ha-icon icon="mdi:calendar-today"></ha-icon>${this._t("today")}</div>
         <div class="tv">${a.today_showers} \u00d7 \u00b7 ${a.today_minutes} ${this._t("min")}</div>
-        <div class="ts">${nn(this._money(a.today_cost, a, lang), "&nbsp;")}</div></div>`;
+        <div class="ts">${sub || "&nbsp;"}</div></div>`;
     let last = `<div class="tv">${this._t("none")}</div><div class="ts">&nbsp;</div>`;
     if (a.last) {
       const when = new Date(a.last.start);
       const day = when.toDateString() === new Date().toDateString() ? "" : `${when.toLocaleDateString(lang, { weekday: "short" })} `;
-      // a bath counts in shower minutes of heat, a session hidden by a gap in the readings is estimated: "\u2248"
-      const approx = a.last.kind === "bath" || a.last.estimated ? "\u2248 " : "";
-      const what = a.last.kind === "bath" ? ` \u00b7 ${this._t("bath")}` : "";
+      // a shower hidden by a gap in the readings is estimated: "\u2248"
+      const approx = a.last.estimated ? "\u2248 " : "";
       last = `<div class="tv">${approx}${Math.round(a.last.minutes)} ${this._t("min")}${this._money(a.last.cost, a, lang) ? ` \u00b7 ${this._money(a.last.cost, a, lang)}` : ""}</div>
-        <div class="ts">${day}${this._time(when)}${what}</div>`;
+        <div class="ts">${day}${this._time(when)}</div>`;
     }
     const loss = a.standing_loss_per_day;
     const cool = loss ? `<div class="tile">

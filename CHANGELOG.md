@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.13.6 — A bath is no shower, washing up no coil
+
+**Recommended for everyone with a bath, a water meter or a bathroom signal** — a bath counted as a shower once it was done, and with a water meter washing up in a nearly empty tank was lost as *cooled* (#10).
+
+### Fixes
+- **A bath is no longer counted as a shower** (#10). While it ran it showed as *tap / bucket*; once done it moved to *showered* in the *Since reheat* bar, and counted in the showers of today, the last shower and the shower totals. A bath is still logged as a session of its own, in shower minutes of heat, but now stays with the other hot water: *bath / tap* in the bar, *+ bath* with its cost in the card's *Today* tile, and in *Other hot water today* with its heat and cost. Baths logged before are shown this way too. A use right after a bath no longer counts as a short shower because one showers after the other, and the diagnostics show what a bath took and which signals saw it.
+- **Washing up in a nearly empty tank is no longer taken for the coil** (#10). With the bottom of the tank already down at cold water only the top can fall, which is what heat leaving through the coil looks like, so the use was dropped and its heat showed as *cooled*. When the water meter saw the water for the heat that left (any flow: a tap goes on and off), it is never the coil.
+- **With a bathroom signal and a water meter, the kitchen tap is no shower** (#10). In a nearly empty tank washing up takes heat at a shower's pace, and a tap can run as steadily as a shower for a few minutes. A use the bathroom signal did not see now counts as a shower only once the meter saw 6 minutes of steady, shower-like flow; without either, it is a tap.
+- **A bath is never learned as a shower at night** (#10). The nightly learning judges uses from the history by their pace, and a bath that the water meter told apart falls slower than that: it could teach the shower length, and the bath tap's flow as the shower head's. Uses followed live as a bath or bucket are now skipped, as taps already were.
+
+### After updating
+Update in HACS and restart Home Assistant. Nothing to set.
+
 ## v0.13.5 — A tap after a shower is a tap
 
 **Recommended for everyone with a water meter** — a tap used right after a shower counted as part of the shower, the card kept saying *Showering* after the water had stopped, and the shower-head flow was learned too low (#10). Without a water meter nothing changes.
