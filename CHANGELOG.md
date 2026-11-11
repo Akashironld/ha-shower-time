@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.15.1 — Rinsing off is the shower, and the bar adds up again
+
+**Recommended for everyone** — with a water meter, a shower with a pause in it (soaping up) was cut short and the rest booked as a tap; and on any tank, *Since reheat* could leave the end of the bar empty with too little *cooling*.
+
+### Fixes
+- **Rinsing off after a pause is still the shower.** With a water meter, a shower ran from its first to its last flow of 3 minutes, so after soaping up with the water off, a shorter stretch of rinsing off went to the tap together with the sink after it. A shower's flow that comes back within 5 minutes, with the water off in between, and runs at least 1.5 minutes now belongs to the shower, also for the live *showering*. Flow that follows a tap, or a burst of less than 1.5 minutes, stays a tap.
+- **The bar since the reheat adds up again.** When the uses explained the tank's drop exactly, a rounding crumb made the integration think they had been counted too long. It then cut *cooling* back to the standing loss alone, and part of the bar stayed empty. Now left, showered, other and cooling always add up to the full tank.
+
+### After updating
+Update in HACS and restart Home Assistant. Showers already in the log stay as they are; *Since reheat* is right straight away.
+
 ## v0.15.0 — A new card, and a shower survives a restart
 
 **Recommended for everyone** — a shower that was running when Home Assistant restarted was lost and its heat counted as cooling, and the card has a new look. Prefer the card as it was? Choose *Classic* under **Style** in the card editor.
