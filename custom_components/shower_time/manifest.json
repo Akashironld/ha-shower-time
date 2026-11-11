@@ -1,6 +1,9 @@
 {
   "domain": "shower_time",
   "name": "Hot Water Shower Time",
+  "after_dependencies": [
+    "lovelace"
+  ],
   "codeowners": [
     "@Akashironld"
   ],
@@ -10,9 +13,6 @@
     "http",
     "frontend",
     "websocket_api"
-  ],
-  "after_dependencies": [
-    "lovelace"
   ],
   "documentation": "https://github.com/Akashironld/ha-shower-time",
   "integration_type": "service",
