@@ -651,6 +651,21 @@ def test_since_reheat_unexplained_drop_is_cooling():
     assert full["cooling"] == 0.0 and round(full["reheated"], 1) == 0.2
 
 
+def test_since_reheat_float_crumb_is_no_surplus():
+    """#10, 6 Nov: 27.9 left + 17.6 showered + 5.0 other of 61.2 left 10.7 unexplained, but the sum came out a
+    float crumb above 61.2, so cooling fell back to the 3.7 standing loss and 7 minutes of the bar stayed empty."""
+    s = insights.split_since_reheat(61.2, 27.9, 17.6, 5.0, 3.7, reheat_seen=False)
+    assert round(s["cooling"], 6) == 10.7 and s["reheated"] == 0.0 and s["overcounted"] == 0.0
+    assert round(27.9 + s["showered"] + s["other"] + s["cooling"], 6) == 61.2
+    import random
+    rnd = random.Random(10)
+    for _ in range(20000):
+        ref = rnd.uniform(30, 70)
+        left, sh, ot = rnd.uniform(0, ref * 0.5), rnd.uniform(0, ref * 0.3), rnd.uniform(0, ref * 0.1)
+        s = insights.split_since_reheat(ref, left, sh, ot, 1.0, reheat_seen=False)
+        assert abs(left + s["showered"] + s["other"] + s["cooling"] - ref - s["reheated"]) < 1e-6
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

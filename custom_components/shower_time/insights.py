@@ -434,7 +434,9 @@ def split_since_reheat(ref: float, left: float, showered: float, other: float, s
     logged longer than the tank lost (their minutes are how long they ran: a slow tap, a lagging sensor): they are
     cut back to what the tank lost, and ``overcounted`` says by how much."""
     cooling = max(standing, ref - left - showered - other)
-    surplus = max(0.0, left + showered + other + cooling - ref)
+    surplus = left + showered + other + cooling - ref
+    if surplus < 1e-6:     # books that close exactly can leave a float crumb above 0; that is no surplus (#10)
+        surplus = 0.0
     if reheat_seen or surplus <= 0:
         return {"showered": showered, "other": other, "cooling": cooling, "reheated": surplus, "overcounted": 0.0}
     cooling = min(standing, max(0.0, ref - left))
