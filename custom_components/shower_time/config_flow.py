@@ -194,6 +194,31 @@ class ShowerTimeConfigFlow(ConfigFlow, domain=DOMAIN):
         return self.async_show_form(step_id="user", data_schema=self.add_suggested_values_to_schema(schema, user_input or {}),
                                     errors=errors)
 
+    async def async_step_reconfigure(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """Move the tank to other sensors. The learned data is stored under the entry id, so it all stays."""
+        entry = self._get_reconfigure_entry()
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            top, bottom = user_input[CONF_TOP], user_input.get(CONF_BOTTOM)
+            if bottom == top:
+                errors[CONF_BOTTOM] = "same_sensor"
+            else:
+                for other in self._async_current_entries(include_ignore=False):
+                    if other.entry_id != entry.entry_id and other.unique_id == top:
+                        return self.async_abort(reason="unique_id_in_use")
+                data = {**entry.data, CONF_TOP: top, CONF_BOTTOM: bottom}
+                if bottom is None:
+                    data.pop(CONF_BOTTOM)
+                # the options flow can hold its own bottom sensor, and options win over the entry's data
+                options = {**entry.options, CONF_BOTTOM: bottom} if CONF_BOTTOM in entry.options else entry.options
+                # the entry's update listener reloads it (a second reload from here would only race with that one)
+                self.hass.config_entries.async_update_entry(entry, unique_id=top, data=data, options=options)
+                return self.async_abort(reason="reconfigure_successful")
+        cur = {**entry.data, **entry.options}
+        schema = vol.Schema({vol.Required(CONF_TOP): TEMP, vol.Optional(CONF_BOTTOM): TEMP})
+        return self.async_show_form(step_id="reconfigure", errors=errors,
+                                    data_schema=self.add_suggested_values_to_schema(schema, user_input or cur))
+
     async def async_step_extras(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         errors: dict[str, str] = {}
         if user_input is not None:

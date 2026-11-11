@@ -11,6 +11,7 @@ from .manager import ShowerTimeManager
 class ShowerTimeEntity(Entity):
     _attr_has_entity_name = True
     _attr_should_poll = False
+    _live = True            # computed from the live estimate: unavailable while the tank sensor is (log sensors: False)
 
     def __init__(self, manager: ShowerTimeManager, key: str) -> None:
         self.manager = manager
@@ -29,4 +30,4 @@ class ShowerTimeEntity(Entity):
 
     @property
     def available(self) -> bool:
-        return self.manager.estimate is not None
+        return not self._live or self.manager.estimate is not None

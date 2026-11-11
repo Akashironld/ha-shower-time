@@ -20,6 +20,14 @@
           "bathtub": "Off when you only have showers and taps: filling a bucket or a sink fast is then never counted as a bath."
         }
       },
+      "reconfigure": {
+        "title": "Change tank sensors",
+        "description": "Pick other temperature sensors for this tank. Everything learned so far and the shower log are kept. Change the top sensor and the learned height of the sensors starts again from the tank type.",
+        "data": {
+          "top_sensor": "Top temperature sensor",
+          "bottom_sensor": "Bottom temperature sensor (recommended)"
+        }
+      },
       "extras": {
         "title": "Make it smarter (optional)",
         "description": "These are suggested from the same device when possible. With them the model learns faster and more precisely. Leave empty if you do not have them.",
@@ -72,7 +80,9 @@
       "heights_order": "The outlet must be higher than the top sensor, and the top sensor higher than the bottom sensor."
     },
     "abort": {
-      "already_configured": "This tank is already set up."
+      "already_configured": "This tank is already set up.",
+      "reconfigure_successful": "The tank sensors were changed.",
+      "unique_id_in_use": "Another tank already uses this top sensor."
     }
   },
   "options": {

@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+### Improvements
+- **A new card.** The card is now a dark instrument panel: the tank as a stack of cells with hot water above cold and the temperatures at the height of the sensors, a segmented ring for the minutes left, and a row of pips for the showers left. All card options work as before.
+- **Keep the previous card if you prefer it.** The new look is the default; choose *Classic* under **Style** in the card editor (or `style: classic` in YAML) to keep the card as it was, following your theme.
+- **The graph shows what happened.** Showers, baths and taps, and reheats of the last 24 hours are shaded behind the line, the tooltip names them, and the header shows when the next shower is expected.
+- **Enough for today at a glance.** A tag in the header says so when the forecast expects the tank to last; during a shower the ring follows the shower against your usual length.
+- **Change the tank sensors without starting over.** Choose **Reconfigure** on the integration to point it at another top and bottom temperature sensor (for example after replacing a sensor). Everything learned and the shower log are kept, and the integration reloads by itself. A top sensor that another tank already uses is refused.
+- **Reconfigure resets the learned sensor height when the top sensor changes.** A new top sensor sits somewhere else, so the learning of where the sensors sit starts again from the tank type; everything else learned stays. Changing only the bottom sensor resets nothing.
+
+### Fixes
+- **A shower survives a restart of Home Assistant.** A restart in the middle of a shower (or just after it, before it was closed) used to lose it: nothing was logged and the heat showed up as *cooling* in *Since reheat*. The running use is now saved and carried on after a short restart (up to 10 minutes) and logged with its full length and heat. After a longer restart it is closed from the tank readings as an estimated shower, and hot water that left the tank while Home Assistant was off is judged by the same rules as a gap in the readings instead of becoming cooling. Standing loss alone never creates a shower.
+- **A tank with a few days of history is no longer called overdue for legionella right away.** With no heat-up found, *Legionella overdue* now waits until the statistics (or the time the integration has watched the tank) cover the whole legionella period; until then it shows unavailable instead of problem.
+- **The cost sensors keep one unit.** The currency of the cost sensors is kept once known, so a price sensor that later changes unit cannot switch the unit in the middle of the long-term statistics. New installations start with Home Assistant's own currency. Existing installations keep their unit.
+- **The history for the card is safer under load.** Several cards asking for the history at the same moment now share one calculation, and it works on a copy of the model while learning may be running.
+- **The card address changes with the card file.** Browsers cache the card for a month; the address now includes a short fingerprint of the file, so a changed card reaches you after updating even when the version number is the same, and an old dashboard resource is updated instead of duplicated.
+- **The integration no longer requires the dashboards to be loaded.** Lovelace is now an optional (after-)dependency; without it the card is added through the start page.
+- **Recent state survives a reload.** Changing the options (or reloading the integration) right after a shower or a learning run could lose what was logged in the last minutes, and a late write from the old instance could overwrite newer data. The state is now saved the moment the integration stops, and a learning run that is still going no longer changes anything after that.
+- **Electricity prices per MWh are handled in the first-run backfill.** The live price already understood *EUR/MWh*, but the showers filled in from the history on first install only converted cents, so a price in MWh made old showers look a thousand times too expensive.
+- **Totals and counters stay available when the tank sensor drops out for a moment.** The shower totals, the energy and cost totals, today and week counters, the last shower, and the legionella sensors no longer turn unavailable (and leave gaps in the long-term statistics) while a tank sensor is briefly unavailable. The live sensors such as the minutes, fill level and litres still do.
+
 ## v0.14.0 — Hot water above the top sensor
 
 **Recommended for everyone with a Weheat WBL-200 or WBL-300 tank, or a tank whose sensors are not at the very top and bottom** — the hot water above the top sensor was not counted, so a full tank showed far too few minutes and litres (#14). On a full WBL-300 at 46 °C the card showed about 164 L, roughly half of what it holds.

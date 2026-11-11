@@ -71,7 +71,7 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: ShowerT
         "reheats": {"log": m.reheat_log, "since": m.reheat_since},
         "forecast": f.as_dict() if (f := m.forecast()) else None,
         "heat_loss": {"status": m.loss, "samples": m.loss_samples[-30:], "drip_nights": m.drip_nights, "watts_now": m.heat_loss_now()},
-        "legionella": {"last": m.legionella_at, "checked": m.legionella_checked, "overdue": m.legionella_overdue(),
+        "legionella": {"last": m.legionella_at, "checked": m.legionella_checked, "covered_since": m.legionella_since, "overdue": m.legionella_overdue(),
                        "temperature": m.legionella_temp, "days": m.legionella_days},
         "health": {"learn_failures": m.learn_failures},
         "hot_water_use": {"bathroom_signal": m.bath, "signal_kind": m.bath_signal.kind if m.bath_signal else None,

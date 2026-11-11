@@ -17,6 +17,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from . import ShowerTimeConfigEntry
 from .entity import ShowerTimeEntity
+from .ledger import currency_symbol
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ShowerTimeConfigEntry,
@@ -43,9 +44,9 @@ class MinutesSensor(ShowerTimeEntity, SensorEntity):
         "typical_shower_minutes", "full_tank_minutes", "full_reference_minutes", "full_reference_at", "hot_fraction",
         "tank_average", "cold_water_source", "outdoor_average", "flow", "shower_temperature_mode", "head_flow_source",
         "today_showers", "today_minutes", "today_cost", "today_electricity_kwh", "week_showers", "week_minutes",
-        "week_cost", "today_baths", "today_bath_cost", "last", "currency", "hot_water_price_per_kwh", "cop", "cop_heat_pump", "cop_source", "since_reheat", "standing_loss_per_day",
+        "week_cost", "today_baths", "today_bath_cost", "last", "currency", "currency_symbol", "hot_water_price_per_kwh", "cop", "cop_heat_pump", "cop_source", "since_reheat", "standing_loss_per_day",
         "reheat_full_at", "reheat_one_shower_at", "live_countdown", "low_threshold", "current_shower",
-        "hot_water_use", "other_today", "forecast", "learned_at", "observations"})
+        "hot_water_use", "other_today", "forecast", "learned_at", "observations", "sensor_heights"})
 
     def __init__(self, manager) -> None:
         super().__init__(manager, "shower_minutes")
@@ -84,6 +85,7 @@ class MinutesSensor(ShowerTimeEntity, SensorEntity):
             "showering": m.showering,
             **{k: v for k, v in m.ledger.summary().items()},
             "currency": m.ledger.currency or None,
+            "currency_symbol": currency_symbol(m.ledger.currency),
             "hot_water_price_per_kwh": round(m.ledger.tank_price, 3) if m.ledger.tank_price is not None else None,
             "cop": m.ledger.cop(m),
             "cop_heat_pump": m.ledger.cop_heat_pump(m)[0], "cop_source": m.ledger.cop_heat_pump(m)[1],
@@ -102,6 +104,7 @@ class MinutesSensor(ShowerTimeEntity, SensorEntity):
             "forecast": m.forecast_attrs(),
             "learned_at": m.last_learn,
             "observations": p["flow"]["n"],
+            "sensor_heights": _sensor_fractions(p.get("geo")),
         }
 
 
@@ -236,6 +239,14 @@ class ModelSensor(ShowerTimeEntity, SensorEntity):
 
 
 
+def _sensor_fractions(geo: dict | None) -> dict | None:
+    """Where the sensors sit as a share (0-1) of the water column, for the card; None without the layer model."""
+    if not geo or geo.get("top") is None:
+        return None
+    bottom = geo.get("bottom")
+    return {"top": float(geo["top"]), "bottom": float(bottom) if bottom is not None else None}
+
+
 def _heights(geo: dict | None) -> dict | None:
     """Where the model puts the sensors (share of the water column from the bottom), and what it started from."""
     if not geo:
@@ -245,11 +256,10 @@ def _heights(geo: dict | None) -> dict | None:
 
 
 class _LogSensor(ShowerTimeEntity, SensorEntity):
-    """Counters from the shower log; always available (zero when nothing happened yet)."""
+    """Counters from the shower log; always available (zero when nothing happened yet), also while the tank
+    sensor is briefly unavailable: the totals must not drop out of the long-term statistics."""
 
-    @property
-    def available(self) -> bool:
-        return True
+    _live = False
 
 
 class ShowersTodaySensor(_LogSensor):

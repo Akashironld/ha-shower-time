@@ -20,6 +20,14 @@
           "bathtub": "Uit als je alleen douches en kranen hebt: snel een emmer of wasbak vullen telt dan nooit als bad."
         }
       },
+      "reconfigure": {
+        "title": "Boilersensoren wijzigen",
+        "description": "Kies andere temperatuursensoren voor deze boiler. Alles wat is geleerd en het douchelogboek blijven behouden. Wijzig je de bovenste sensor, dan begint de geleerde sensorhoogte opnieuw bij het boilertype.",
+        "data": {
+          "top_sensor": "Temperatuursensor bovenin",
+          "bottom_sensor": "Temperatuursensor onderin (aanbevolen)"
+        }
+      },
       "extras": {
         "title": "Slimmer maken (optioneel)",
         "description": "Waar mogelijk alvast ingevuld vanuit hetzelfde apparaat. Hiermee leert het model sneller en nauwkeuriger. Laat leeg als je ze niet hebt.",
@@ -72,7 +80,9 @@
       "heights_order": "De uitgang moet hoger zitten dan de bovenste sensor, en de bovenste sensor hoger dan de onderste."
     },
     "abort": {
-      "already_configured": "Deze boiler is al ingesteld."
+      "already_configured": "Deze boiler is al ingesteld.",
+      "reconfigure_successful": "De boilersensoren zijn gewijzigd.",
+      "unique_id_in_use": "Een andere boiler gebruikt deze bovenste sensor al."
     }
   },
   "options": {

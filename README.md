@@ -33,8 +33,9 @@ your own showers.
 - 📈 **Totals for the long run** (showers, minutes, electricity, cost), also in the energy dashboard
 - 🩺 **Health checks** in *Settings → Repairs*: a tank sensor that stopped reporting, top and bottom swapped,
   learning that keeps failing
-- 🎨 **Dashboard card included** (no separate download): tank graphic with the hot layer, countdown,
-  showers left, a 24-hour graph you can hover/touch, and today's showers with cost
+- 🎨 **Dashboard card included** (no separate download): an instrument-panel look with a cell tank, a ring with the
+  minutes left, showers left, a 24-hour graph (with your showers, baths and reheats shaded in) you can hover/touch,
+  and today's showers with cost. Prefer the previous look? Set `style: classic`
 - ⚙️ **Easy setup**: pick the tank sensors; the rest is suggested from the same device
   (works out of the box with the Weheat integration)
 
@@ -360,14 +361,15 @@ type: custom:shower-time-card
 entity: sensor.hot_water_shower_time
 ```
 
-Every part can be switched off, in the visual editor or in YAML:
+Every part can be switched off, in the visual editor or in YAML. The editor also has a **Style** dropdown:
 
 | Option | Part | Default |
 |---|---|---|
 | `title` | your own title | *Shower time* |
-| `compact` | hide everything except the tank and the minutes — handy on a wall tablet | `false` |
-| `show_tank` | tank graphic filled to the charge level | `true` |
-| `show_temps` | top and bottom temperature | `true` |
+| `style` | `hud`: the instrument-panel look (always dark); `classic`: the previous card, which follows your dashboard theme | `hud` |
+| `compact` | hide everything except the tank, the ring and the readouts — handy on a wall tablet | `false` |
+| `show_tank` | tank graphic (cells, or the liquid tank in *Classic*) filled to the charge level | `true` |
+| `show_temps` | top and bottom temperature (at the height of the sensors on the tank drawing) | `true` |
 | `show_split` | *Since reheat* bar: left / showered / cooled | `true` |
 | `show_tiles` | tiles *Today*, *Last shower*, *Standing loss* | `true` |
 | `show_history` | last 24 hours (hover or touch to read values) | `true` |
@@ -385,17 +387,44 @@ compact: true
 show_tiles: true
 ```
 
+To keep the previous look:
+
+```yaml
+type: custom:shower-time-card
+entity: sensor.hot_water_shower_time
+style: classic
+```
+
 The graph is filled from the tank sensors' history, so it is complete from the first day. Hover or touch it to read
 the value at any moment:
 
 <p align="center"><img src="assets/card-en-hover.png" alt="Card with the graph tooltip" width="460"></p>
 
-What you see: the tank filled to its charge level, the minutes of showering left, roughly how many showers and
-litres that is, where the hot water went since the last reheat (left / showered / cooled), today's showers and
-their cost, the last shower, what standing loss costs per day, and the last 24 hours.
+What you see in the default look, from top to bottom:
 
-**Styling:** the card is a standard `ha-card`, so your theme (`ha-card-background`, `ha-card-border-radius`,
-`ha-card-box-shadow`, …) applies, and [card-mod](https://github.com/thomasloven/lovelace-card-mod) works as on any
+- **Header** with a status tag: *Reheating* (with when it is full again), *Almost gone*, *Showering* (with the minutes
+  so far), *Hot water* or *Filling*, *Empty by 21:30*, or *Enough for today*.
+- **Tank** of twelve cells: the lit cells are what is left to shower with (the same charge as the ring), the dim
+  ones are spent. The sensor temperatures sit next to it at the height of the sensors.
+- **Ring** with the minutes of showering left in the middle, the charge in 40 segments, and while you shower the
+  minutes so far against your typical shower.
+- **Readouts** next to the ring: litres of hot water, showers left (as small bars), the temperatures and the next
+  expected shower. On a narrow card they wrap under the tank and the ring.
+- **Since reheat**: where the hot water went since the last reheat (left / showered / bath or tap / cooled).
+- **Tiles**: today's showers and their cost, the last shower, and what standing loss costs per day.
+- **Last 24 hours**: the minutes left, with your showers, baths and taps, and reheats shaded behind the line, and
+  the next expected shower above it. Hover or touch it to read a moment and what happened then.
+- **Footer**: flow, shower temperature, cold water and COP.
+
+The shaded showers, baths and reheats come from the integration itself, so they need the version of the integration that ships this card; without them the graph just has no shading.
+
+The default look is dark by design, whatever your dashboard theme. **Classic** is the previous card: a liquid tank with
+the percentage, an icon tile, status pills, the minutes and "about N showers" next to it, and it follows the theme
+colours of your dashboard.
+
+**Styling:** the card is a standard `ha-card`. The default look sets its own dark colours, so a theme's card colours
+do not apply to it (use `style: classic` for that); `card-mod` can still override it. In *Classic* your theme
+(`ha-card-background`, `ha-card-border-radius`, `ha-card-box-shadow`, …) applies, and [card-mod](https://github.com/thomasloven/lovelace-card-mod) works as on any
 other card:
 
 ```yaml

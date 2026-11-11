@@ -9,13 +9,15 @@
     "recorder",
     "http",
     "frontend",
-    "lovelace",
     "websocket_api"
+  ],
+  "after_dependencies": [
+    "lovelace"
   ],
   "documentation": "https://github.com/Akashironld/ha-shower-time",
   "integration_type": "service",
   "iot_class": "calculated",
   "issue_tracker": "https://github.com/Akashironld/ha-shower-time/issues",
   "requirements": [],
-  "version": "0.14.0"
+  "version": "0.15.0"
 }

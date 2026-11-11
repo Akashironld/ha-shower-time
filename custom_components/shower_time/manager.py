@@ -1,6 +1,7 @@
 """Runtime glue: live estimate, nightly learning and persistence."""
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 import copy
 from dataclasses import asdict, replace
@@ -87,6 +88,48 @@ def _local(minute: float) -> datetime:
     return dt_util.as_local(_at(minute))
 
 
+def _ema_lookup(table: dict[str, float], day: str) -> float | None:
+    """The outdoor average on ``day``, or on the last day before it that is known."""
+    if not table:
+        return None
+    if day in table:
+        return table[day]
+    earlier = [d for d in table if d <= day]
+    return table[max(earlier)] if earlier else None
+
+
+REHEAT_MIN_RISE = 2.0           # K the tank average must gain to count as a reheat
+REHEAT_MAX_DIP = 0.4            # K it may sag inside one reheat (a shower during it) without ending the band
+REHEAT_MAX_GAP_MS = 30 * 60_000
+
+
+def reheat_events(points: list[list[float]]) -> list[dict]:
+    """Reheats as bands from the history series ([ms, minutes, tank average, ...] where the minutes change):
+    stretches where the average climbs clearly, joined when they are close, one band each."""
+    out: list[dict] = []
+    run: list | None = None                       # [start ms, end ms, start avg, peak avg]
+    prev = None
+    for p in points:
+        if len(p) < 3 or p[2] is None:
+            continue
+        t, avg = int(p[0]), float(p[2])
+        if prev is not None:
+            rising = avg - prev[1] > 0.05
+            if run is not None and (t - run[1] > REHEAT_MAX_GAP_MS or avg < run[3] - REHEAT_MAX_DIP):
+                if run[3] - run[2] >= REHEAT_MIN_RISE:
+                    out.append({"start": run[0], "end": run[1], "kind": "reheat"})
+                run = None
+            if rising:
+                if run is None:
+                    run = [prev[0], t, prev[1], avg]
+                elif avg > run[3]:
+                    run[1], run[3] = t, avg
+        prev = (t, avg)
+    if run is not None and run[3] - run[2] >= REHEAT_MIN_RISE:
+        out.append({"start": run[0], "end": run[1], "kind": "reheat"})
+    return out
+
+
 def _now_min() -> float:
     """Now, in minutes since the epoch."""
     return dt_util.utcnow().timestamp() / 60
@@ -170,6 +213,9 @@ class ShowerTimeManager:
         self.last_learn: str | None = None
         self.last_samples: dict = {}
         self.learning = False
+        self._hist_lock = asyncio.Lock()
+        self._loaded = False                        # the store was read (never save empty data over a good store)
+        self._stopped = False                       # unloaded: nothing may save or change state any more
 
         self.estimate: model.Estimate | None = None
         self.top_value: float | None = None
@@ -212,6 +258,7 @@ class ShowerTimeManager:
         self.legionella_days = float(cfg.get(CONF_LEGIONELLA_DAYS, DEFAULT_LEGIONELLA_DAYS))
         self.legionella_at: str | None = None
         self.legionella_checked = False             # the history was searched (so "never" means never)
+        self.legionella_since: str | None = None    # how far back we can tell: the oldest statistic, or when we began
         self.learn_failures = 0
         self._missing_since: dict[str, datetime] = {}
         self._swap_since: datetime | None = None
@@ -224,11 +271,16 @@ class ShowerTimeManager:
         self.alive_at: str | None = None            # saved every 10 minutes: shows when Home Assistant was off
         self.use: insights.UseSession | None = None
         self.use_stats: dict[str, list[float]] = {"shower": [], "tap": [], "shower_rate": []}
+        self._hold_until: datetime | None = None    # a restored use is not closed before this while no reading is back
+        self._resume: dict | None = None            # readings from before a restart, judged at the first estimate
+        self._resume_since = _now_min()
+        self._use_saved: datetime | None = None
         self.coil_events = 0                        # heat that left without water (reheat start, coil)
 
     # ------------------------------------------------------------------ lifecycle
     async def async_start(self) -> None:
         stored = await self._store.async_load()
+        self._loaded = True
         if stored and stored.get("profile") == self.profile:
             self.params = model.ensure_params(stored["params"])
             self.processed_until = stored.get("processed_until", 0)
@@ -237,6 +289,11 @@ class ShowerTimeManager:
             self.last_learn = stored.get("last_learn")
             self.last_samples = stored.get("last_samples", {})
             self._apply_geometry()
+            if stored.get("top_sensor") not in (None, self.top):
+                # another top sensor (Reconfigure): where the old one sat says nothing about this one, so the
+                # learner starts again from the preset; everything else learned stays
+                self.params.pop("geo", None)
+                self._apply_geometry()
         if stored:
             self.habits = stored.get("habits") or self.habits
             self.loss_samples = stored.get("loss_samples") or []
@@ -246,6 +303,7 @@ class ShowerTimeManager:
             self.reheat_since = stored.get("reheat_since")
             self.loss = self._loss_status()
             self.legionella_at = stored.get("legionella_at")
+            self.legionella_since = stored.get("legionella_since")
             self.learn_failures = stored.get("learn_failures", 0)
             self.alive_at = stored.get("alive_at")
             self.hot_top = stored.get("hot_top")
@@ -259,7 +317,13 @@ class ShowerTimeManager:
             self.top_ups = stored.get("top_ups") or []
             # a reference in minutes only (before 0.5.1) depends on the model it was computed with: rebuild it
             self.full_ref = stored.get("full_ref") if self.full_ref_avg is not None else None
+        if not stored and self.price and not self.ledger.currency:
+            # a new installation: the unit of the monetary sensors is Home Assistant's own currency (ISO code) until
+            # the price sensor says otherwise; existing ones keep what they had, whose statistics are in that unit
+            self.ledger.currency = self.hass.config.currency or ""
         watch = [e for e in (self.top, self.bottom, self.heating, self.bath, self.water) if e]
+        if stored:
+            self._restore_use(stored.get("resume"))
         self._note_downtime()
         self._resolve_signals()
         self._unsubs.append(async_track_state_change_event(self.hass, watch, self._state_changed))
@@ -278,16 +342,106 @@ class ShowerTimeManager:
         # (updated from an older version), so the fill level and the hot layer are right straight away
         if self.full_ref is None or (self.params.get("geo") and (not self.full_ref_state or not self._hot_stored)):
             self.entry.async_create_background_task(self.hass, self._init_full_ref(), f"{DOMAIN}_full_ref")
+        if self.legionella_since is None:
+            self.legionella_since = dt_util.utcnow().isoformat()
         if self.legionella_at is None:          # the last legionella-proof heat-up, from the statistics
             self.entry.async_create_background_task(self.hass, self._init_legionella(), f"{DOMAIN}_legionella")
         else:
             self.legionella_checked = True
         self._sync_loss_issues()
 
+    RESUME_MAX = timedelta(minutes=10)       # a use is followed on after a restart this short (twice the quiet period
+                                             # that ends one); longer, it is closed from the readings, like a gap
+    RESTORE_HOLD = timedelta(minutes=3)      # the tank sensors are often not loaded yet right after a restart
+    RESUME_LOOKBACK = timedelta(hours=3)     # a restart longer ago: reheats and more uses in between, nothing to judge
+
+    @callback
+    def _restore_use(self, rec: dict | None) -> None:
+        """Home Assistant was restarted: carry on a use that was going on, or judge the heat that left meanwhile
+        (the tank readings from before) with the rules for a gap, so it does not turn into "cooling"."""
+        at = dt_util.parse_datetime(rec["at"]) if isinstance(rec, dict) and rec.get("at") else None
+        if at is None:
+            return
+        if rec.get("top_sensor") != self.top or rec.get("bottom_sensor") != self.bottom:
+            return                                  # other sensors (Reconfigure, options): these readings are not theirs
+        now = dt_util.utcnow()
+        down = now - at
+        if down < timedelta(0) or down > self.RESUME_LOOKBACK:
+            return
+        top0, bottom0 = rec.get("top"), rec.get("bottom")
+        saved = rec.get("use")
+        try:
+            use = insights.UseSession(**{k: v for k, v in saved["use"].items()
+                                         if k in insights.UseSession.__dataclass_fields__}) if saved else None
+            start = dt_util.parse_datetime(saved["start"]) if saved else None
+            fall = dt_util.parse_datetime(saved["last_fall"]) if saved else None
+        except (KeyError, TypeError, ValueError):
+            use = start = fall = None
+        if use is not None and start is not None and fall is not None:
+            if down <= self.RESUME_MAX:
+                self.use, self.ledger.session_start, self._last_fall_at, self.showering = use, start, fall, True
+                self._hold_until = now + self.RESTORE_HOLD
+                # the tank kept falling while Home Assistant was off: the use went on (its end is the restart)
+                top = _temp(self.hass.states.get(self.top), self._is_f(self.top))
+                bottom = _temp(self.hass.states.get(self.bottom), self._is_f(self.bottom)) if self.bottom else None
+                if top is not None and (not self.bottom or bottom is not None) and rec.get("avg") is not None \
+                        and rec["avg"] - model.tank_average(self.params, top, bottom) >= 0.5:
+                    self._last_fall_at = now
+                return
+            # too long to follow on: from the readings before the use to the ones after the restart
+            if use.start_top is not None and (use.start_bottom is not None or not self.bottom):
+                top0, bottom0, at = use.start_top, use.start_bottom, start
+        if top0 is not None and (bottom0 is not None or not self.bottom):
+            self._resume = {"top": top0, "bottom": bottom0, "since": at}
+
+    @callback
+    def _apply_resume(self) -> None:
+        """The first estimate after a restart: hot water that left since the readings kept before it is a gap."""
+        r = self._resume
+        if r is None or self.showering or self._gap is not None or self.reheating or self.estimate is None:
+            return
+        if self.top_value is None or (self.bottom and self.bottom_value is None):
+            return
+        self._resume = None
+        e, hours = self.estimate, (dt_util.utcnow() - r["since"]).total_seconds() / 3600
+        if insights.gap_use(self.params, (r["top"], r["bottom"]), (self.top_value, self.bottom_value), e.cold,
+                            e.per_minute, self.confirm_k(), cooling=self.loss_k_h() * hours) is None:
+            return                                  # standing loss only: no use, and no gap to hold the live rules up
+        self._gap = {"top": r["top"], "bottom": r["bottom"], "since": r["since"], "last": dt_util.utcnow(),
+                     "estimate": self.estimate}
+
+    @callback
+    def _drop_restored_use(self) -> None:
+        """The sensors did not come back in time to close a restored use: it is left to the gap rules, which judge
+        it from the readings before it and the first ones after (nothing is booked when they never return)."""
+        use, start = self.use, self.ledger.session_start
+        self._hold_until = None
+        self.showering, self.use, self.ledger.session_start = False, None, None
+        if use is not None and start is not None and use.start_top is not None \
+                and (use.start_bottom is not None or not self.bottom):
+            self._resume = {"top": use.start_top, "bottom": use.start_bottom, "since": start}
+            self._resume_since = _now_min()
+        self._notify()
+
+    def _running_use(self) -> dict | None:
+        if not self.showering or self.use is None or self.ledger.session_start is None or self._last_fall_at is None:
+            return None
+        return {"use": asdict(self.use), "start": self.ledger.session_start.isoformat(),
+                "last_fall": self._last_fall_at.isoformat()}
+
     async def async_stop(self) -> None:
+        self._stopped = True
         for unsub in self._unsubs:
             unsub()
         self._unsubs.clear()
+        # write now: a reload after an options change must find the latest state, and a delayed save of this
+        # manager must not land over the new one (async_save cancels the pending delayed write)
+        if self._loaded:
+            await self._store.async_save(self._data())
+
+    def _save_later(self, delay: float) -> None:
+        if not self._stopped:
+            self._store.async_delay_save(self._data, delay)
 
     @callback
     def _notify(self) -> None:
@@ -406,6 +560,8 @@ class ShowerTimeManager:
                                            draw_flow=self.draw_flow())
             self._track_full(self.estimate.minutes)
             self.ledger.on_estimate(self, self.estimate)
+            self._hold_until = None
+            self._apply_resume()
             self._classify_use()
         self._notify()
 
@@ -467,15 +623,28 @@ class ShowerTimeManager:
                     start=self.ledger.session_start.timestamp() / 60,
                     start_avg=self.estimate.average if self.estimate else None,   # still the previous estimate
                     start_top=before.get(self.top), start_bottom=before.get(self.bottom) if self.bottom else None)
+                self._save_later(5)                 # a restart now must not lose the use
             self.showering, self._last_fall_at = True, now
-        elif self.showering and (self.reheating or self._last_fall_at is None or now - self._last_fall_at > self.USE_TIMEOUT):
+        elif self.showering and not self._held(now) and (
+                self.reheating or self._last_fall_at is None or now - self._last_fall_at > self.USE_TIMEOUT):
             self._end_shower()
+
+    def _held(self, now: datetime) -> bool:
+        """Right after a restart a restored use is not closed while the tank readings are still missing."""
+        return self._hold_until is not None and self.estimate is None and now < self._hold_until
 
     @callback
     def _tick(self, _now) -> None:
+        if self.showering and self._hold_until is not None and self.estimate is None and dt_util.utcnow() >= self._hold_until:
+            self._drop_restored_use()
+        if self._resume is not None and _now_min() - self._resume_since > 30:
+            self._resume = None                     # the tank sensors never came back to judge it by
         if self.estimate is None:
             return
         now = dt_util.utcnow()
+        if self.showering and (self._use_saved is None or now - self._use_saved >= timedelta(seconds=60)):
+            self._use_saved = now
+            self._save_later(5)                     # keeps the running use (and the time) current for a restart
         if self._gap is not None and now - self._gap["last"] >= self.GAP_SETTLE:
             self._gap_use()
         if not self.showering:
@@ -631,7 +800,9 @@ class ShowerTimeManager:
     def _gap_use(self) -> None:
         """Log the hot water used during a gap, from the readings before it to the settled ones after it."""
         g, self._gap = self._gap, None
-        e, now = g["estimate"], dt_util.utcnow()
+        e, now = g["estimate"] or self.estimate, dt_util.utcnow()
+        if e is None:
+            return
         if self.top_value is None or (self.bottom and self.bottom_value is None):
             return
         hours = (g["last"] - g["since"]).total_seconds() / 3600
@@ -797,6 +968,7 @@ class ShowerTimeManager:
         # with a bathroom signal only that one lowers the threshold: a kitchen tap can run as steadily as a shower
         lowers = self.bath_active() if self.bath_signal is not None else self.water_active()
         now = _now_min()
+        kind_before = self.use.kind
         if self.use.update(now, self.estimate.average, lowers,
                            self.confirm_k(), top=self.top_value, bottom=self.bottom_value, cold=self.estimate.cold,
                            fill_rate=self.fill_rate(), fast_flow=self.fast_flow(), water_active=self.water_active(),
@@ -807,6 +979,8 @@ class ShowerTimeManager:
                                           "confirmed_after_minutes": self.use.confirmed_after,
                                           "bathroom_signal": self.use.bath_seen,
                                           "water_meter": self.water_active()})
+        if self.use is not None and self.use.kind != kind_before:
+            self._save_later(5)
 
     @callback
     def _midnight(self, _now) -> None:
@@ -946,6 +1120,12 @@ class ShowerTimeManager:
             bot = by_hour(self.bottom) if self.bottom else None
             if not top:
                 return                              # no long-term statistics: wait for the live readings
+            # "no hit" only means something for as long as the statistics reach back (of both sensors)
+            first = max(min(top), min(bot)) if bot else min(top)
+            old = dt_util.parse_datetime(self.legionella_since) if self.legionella_since else None
+            if old is None or first < old.timestamp():
+                self.legionella_since = datetime.fromtimestamp(first, timezone.utc).isoformat()
+                self.request_save()
             hits = [t for t, v in top.items() if v >= self.legionella_temp
                     and (bot is None or bot.get(t, -99.0) >= self.legionella_temp)]
             if hits and self.legionella_at is None:
@@ -960,7 +1140,12 @@ class ShowerTimeManager:
         if not self.legionella_checked:
             return None
         if self.legionella_at is None:
-            return True                             # not once in the 45 days of statistics
+            # no heat-up found: overdue only once we could have seen one for the whole period (a tank with a few
+            # days of statistics, or just installed, has not been proven overdue)
+            since = dt_util.parse_datetime(self.legionella_since) if self.legionella_since else None
+            if since is None or dt_util.utcnow() - since < timedelta(days=self.legionella_days):
+                return None
+            return True
         age = dt_util.now() - datetime.fromisoformat(self.legionella_at)
         return age > timedelta(days=self.legionella_days)
 
@@ -1056,7 +1241,7 @@ class ShowerTimeManager:
 
     @callback
     def request_save(self) -> None:
-        self._store.async_delay_save(self._data, 30)
+        self._save_later(30)
 
     async def _start_ledger(self) -> None:
         await self.ledger.async_refresh_cop(self)
@@ -1085,12 +1270,7 @@ class ShowerTimeManager:
 
     # ------------------------------------------------------------------ outdoor running average (cold water)
     def _ema_on(self, day: str) -> float | None:
-        if not self._ema_by_day:
-            return None
-        if day in self._ema_by_day:
-            return self._ema_by_day[day]
-        earlier = [d for d in self._ema_by_day if d <= day]
-        return self._ema_by_day[max(earlier)] if earlier else None
+        return _ema_lookup(self._ema_by_day, day)
 
     async def _refresh_ema(self, update: bool = False) -> None:
         """~3-week exponential average of the daily mean outdoor temperature, from long-term statistics."""
@@ -1139,7 +1319,7 @@ class ShowerTimeManager:
         self.full_ref_at = dt_util.now().isoformat(timespec="seconds")
         self.top_ups = []
         self._ref_low = minutes
-        self._store.async_delay_save(self._data, 60)
+        self._save_later(60)
 
     @callback
     def _track_full(self, m: float) -> None:
@@ -1312,7 +1492,7 @@ class ShowerTimeManager:
             self.full_ref_at = (dt_util.as_local(datetime.fromtimestamp(ts / 1000, timezone.utc)).isoformat(timespec="seconds")
                                 if ts else dt_util.now().isoformat(timespec="seconds"))
             self._ref_low = self.estimate.minutes if self.estimate else ref
-            self._store.async_delay_save(self._data, 5)
+            self._save_later(5)
             self.update()
 
     # ------------------------------------------------------------------ history for the card
@@ -1323,10 +1503,15 @@ class ShowerTimeManager:
         Returns [[timestamp_ms, minutes], ...] every 5 minutes (only where the value changes); ``with_average``
         adds the tank average, the top and the bottom reading to each point.
         """
-        now = dt_util.utcnow()
-        cached = getattr(self, "_hist_cache", None)
-        if cached and cached[0] == hours and (now - cached[1]).total_seconds() < 300:
-            return cached[2] if with_average else [p[:2] for p in cached[2]]
+        async with self._hist_lock:                 # concurrent requests wait for one computation, then use its cache
+            now = dt_util.utcnow()
+            cached = getattr(self, "_hist_cache", None)
+            if not (cached and cached[0] == hours and (now - cached[1]).total_seconds() < 300):
+                await self._compute_history(hours, now)
+            result = self._hist_cache[2]
+        return result if with_average else [p[:2] for p in result]
+
+    async def _compute_history(self, hours: int, now: datetime) -> None:
         start = now - timedelta(hours=hours)
         recorder = get_instance(self.hass)
         series = {}
@@ -1339,10 +1524,17 @@ class ShowerTimeManager:
         head = self.head_flow()[0] if self.temp_mode == "auto" else None
 
         rate = self.draw_flow()
+        # the executor works on copies: learning changes the model on the event loop meanwhile
+        params, ema_table = copy.deepcopy(self.params), dict(self._ema_by_day)
+        volume, shower_temp, top_ent, bottom_ent = self.volume, self.shower_temp, self.top, self.bottom
+        hot_state: list = []
+
+        avgs: list[list[float]] = []                # tank average every 5 minutes: reheats are read off this
 
         def compute() -> list[list[float]]:
             out, i, j, top, bot, last, hot = [], 0, 0, None, None, None, None
-            tops, bots = series.get(self.top, []), series.get(self.bottom, []) if self.bottom else []
+            avgs.clear()
+            tops, bots = series.get(top_ent, []), series.get(bottom_ent, []) if bottom_ent else []
             t = start.timestamp()
             while t <= now.timestamp():
                 while i < len(tops) and tops[i][0] <= t:
@@ -1351,29 +1543,61 @@ class ShowerTimeManager:
                 while j < len(bots) and bots[j][0] <= t:
                     bot = bots[j][1] if bots[j][1] is not None else bot
                     j += 1
-                if top is not None and (not self.bottom or bot is not None):
+                if top is not None and (not bottom_ent or bot is not None):
                     local = dt_util.as_local(datetime.fromtimestamp(t, timezone.utc))
-                    hot = model.hot_layer(self.params, top, hot, 5.0, False)
-                    e = model.estimate(self.params, top, bot, volume=self.volume, shower_temp=self.shower_temp,
+                    hot = model.hot_layer(params, top, hot, 5.0, False)
+                    e = model.estimate(params, top, bot, volume=volume, shower_temp=shower_temp,
                                        month=local.month, head_flow=head, doy=local.timetuple().tm_yday,
-                                       ema=self._ema_on(local.date().isoformat()), hot=hot, draw_flow=rate)
+                                       ema=_ema_lookup(ema_table, local.date().isoformat()), hot=hot, draw_flow=rate)
                     v = round(e.minutes)
+                    avgs.append([int(t * 1000), v, round(e.average, 2)])
                     if v != last:
                         out.append([int(t * 1000), v, round(e.average, 2), top, bot])
                         last = v
                 t += 300
             if out and out[-1][0] < int(now.timestamp() * 1000):
                 out.append([int(now.timestamp() * 1000), last, *out[-1][2:]])
-            self._hist_hot = hot                    # the hot layer now, as the history shows it
+            hot_state.append(hot)
             return out
 
         result = await self.hass.async_add_executor_job(compute)
-        self._hist_cache = (hours, now, result)
-        return result if with_average else [p[:2] for p in result]
+        self._hist_hot = hot_state[-1] if hot_state else None   # the hot layer now, as the history shows it
+        self._hist_cache = (hours, now, result, avgs)
+
+
+    async def async_events(self, hours: int = 24) -> dict:
+        """The card's history: ``points`` (as async_history) and ``events``, the bands drawn over it: showers and
+        baths from the log, other hot water, and reheats read off the tank average in the same series."""
+        full = await self.async_history(hours, with_average=True)
+        end = dt_util.utcnow().timestamp() * 1000
+        begin = end - hours * 3600_000
+        cache = self._hist_cache                     # no await since the history was returned: still its cache
+        events = reheat_events((cache[3] if cache[0] == hours else None) or full)
+        for kind, entries in (("log", self.ledger.log), ("other", self.ledger.other)):
+            for e in entries:
+                try:
+                    start = datetime.fromisoformat(e["start"]).timestamp() * 1000
+                    length = float(e.get("duration") or e.get("minutes") or 0)
+                except (KeyError, TypeError, ValueError):
+                    continue
+                if length <= 0:
+                    continue
+                k = e.get("kind") or "shower"
+                events.append({"start": int(start), "end": int(start + length * 60_000),
+                               "kind": k if kind == "log" and k in ("shower", "bath") else "other"})
+        events = sorted((x for x in events if x["end"] >= begin and x["start"] <= end), key=lambda x: x["start"])
+        return {"points": [p[:2] for p in full], "events": events}
 
     # ------------------------------------------------------------------ learning
     def _data(self) -> dict:
+        # stamped at every write: after a restart this is when Home Assistant went away
+        self.alive_at = dt_util.utcnow().isoformat()
+        avg = (model.tank_average(self.params, self.top_value, self.bottom_value)
+               if self.top_value is not None and (not self.bottom or self.bottom_value is not None) else None)
         return {
+            "top_sensor": self.top,
+            "resume": {"at": self.alive_at, "top_sensor": self.top, "bottom_sensor": self.bottom, "top": self.top_value, "bottom": self.bottom_value, "avg": avg,
+                       "use": self._running_use()},
             "profile": self.profile, "params": self.params, "processed_until": self.processed_until,
             "last_cycle": asdict(self.last_cycle) if self.last_cycle else None, "last_learn": self.last_learn,
             "last_samples": self.last_samples, "full_ref": self.full_ref, "full_ref_avg": self.full_ref_avg,
@@ -1382,7 +1606,7 @@ class ShowerTimeManager:
             "habits": self.habits, "loss_samples": self.loss_samples, "drip_nights": self.drip_nights,
             "use_stats": self.use_stats, "loss_backfilled": self.loss_backfilled,
             "reheat_log": self.reheat_log, "reheat_since": self.reheat_since,
-            "legionella_at": self.legionella_at,
+            "legionella_at": self.legionella_at, "legionella_since": self.legionella_since,
             "learn_failures": self.learn_failures, "alive_at": self.alive_at,
             "hot_top": self.hot_top, "hot_at": self._hot_at.isoformat() if self._hot_at else None,
         }
@@ -1394,25 +1618,31 @@ class ShowerTimeManager:
         await self.async_learn()
 
     async def async_learn(self) -> None:
-        if self.learning:
+        if self.learning or self._stopped:
             return
         self.learning = True
         try:
             await self._learn()
-            self.learn_failures = 0
+            if not self._stopped:
+                self.learn_failures = 0
         except Exception:  # noqa: BLE001 - learning must never break the integration
+            if self._stopped:
+                return
             _LOGGER.exception("Learning failed; keeping the current model")
             self.learn_failures += 1
             self.request_save()
         finally:
             self.learning = False
-            self._check_health()
-            self.update()
+            if not self._stopped:
+                self._check_health()
+                self.update()
 
     async def _learn(self) -> None:
         if self.outdoor:
             await self._refresh_ema()
         await self.ledger.async_refresh_cop(self)
+        if self._stopped:
+            return
         now = dt_util.utcnow()
         end = now - timedelta(minutes=30)
         start = now - timedelta(days=HISTORY_DAYS)
@@ -1421,10 +1651,12 @@ class ShowerTimeManager:
         recorder = get_instance(self.hass)
         series = await self._fetch_series(start, end)
         rows = await self.hass.async_add_executor_job(self._rows, series, start, end)
+        if self._stopped:
+            return
         if rows and not self.heating and not any(r.heating for r in rows):
             model.mark_heating_from_temperature(rows)
         await self._update_heat_loss(rows, end)
-        if len(rows) < 600:
+        if self._stopped or len(rows) < 600:
             _LOGGER.info("Not enough history to learn yet (%d minutes)", len(rows))
             return
         energy = None
@@ -1437,6 +1669,8 @@ class ShowerTimeManager:
                 ts = row["start"]
                 ts = ts.timestamp() if isinstance(ts, datetime) else float(ts)
                 energy[int(ts // 60)] = float(row.get("change") or 0.0)
+            if self._stopped:
+                return
 
         water = self._water_series(series.get(self.water, [])) if self.water and self.flow_source == "water_meter" else None
 
@@ -1465,6 +1699,8 @@ class ShowerTimeManager:
                                 month_of=lambda t: _local(t).month, doy_of=lambda t: _local(t).timetuple().tm_yday,
                                 water=water, ema_of=ema_of if self.outdoor else None, draw_kind=draw_kind,
                                 draw_flow=self.draw_flow()))
+        if self._stopped:                               # unloaded while learning: the final save is already written
+            return
         self.params = result.params
         self.last_cycle = last
 

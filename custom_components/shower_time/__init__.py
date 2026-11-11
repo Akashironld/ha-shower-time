@@ -1,6 +1,7 @@
 """Hot Water Shower Time: a self-learning estimate of how long you can still shower."""
 from __future__ import annotations
 
+import hashlib
 import logging
 from pathlib import Path
 
@@ -35,7 +36,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         from homeassistant.loader import async_get_integration
         version = str((await async_get_integration(hass, DOMAIN)).version)
         hass.data[DOMAIN]["version"] = version
-    url = f"{CARD_URL}?v={version}"
+    url = await async_card_url(hass, card, version)
     # Older browsers (e.g. wall tablets) get Home Assistant's legacy build, which only loads es5 URLs.
     add_extra_js_url(hass, url, es5=True)
     if _resources(hass) is not None:
@@ -48,6 +49,13 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         add_extra_js_url(hass, url)                     # resources in YAML: the start page is the only way in
     websocket_api.async_register_command(hass, ws_history)
     return True
+
+
+async def async_card_url(hass: HomeAssistant, card: Path, version: str) -> str:
+    """The card's address: the static path is cached for 31 days, so the query must change with the file itself,
+    not only with the integration's version (a card fixed within one version would never reach the browsers)."""
+    digest = await hass.async_add_executor_job(lambda: hashlib.sha256(card.read_bytes()).hexdigest()[:8])
+    return f"{CARD_URL}?v={version}-{digest}"
 
 
 def _resources(hass: HomeAssistant):
@@ -101,7 +109,7 @@ async def ws_history(hass: HomeAssistant, connection: websocket_api.ActiveConnec
     if entry is None or entry.domain != DOMAIN or not hasattr(entry, "runtime_data"):
         connection.send_error(msg["id"], "not_found", "Not a Hot Water Shower Time entity")
         return
-    connection.send_result(msg["id"], {"points": await entry.runtime_data.async_history(msg["hours"])})
+    connection.send_result(msg["id"], await entry.runtime_data.async_events(msg["hours"]))
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ShowerTimeConfigEntry) -> bool:

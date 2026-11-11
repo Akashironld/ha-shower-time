@@ -46,6 +46,31 @@ def _cost(entries: list[dict]) -> float | None:
     return round(sum(costs), 2) if costs else (0.0 if not entries else None)
 
 
+def unit_factor(unit: str | None) -> tuple[float, str]:
+    """What turns a price in ``unit`` ("ct/kWh", "EUR/MWh", ...) into main currency units per kWh, and its symbol.
+
+    One place for parse_price (the live state) and the backfill (hourly statistics), so cents and MWh agree."""
+    unit = str(unit or "")
+    cur = unit.split("/")[0].strip()
+    low = cur.lower()
+    factor = 1.0
+    if "mwh" in unit.lower():
+        factor /= 1000
+    if low in ("ct", "c", "cent", "cents", "¢"):         # cents per kWh
+        return factor / 100, "€"
+    if low in ("eur", "euro"):
+        cur = "€"
+    return factor, cur
+
+
+SYMBOLS = {"EUR": "€", "USD": "$", "GBP": "£"}
+
+
+def currency_symbol(cur: str | None) -> str | None:
+    """What the card shows for a currency: the symbol of the common ISO codes, anything else as it is."""
+    return SYMBOLS.get(cur, cur) if cur else None
+
+
 def parse_price(state) -> tuple[float | None, str]:
     """Electricity price per kWh in main currency units, and the currency symbol."""
     if state is None or state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
@@ -54,16 +79,8 @@ def parse_price(state) -> tuple[float | None, str]:
         value = float(state.state)
     except (TypeError, ValueError):
         return None, ""
-    unit = str(state.attributes.get("unit_of_measurement") or "")
-    cur = unit.split("/")[0].strip()
-    low = cur.lower()
-    if low in ("ct", "c", "cent", "cents", "¢"):         # cents per kWh
-        return value / 100, "€"
-    if low in ("eur", "euro"):
-        cur = "€"
-    if "mwh" in unit.lower():
-        value /= 1000
-    return value, cur
+    factor, cur = unit_factor(state.attributes.get("unit_of_measurement"))
+    return value * factor, cur
 
 
 class ShowerLedger:
@@ -71,6 +88,7 @@ class ShowerLedger:
         self.log: list[dict] = []
         self.tank_price: float | None = None        # currency per kWh of heat in the tank
         self.currency: str = ""
+        self._currency_warned = False
         self.cop_learned: float | None = None
         self.backfilled = False
         self.session_start: datetime | None = None
@@ -82,6 +100,18 @@ class ShowerLedger:
         self.totals: dict = {"showers": 0, "minutes": 0.0, "heat_kwh": 0.0, "electricity_kwh": 0.0, "cost": 0.0}
         self.covered_from: str | None = None        # local date from which the log holds every shower
         self.other: list[dict] = []                 # other hot water use: washing up, taps, a bath being filled
+
+    def note_currency(self, cur: str) -> None:
+        """The currency of the price sensor. The unit of the monetary sensors follows it, and a unit that changes
+        mid-way breaks their long-term statistics: the first one known is kept (and saved), a later one ignored."""
+        if not cur or cur == self.currency:
+            return
+        if not self.currency:
+            self.currency = cur
+        elif not self._currency_warned:
+            self._currency_warned = True
+            _LOGGER.warning("The price sensor now reports %s; keeping %s as the currency so the cost statistics "
+                            "stay in one unit", cur, self.currency)
 
     # ------------------------------------------------------------------ persistence
     def to_dict(self) -> dict:
@@ -160,7 +190,7 @@ class ShowerLedger:
                     self.tank_price = heat_price
                 else:
                     self.tank_price = (held * self.tank_price + add * heat_price) / (held + add)
-                self.currency = cur or self.currency
+                self.note_currency(cur)
                 m.request_save()
         self._forecast(m, est, heating)
 
@@ -231,7 +261,7 @@ class ShowerLedger:
 
     def _price_now(self, m: ShowerTimeManager) -> float | None:
         price, cur = self.price_now(m)
-        self.currency = cur or self.currency
+        self.note_currency(cur)
         return price / self.cop(m) if price is not None else None
 
     def _entry(self, m: ShowerTimeManager, start: datetime, kind: str, minutes: float, heat_kwh: float,
@@ -320,10 +350,7 @@ class ShowerLedger:
         if m.price:
             st = m.hass.states.get(m.price)
             _, cur = parse_price(st)
-            factor = 1.0
-            if st is not None:
-                unit = str(st.attributes.get("unit_of_measurement") or "").split("/")[0].strip().lower()
-                factor = 0.01 if unit in ("ct", "c", "cent", "cents", "¢") else 1.0
+            factor = unit_factor(st.attributes.get("unit_of_measurement"))[0] if st is not None else 1.0
             start = datetime.fromtimestamp(rows[0].minute * 60, timezone.utc)
             end = datetime.fromtimestamp(rows[-1].minute * 60, timezone.utc)
             try:
@@ -355,7 +382,7 @@ class ShowerLedger:
                                  month=local.month, doy=local.timetuple().tm_yday,
                                  ema=m._ema_on(local.date().isoformat()))
             self._add(m, start, d.minutes, est.per_minute, heat_price, "history")
-        self.currency = cur or self.currency
+        self.note_currency(cur)
         self.backfilled = True
         first = dt_util.as_local(datetime.fromtimestamp(rows[0].minute * 60, timezone.utc))
         self.covered_from = (first + timedelta(days=1)).date().isoformat()   # first complete day
