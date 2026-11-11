@@ -666,6 +666,41 @@ def test_since_reheat_float_crumb_is_no_surplus():
         assert abs(left + s["showered"] + s["other"] + s["cooling"] - ref - s["reheated"]) < 1e-6
 
 
+def _meter(readings: list[tuple[float, float]]) -> insights.WaterSignal:
+    ws = insights.WaterSignal("rate")
+    for t, v in readings:
+        ws.feed(t, v)
+    return ws
+
+
+# #10, 8 Nov 11:29-11:45, L/min per minute: shower, 2 min off (soaping up), rinsing off, the sink, a burst, off
+NOV8 = [(0, 6.23), (1, 5.06), (2, 5.03), (3, 6.02), (4, 6.06), (5, 6.23), (6, 0.0), (8, 6.19), (9, 6.14),
+        (10, 2.46), (11, 2.46), (12, 2.49), (13, 2.61), (14, 5.94), (15, 3.47), (16, 0.0), (28, 0.0)]
+
+
+def test_shower_span_takes_in_rinsing_off_after_a_pause():
+    """#10, 8 Nov: the shower stopped for 2 minutes and ran on; only its first 6 minutes counted as shower and
+    the rinsing off went to the tap with the sink after it."""
+    ws = _meter(NOV8)
+    runs = ws.runs_between(-3, 28)
+    dry = lambda a, b: ws.litres_between(a, b) < insights.WATER_TAIL_LITRES
+    assert insights.shower_span(runs, dry) == (0, 10)              # 11:29-11:39; the sink from 11:39 is a tap
+    assert insights.shower_span(runs[:1], dry) == (0, 6)
+
+
+def test_shower_span_does_not_take_in_flow_after_a_tap_or_a_long_pause():
+    def span(ws, resume_run=insights.WATER_RESUME_RUN):
+        dry = lambda a, b: ws.litres_between(a, b) < insights.WATER_TAIL_LITRES
+        return insights.shower_span(ws.runs_between(-3, 30), dry, resume_run)
+
+    ws = _meter(NOV8)
+    assert insights.shower_span(ws.runs_between(-3, 28), lambda a, b: False) == (0, 6)   # water ran in between
+    assert span(_meter([(0, 6.0), (5, 0.0), (12, 6.0), (14, 0.0)])) == (0, 5)   # back after 7 min: a tap
+    quick = _meter([(0, 6.0), (5, 0.0), (7, 6.0), (8, 0.0)])                    # a minute at full: washing hands
+    assert span(quick) == (0, 5) and span(quick, resume_run=0.0) == (0, 8)
+    assert insights.shower_span([(0, 2.0)], lambda a, b: True) is None         # no shower's flow at all
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

@@ -550,9 +550,30 @@ WATER_SHOWER_RUN = model.SHOWER_FLOW_MINUTES
 WATER_TRICKLE = 0.5               # L/min below this a flow sensor shows no water running
 WATER_TAIL_LITRES = 1.0           # this much water after a shower's flow stopped: a tap used after it ...
 WATER_TAIL_GAP_MINUTES = 1.0      # ... counted from this long after it stopped (a tap closing slowly is the shower)
+WATER_PAUSE_MINUTES = 5.0         # a shower's flow back after the water was off this long at most: soaping up
+WATER_RESUME_RUN = 1.5            # ... and running this long: rinsing off, not a quick tap (#10)
 WATER_LEAD_MINUTES = 3.0          # the meter sees the water before the tank does
 BATH_LEAD_MINUTES = 10.0          # a bathroom signal that rose this long before a use belongs to it; one from
                                   # earlier is the humidity (or fan) of a shower before
+
+
+def shower_span(runs: list[tuple[float, float]], dry, resume_run: float = WATER_RESUME_RUN
+                ) -> tuple[float, float] | None:
+    """(began, stopped) of the shower in a use's shower-like flows: from its first flow of WATER_SHOWER_RUN to its
+    last, and on through a flow that comes back after a short pause with the water off (soaping up, then rinsing
+    off, #10). ``dry(t0, t1)``: no water ran in between; a flow that follows a tap is not the shower. None: no
+    shower's flow."""
+    long = [r for r in runs if r[1] - r[0] >= WATER_SHOWER_RUN]
+    if not long:
+        return None
+    began, stopped = long[0][0], long[-1][1]
+    for a, b in runs:
+        if a < stopped:
+            continue
+        if a - stopped > WATER_PAUSE_MINUTES or b - a < resume_run or not dry(stopped, a):
+            break
+        stopped = b
+    return began, stopped
 
 
 class WaterSignal:

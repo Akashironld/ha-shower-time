@@ -319,6 +319,28 @@ async def test_a_tap_after_a_metered_shower_is_a_tap_and_the_shower_stops_counti
     assert abs(tap["drawn"] / (shower["drawn"] + tap["drawn"]) - 7.0 / 59.8) < 0.01   # 7 of 59.8 litres
 
 
+async def test_rinsing_off_after_a_pause_is_still_the_shower(hass: HomeAssistant, deps, freezer) -> None:
+    """#10, 8 Nov 11:29: 6 minutes of shower, 2 minutes off (soaping up), 2 minutes rinsing off, then the sink.
+    Only the first 6 minutes counted as shower; the rinsing off went to the tap with the sink."""
+    hass.states.async_set(FLOW, "0", FLOW_ATTRS)
+    entry = await setup_entry(hass, {"water_sensor": FLOW})
+    m = entry.runtime_data
+    freezer.tick(timedelta(minutes=30))
+    tank(hass, 55.0, 50.0)
+    await hass.async_block_till_done()
+    bottom = 50.0
+    for flow, fall in ([(6.2, 2.0)] * 6 + [(0.0, 0.5)] * 2 + [(6.2, 2.0)] * 2 + [(2.5, 0.5)] * 4
+                       + [(0.0, 0.3)] * 2):
+        bottom -= fall
+        await flow_minute(hass, freezer, flow, bottom)
+    await wait(hass, freezer, 7)
+    assert state(hass, "sensor.hot_water_showers_today") == "1"
+    shower, tap = m.ledger.log[-1], m.ledger.other[-1]
+    assert shower["minutes"] == 8.0                           # the water ran 6 + 2 minutes of the 10
+    assert tap["kind"] == "tap" and tap["rule"] == "tail" and tap["minutes"] <= 4.0
+    assert tap["drawn"] < shower["drawn"] / 3                 # 10 of 59.6 litres was the sink
+
+
 async def flow_and_tank(hass: HomeAssistant, freezer, flow: float, reading: tuple[float, float] | None) -> None:
     freezer.tick(timedelta(minutes=1))
     hass.states.async_set(FLOW, str(flow), FLOW_ATTRS)

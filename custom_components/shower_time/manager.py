@@ -692,8 +692,7 @@ class ShowerTimeManager:
         if kind == "shower" and metered:
             # the shower runs from its first long flow to its last: short bursts after it are a tap, used while the
             # tank still falls (it reports minutes late) and so taken into the same use (#10)
-            long = [r for r in runs if r[1] - r[0] >= insights.WATER_SHOWER_RUN]
-            began, stopped = long[0][0], long[-1][1]
+            began, stopped = insights.shower_span(runs, self._water_off)
             after_from, until = stopped + insights.WATER_TAIL_GAP_MINUTES, end.timestamp() / 60
             after, tail_l = ws.water_times(after_from, until), ws.litres_between(after_from, until)
             shower_l = ws.litres_between(began, stopped)
@@ -771,10 +770,15 @@ class ShowerTimeManager:
         runs = self._meter_runs(self.use, now)
         if not runs:
             return None
-        long = [r for r in runs if r[1] - r[0] >= insights.WATER_SHOWER_RUN]
-        if not long or now - long[-1][1] < insights.WATER_GAP_MINUTES:
+        span = insights.shower_span(runs, self._water_off)    # rinsing off counts once it ran a little: not a tap
+        if span is None or now - span[1] < insights.WATER_GAP_MINUTES:
             return None
-        return _at(long[-1][1])
+        return _at(span[1])
+
+    def _water_off(self, t0: float, t1: float) -> bool:
+        """The water meter saw no water between t0 and t1 (minutes)."""
+        ws = self.water_signal
+        return ws is not None and ws.litres_between(t0, t1) < insights.WATER_TAIL_LITRES
 
     GAP_SETTLE = timedelta(minutes=1)    # after a gap, the tank sensors come back one by one: wait for all
 
