@@ -396,9 +396,9 @@ style: classic
 ```
 
 The graph is filled from the tank sensors' history, so it is complete from the first day. Hover or touch it to read
-the value at any moment:
+the value at any moment. The classic look (`style: classic`) looks like this:
 
-<p align="center"><img src="assets/card-en-hover.png" alt="Card with the graph tooltip" width="460"></p>
+<p align="center"><img src="assets/card-classic-en.png" alt="The classic look (style: classic)" width="460"></p>
 
 What you see in the default look, from top to bottom:
 

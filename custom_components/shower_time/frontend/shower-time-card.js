@@ -592,7 +592,7 @@ class ShowerTimeHud extends ShowerTimeBase {
               background: linear-gradient(135deg, rgba(95,224,208,.05), transparent); }
       .tl { display: flex; align-items: center; gap: 5px; font-size: 11px; letter-spacing: .06em; color: var(--st-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       .tl ha-icon { --mdc-icon-size: 14px; color: var(--ac, var(--st-cyan)); }
-      .tv { font-size: 15px; color: var(--st-num); margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .tv { font-size: 13px; line-height: 1.3; color: var(--st-num); margin-top: 3px; overflow-wrap: anywhere; }   /* wraps, never cuts a cost off */
       .tv small { font-size: 11px; color: var(--st-dim); }
       .ts { font-size: 11px; color: var(--st-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       .hist { margin-top: 14px; }
