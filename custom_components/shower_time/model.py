@@ -155,8 +155,10 @@ def cold_for(params: dict, month: int, doy: int | None = None, ema: float | None
 # everything above the point where T falls to the shower temperature, counted as the mixed water it makes.
 
 # Weheat spec sheet "Buffertanks & Boilertanks" (versions 280224, 080824 and 050225 agree), mm from the floor.
+# WBL-200: the sensors sit higher than the sheet says (730 / 480 mm). Measured on a tank: top 330 mm below the top
+# of the 1212 mm tank, bottom 580 mm up (#10); a second tank learned its top sensor at the same height.
 TANK_TYPES: dict[str, dict] = {
-    "weheat_wbl200": {"outlet": 1212, "top": 730, "bottom": 480, "inlet": 230},
+    "weheat_wbl200": {"outlet": 1212, "top": 882, "bottom": 580, "inlet": 230},
     "weheat_wbl300": {"outlet": 1572, "top": 1220, "bottom": 560, "inlet": 230},
 }
 THERMOCLINE = 0.075        # d: width of the thermocline as a share of the column (measured 0.084 on a WBL-200)

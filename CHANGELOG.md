@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.15.2b2 — Beta: the right sensor heights for the Weheat WBL-200
+
+**Beta, for testers of #10** — for everyone with the Weheat WBL-200 tank type; also has everything from v0.15.2b1.
+
+### Fixes
+- **The WBL-200's sensors sit higher than the spec sheet says.** Measured on a tank, the top sensor is 330 mm below the top of the 1212 mm tank (882 mm up, not 730) and the bottom sensor 580 mm up (not 480); a second tank had learned its top sensor at the same height on its own. With the right heights the layer model counts less hot water above the top sensor, so the minutes come out lower, about a fifth at a part-used tank (#10).
+
+### After updating
+In HACS, open Shower Time, choose *Redownload* with *Show beta versions* on and pick v0.15.2b2, then restart Home Assistant. The sensor heights start again from the new values: a tank that learned its top sensor's height learns it again over the next deep showers.
+
 ## v0.15.2b1 — Beta: a tank that stood half-empty no longer promises too much
 
 **Beta, for testers of #10** — only with a tank type or sensor heights set and a bottom sensor; it changes how many minutes a part-used tank shows after it has stood a while.

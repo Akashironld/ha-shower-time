@@ -340,7 +340,7 @@ def test_tank_types_give_the_spec_sheet_heights():
     assert g["source"] == "weheat_wbl300" and g["learn"]
     assert 0.75 < g["top"] < 0.82 and 0.28 < g["bottom"] < 0.34      # 1220 / 560 mm of 120..1522 mm
     g2 = model.new_geometry("weheat_wbl200", None, False)
-    assert 0.55 < g2["top"] < 0.62 and not g2["learn"]
+    assert 0.70 < g2["top"] < 0.76 and 0.42 < g2["bottom"] < 0.46 and not g2["learn"]   # measured, #10
 
 
 def test_typed_heights_replace_the_tank_type_and_unknown_tank_waits():
@@ -446,11 +446,11 @@ def _shower_rows(g, true_top, true_bottom, hot=50.0, cold=15.0, flow=6.0, volume
 
 
 def test_sensor_heights_are_learned_from_deep_showers():
-    g = model.new_geometry("weheat_wbl200", None, True)               # spec says top at ~0.58
-    g["draws"] = _shower_rows(g, true_top=0.74, true_bottom=g["bottom"])
+    g = model.new_geometry("weheat_wbl200", None, True)               # the table says top at ~0.73
+    g["draws"] = _shower_rows(g, true_top=0.85, true_bottom=g["bottom"])
     learned = model.learn_geometry(g, 200)
     assert learned["n"] >= model.GEO_MIN_DRAWS
-    assert abs(learned["top"] - 0.74) < 0.05
+    assert abs(learned["top"] - 0.85) < 0.05
     fixed = model.learn_geometry({**g, "learn": False}, 200)
     assert fixed["top"] == g["top"]                                   # learning off: heights stay
 

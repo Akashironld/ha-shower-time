@@ -1386,7 +1386,9 @@ class ShowerTimeManager:
             self._heat_from = None
             self._rise_at = None
             return
-        if not heating and m > ref_now + 0.3:   # sensors still settling after the reheat state switched off
+        # sensors still settling after the reheat state switched off. Not for less than a minute: with the layer
+        # model a full tank's minutes rise a little when the top reads 0.1 K lower before the bottom updates
+        if not heating and m > ref_now + 1.0:
             self._set_ref(m)
 
     def ref_minutes(self) -> float | None:
