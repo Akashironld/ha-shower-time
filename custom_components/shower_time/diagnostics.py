@@ -56,6 +56,7 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: ShowerT
         "live": {
             "top": m.top_value, "bottom": m.bottom_value, "reheating": m.reheating, "showering": m.showering,
             "live_offset_min": round(m.live_offset, 2), "estimate": asdict(e) if e else None,
+            "hot_top": m.hot_top, "blur": round(m.blur, 3),
             "fill_percent": m.fill_percent(), "full_reference_minutes": m.ref_minutes(),
             "full_reference_avg": m.full_ref_avg, "full_reference_at": m.full_ref_at,
             "since_reheat": m.since_reheat(), "standing_loss_per_day": m.standing_loss_per_day(),

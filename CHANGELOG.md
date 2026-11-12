@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.15.2b1 — Beta: a tank that stood half-empty no longer promises too much
+
+**Beta, for testers of #10** — only with a tank type or sensor heights set and a bottom sensor; it changes how many minutes a part-used tank shows after it has stood a while.
+
+### Fixes
+- **A part-used tank that stood for hours no longer promises too much.** With a tank type or sensor heights (the layer model), a tank read as hot water down to just above the bottom sensor whenever the bottom was lukewarm. Right after a shower that is so. But after hours of standing the boundary between hot and cold water blurs: the middle turns lukewarm, and the same two readings hold far less hot water. On a Weheat 200 L tank at 48/25 °C after a night, the card said 27 minutes and the water ran cold after 10 (#10). The longer a part-used tank stands, the more the minutes now follow the tank average (the model without sensor heights): about halfway after 4 hours, nearly all the way after 14. A full tank, and a tank right after a shower, keep the layer model. The blur starts again once a reheat fills the tank past the bottom sensor.
+- Hot water that turned lukewarm while the tank stood shows as *cooled* in *Since reheat*, but its heat is not counted as lost to cooling (it is still in the tank). *Since reheat* has `lukewarm_minutes` for that share; diagnostics show the hot layer and the blur.
+
+### After updating
+In HACS, open Shower Time, choose *Redownload* and turn on *Show beta versions* to pick v0.15.2b1, then restart Home Assistant. The blur starts at zero and builds up while the tank stands, so the first night after updating shows the change only partly. A diagnostics file after a morning shower from a tank that stood overnight helps the most.
+
 ## v0.15.1 — Rinsing off is the shower, and the bar adds up again
 
 **Recommended for everyone** — with a water meter, a shower with a pause in it (soaping up) was cut short and the rest booked as a tap; and on any tank, *Since reheat* could leave the end of the bar empty with too little *cooling*.

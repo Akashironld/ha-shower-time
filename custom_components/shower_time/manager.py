@@ -202,6 +202,10 @@ class ShowerTimeManager:
                                                           bool(cfg.get(CONF_LEARN_HEIGHTS, DEFAULT_LEARN_HEIGHTS)))
                                        if self.bottom else None)
         self.hot_top: float | None = None           # the hot layer: hottest top since the last reheat
+        self.blur: float = 0.0                      # how far a part-used tank's hot/cold boundary has blurred
+        self._blur_stored = False
+        self.blurred_minutes = 0.0                  # minutes that blur takes off the layer model now
+        self._blur_share: float | None = None       # how part-used the tank was at the last reading
         self._hot_at: datetime | None = None
         self._hot_stored = False                    # the hot layer came from the store (else: from the history)
 
@@ -309,6 +313,9 @@ class ShowerTimeManager:
             self.hot_top = stored.get("hot_top")
             self._hot_stored = self.hot_top is not None
             self._hot_at = dt_util.parse_datetime(stored["hot_at"]) if stored.get("hot_at") else None
+            self._blur_stored = stored.get("blur") is not None
+            self.blur = float(stored.get("blur") or 0.0)
+            self._blur_share = stored.get("blur_share")
             self.use_stats = {**self.use_stats, **(stored.get("use_stats") or {})}
             self.ledger.load(stored.get("ledger"))
             self.full_ref_avg = stored.get("full_ref_avg")
@@ -489,6 +496,8 @@ class ShowerTimeManager:
         now = dt_util.utcnow()
         minutes = (now - self._hot_at).total_seconds() / 60 if self._hot_at else 0.0
         self.hot_top = model.hot_layer(self.params, self.top_value, self.hot_top, minutes, self.reheating)
+        self.blur = model.spread(self.top_value, self.bottom_value, self.blur, minutes, self._blur_share)
+        self._blur_share = model.part_used(self.top_value, self.bottom_value)
         self._hot_at = now
 
     def draw_flow(self) -> float | None:
@@ -554,10 +563,14 @@ class ShowerTimeManager:
             head = self.head_flow()[0] if self.temp_mode == "auto" else None
             now = dt_util.now()
             self._follow_hot_layer()
-            self.estimate = model.estimate(self.params, self.top_value, self.bottom_value, volume=self.volume,
-                                           shower_temp=self.shower_temp, month=now.month, head_flow=head,
-                                           doy=now.timetuple().tm_yday, ema=self.ema_now, hot=self.hot_top,
-                                           draw_flow=self.draw_flow())
+            kw = dict(volume=self.volume, shower_temp=self.shower_temp, month=now.month, head_flow=head,
+                      doy=now.timetuple().tm_yday, ema=self.ema_now, hot=self.hot_top, draw_flow=self.draw_flow())
+            self.estimate = model.estimate(self.params, self.top_value, self.bottom_value, blur=self.blur, **kw)
+            # minutes the blur took off: hot water turned lukewarm, its heat still in the tank (not lost to cooling)
+            self.blurred_minutes = 0.0
+            if self.blur > 0.0 and self.params.get("geo") and self.bottom_value is not None:
+                sharp = model.estimate(self.params, self.top_value, self.bottom_value, **kw)
+                self.blurred_minutes = max(0.0, sharp.minutes - self.estimate.minutes)
             self._track_full(self.estimate.minutes)
             self.ledger.on_estimate(self, self.estimate)
             self._hold_until = None
@@ -1428,7 +1441,8 @@ class ShowerTimeManager:
         heating_now = getattr(self, "_was_heating", False) and self._heat_from is not None   # a top-up going on now
         s = insights.split_since_reheat(ref, e.minutes, showered, other, standing, bool(self.top_ups) or heating_now)
         cooling, reheated = s["cooling"], s["reheated"]
-        heat = cooling * per_min_kwh
+        # hot water that turned lukewarm while the tank stood counts as cooled minutes, but its heat is still there
+        heat = max(min(cooling, standing), cooling - self.blurred_minutes) * per_min_kwh
         price = self.ledger.tank_price
         if price is None:
             p, _ = self.ledger.price_now(self)
@@ -1441,7 +1455,7 @@ class ShowerTimeManager:
                 "remaining_minutes": round(e.minutes, 1), "showered_minutes": round(s["showered"], 1),
                 "other_minutes": round(s["other"], 1),
                 "bath_minutes": round(bath * s["other"] / other, 1) if other else 0.0,   # its share of other
-                "cooling_minutes": round(cooling, 1),
+                "cooling_minutes": round(cooling, 1), "lukewarm_minutes": round(min(cooling, self.blurred_minutes), 1),
                 "reheated_minutes": round(reheated, 1), "total_minutes": round(ref + reheated, 1),
                 "overcounted_minutes": round(s["overcounted"], 1),
                 "cooling_kwh_heat": round(heat, 2),
@@ -1486,6 +1500,9 @@ class ShowerTimeManager:
         if not self._hot_stored and getattr(self, "_hist_hot", None) is not None:
             self.hot_top = max(self.hot_top or 0.0, self._hist_hot)
             self._hot_stored = True
+        if not self._blur_stored and getattr(self, "_hist_blur", None) is not None:
+            self.blur = self._hist_blur              # an update to this version: how long the tank stood, from history
+            self._blur_stored = True
         self.full_ref_state = state if state and None not in state else None
         if ref is None and self.estimate:
             ref = self.estimate.minutes
@@ -1536,7 +1553,7 @@ class ShowerTimeManager:
         avgs: list[list[float]] = []                # tank average every 5 minutes: reheats are read off this
 
         def compute() -> list[list[float]]:
-            out, i, j, top, bot, last, hot = [], 0, 0, None, None, None, None
+            out, i, j, top, bot, last, hot, blur = [], 0, 0, None, None, None, None, 0.0
             avgs.clear()
             tops, bots = series.get(top_ent, []), series.get(bottom_ent, []) if bottom_ent else []
             t = start.timestamp()
@@ -1550,9 +1567,11 @@ class ShowerTimeManager:
                 if top is not None and (not bottom_ent or bot is not None):
                     local = dt_util.as_local(datetime.fromtimestamp(t, timezone.utc))
                     hot = model.hot_layer(params, top, hot, 5.0, False)
+                    blur = model.spread(top, bot, blur, 5.0)
                     e = model.estimate(params, top, bot, volume=volume, shower_temp=shower_temp,
                                        month=local.month, head_flow=head, doy=local.timetuple().tm_yday,
-                                       ema=_ema_lookup(ema_table, local.date().isoformat()), hot=hot, draw_flow=rate)
+                                       ema=_ema_lookup(ema_table, local.date().isoformat()), hot=hot, draw_flow=rate,
+                                       blur=blur)
                     v = round(e.minutes)
                     avgs.append([int(t * 1000), v, round(e.average, 2)])
                     if v != last:
@@ -1562,10 +1581,12 @@ class ShowerTimeManager:
             if out and out[-1][0] < int(now.timestamp() * 1000):
                 out.append([int(now.timestamp() * 1000), last, *out[-1][2:]])
             hot_state.append(hot)
+            hot_state.append(blur)
             return out
 
         result = await self.hass.async_add_executor_job(compute)
-        self._hist_hot = hot_state[-1] if hot_state else None   # the hot layer now, as the history shows it
+        # the hot layer and the blur now, as the history shows them
+        self._hist_hot, self._hist_blur = (hot_state[-2], hot_state[-1]) if hot_state else (None, None)
         self._hist_cache = (hours, now, result, avgs)
 
 
@@ -1613,6 +1634,7 @@ class ShowerTimeManager:
             "legionella_at": self.legionella_at, "legionella_since": self.legionella_since,
             "learn_failures": self.learn_failures, "alive_at": self.alive_at,
             "hot_top": self.hot_top, "hot_at": self._hot_at.isoformat() if self._hot_at else None,
+            "blur": round(self.blur, 4), "blur_share": self._blur_share,
         }
 
     async def _first_learn(self, _now) -> None:

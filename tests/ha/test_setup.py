@@ -202,3 +202,34 @@ async def test_layer_model_after_updating_from_an_older_version(hass: HomeAssist
     m = entry.runtime_data
     assert m.full_ref_state == [52.8, 52.5]
     assert m.params.get("geo") and 0 < m.fill_percent() < 100
+
+
+async def test_a_part_used_tank_that_stands_moves_to_the_simple_model(hass: HomeAssistant, deps, freezer) -> None:
+    """#10: the same two readings mean less hot water the longer a part-used tank stands; the blur is kept."""
+    from datetime import timedelta
+
+    from homeassistant.util import dt as dt_util
+
+    from custom_components.shower_time import model
+
+    from .conftest import tank
+    entry = await setup_entry(hass, data={"tank_type": "weheat_wbl200"}, top=48.4, bottom=24.8)
+    m = entry.runtime_data
+    await hass.async_block_till_done(wait_background_tasks=True)
+    fresh = m.estimate.minutes
+    for hour in range(14):                       # a night standing: the top cools, the bottom slowly warms
+        freezer.tick(timedelta(hours=1))
+        tank(hass, 48.4 - 0.01 * (hour + 1), 24.8)
+        await hass.async_block_till_done()
+    assert m.blur > 0.9
+    simple = model.estimate({k: v for k, v in m.params.items() if k != "geo"}, m.top_value, m.bottom_value,
+                            volume=200, shower_temp=m.shower_temp, month=dt_util.now().month,
+                            doy=dt_util.now().timetuple().tm_yday, ema=m.ema_now).minutes
+    assert m.estimate.minutes < fresh / 2 and abs(m.estimate.minutes - simple) < 0.15 * fresh
+    assert m.blurred_minutes > fresh / 3
+    assert m._data()["blur"] == round(m.blur, 4)
+    diag = await async_get_config_entry_diagnostics(hass, entry)
+    assert diag["live"]["blur"] > 0.9
+    tank(hass, 55.0, 54.0)                       # reheated: hot water past the bottom sensor again
+    await hass.async_block_till_done()
+    assert m.blur == 0.0 and m.blurred_minutes == 0.0

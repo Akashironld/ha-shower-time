@@ -292,14 +292,16 @@ def shower_minute(params: dict, cold: float, shower_temp: float, volume: float) 
 
 def estimate(params: dict, top: float, bottom: float | None, *, volume: float, shower_temp: float,
              month: int, head_flow: float | None = None, doy: int | None = None, ema: float | None = None,
-             hot: float | None = None, draw_flow: float | None = None) -> Estimate:
+             hot: float | None = None, draw_flow: float | None = None, blur: float | None = None) -> Estimate:
     """``shower_temp`` is the fixed temperature or the 38 °C reference in auto mode.
     ``head_flow`` (L/min) is the known shower-head flow, if any: it only changes the litres and the
     reported shower temperature, never the minutes (those come from the learned heat per minute).
     With sensor heights (``params['geo']``) and a bottom sensor the minutes come from the layer model; ``hot`` is
     then the hottest the top was since the last reheat (None: the top now), and the minutes are the litres over
-    ``draw_flow`` (L/min a shower draws at ``shower_temp``, when known) or the learned flow. ``empty_at`` is the
-    tank average the minutes run down to, so everything that counts in tank-average degrees keeps working."""
+    ``draw_flow`` (L/min a shower draws at ``shower_temp``, when known) or the learned flow. ``blur`` (see
+    ``spread``) moves a part-used tank's minutes from the layer model towards the simple model the longer it stood.
+    ``empty_at`` is the tank average the minutes run down to, so everything that counts in tank-average degrees
+    keeps working."""
     cold = cold_for(params, month, doy, ema)
     flow = params["flow"]["v"]
     per_minute = shower_minute(params, cold, shower_temp, volume)
@@ -309,6 +311,11 @@ def estimate(params: dict, top: float, bottom: float | None, *, volume: float, s
     if geo and bottom is not None:
         rate = draw_flow or flow
         minutes = layer_litres(geo, top, bottom, hot=hot, cold=cold, shower_temp=shower_temp, volume=volume) / rate
+        weight = (blur or 0.0) * part_used(top, bottom)
+        if weight > 0.0:
+            # a part-used tank that stood: its blurred boundary leaves the tank average as the better guide
+            simple = max(0.0, (avg - empty) / per_minute) if top >= shower_temp + 2 else 0.0
+            minutes += weight * (simple - minutes)
         empty = avg - minutes * per_minute
     else:
         minutes = max(0.0, (avg - empty) / per_minute) if top >= shower_temp + 2 else 0.0
@@ -471,6 +478,34 @@ def _hot_before(rows: list[Row], minute: int, loss_k_h: float) -> float:
         prev = [r.top for r in rows if r.minute < minute]
         return prev[-1] if prev else 0.0
     return best - loss_k_h * (minute - at) / 60
+
+
+SPREAD_HOURS = 6.0         # hours a part-used tank stands before its hot/cold boundary is mostly blurred (#10)
+
+
+def part_used(top: float, bottom: float | None) -> float:
+    """0 when hot water fills the tank past the bottom sensor (no boundary between the sensors), 1 when the
+    bottom is 15 K or more below the top: cold water came in and the boundary sits between them."""
+    if bottom is None:
+        return 0.0
+    return min(1.0, max(0.0, (top - bottom - 5.0) / 10.0))
+
+
+def spread(top: float, bottom: float | None, prev: float | None, minutes: float,
+           prev_share: float | None = None) -> float:
+    """How far the boundary between hot and cold water has blurred: 0 = sharp, towards 1 the longer a part-used
+    tank stands. Right after a shower the hot water sits on the cold water as a slab, as the layer model takes it.
+    Hours later heat has spread down (the top cools faster than the standing loss, the bottom warms) and the same
+    two readings mean much less hot water: a lukewarm middle instead of hot water down to the bottom sensor.
+    Starts again once hot water fills the tank past the bottom sensor (a reheat). ``prev_share`` is how part-used
+    the tank was at the previous reading: over a gap (a restart, a sensor away for hours) the tank only stood
+    part-used as far as it was before the gap, not as a shower running right after it makes it look."""
+    share = part_used(top, bottom)
+    if share <= 0.0:
+        return 0.0
+    if prev_share is not None:
+        share = min(share, prev_share)
+    return 1.0 - (1.0 - (prev or 0.0)) * math.exp(-share * max(0.0, minutes) / 60.0 / SPREAD_HOURS)
 
 
 def hot_layer(params: dict, top: float, hot: float | None, minutes: float, reheating: bool) -> float:

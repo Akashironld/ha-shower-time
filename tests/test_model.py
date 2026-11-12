@@ -372,6 +372,39 @@ def test_estimate_uses_the_layer_model_and_keeps_degrees_consistent():
         model.estimate(model.new_params("generic"), 45.6, None, volume=300, shower_temp=38.0, month=11).minutes
 
 
+def test_blur_grows_while_a_part_used_tank_stands_and_starts_again_when_full():
+    assert model.spread(48.4, 24.8, 0.0, 0.0) == 0.0
+    six = model.spread(48.4, 24.8, 0.0, 6 * 60)
+    assert 0.6 < six < 0.65                                          # 1 - e^-1 after SPREAD_HOURS
+    stepwise = 0.0
+    for _ in range(72):                                              # the same six hours in 5-minute steps
+        stepwise = model.spread(48.4, 24.8, stepwise, 5.0)
+    assert abs(stepwise - six) < 1e-9
+    assert model.spread(48.4, 24.8, 0.0, 14 * 60) > 0.9
+    assert model.spread(57.0, 54.1, 0.9, 60) == 0.0                  # reheated: hot past the bottom sensor
+    assert model.spread(48.4, None, 0.5, 60) == 0.0                  # one sensor: nothing to tell
+    assert abs(model.spread(48.4, 24.8, 0.3, -5) - 0.3) < 1e-12      # a clock step back changes nothing
+    # a restart of 8 hours with a full tank, and a shower running right after it: the tank did not stand part-used
+    assert model.spread(52.0, 30.0, 0.0, 8 * 60, prev_share=0.0) == 0.0
+    assert model.spread(48.4, 24.8, 0.0, 8 * 60, prev_share=1.0) == model.spread(48.4, 24.8, 0.0, 8 * 60)
+
+
+def test_a_part_used_tank_that_stood_overnight_has_less_than_the_layer_model_says():
+    # #10: 48.4/24.8 °C after a bath the day before and a night standing; the water ran cold after ~10 minutes
+    p = model.new_params("generic")
+    simple = model.estimate(p, 48.4, 24.8, volume=200, shower_temp=38.0, month=11).minutes
+    p["geo"] = model.new_geometry("weheat_wbl200", None, True)
+    kw = dict(volume=200, shower_temp=38.0, month=11, hot=50.5)
+    fresh = model.estimate(p, 48.4, 24.8, **kw)
+    night = model.estimate(p, 48.4, 24.8, blur=model.spread(48.4, 24.8, 0.0, 14 * 60), **kw)
+    assert fresh.minutes > 2 * simple                                # right after a shower: the layer model
+    assert abs(night.minutes - simple) < 0.1 * (fresh.minutes - simple)
+    assert abs(night.average - night.minutes * night.per_minute - night.empty_at) < 1e-6
+    full = model.estimate(p, 55.0, 54.0, volume=200, shower_temp=38.0, month=11, hot=55.0)
+    assert model.estimate(p, 55.0, 54.0, volume=200, shower_temp=38.0, month=11, hot=55.0, blur=1.0).minutes == \
+        full.minutes                                                 # a full tank keeps the layer model
+
+
 def test_layer_litres_formula_matches_a_sum_over_the_column():
     g = model.new_geometry("weheat_wbl200", None, True)
     for top, bottom, hot in ((52.0, 51.5, 52.0), (51.0, 30.0, 52.0), (44.0, 18.0, 52.0)):

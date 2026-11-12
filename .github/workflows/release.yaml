@@ -53,6 +53,9 @@ jobs:
               echo "Release ${TAG} exists already, leaving it"
             fi
           else
-            gh release create "${TAG}" --title "${TITLE}" --notes-file body.md --latest \
+            # a beta (v0.15.2b1, also a1 or rc1) is a pre-release: HACS offers it only with "Show beta versions"
+            kind="--latest"
+            if [[ "${TAG}" =~ [0-9](a|b|rc)[0-9]+$ ]]; then kind="--prerelease"; fi
+            gh release create "${TAG}" --title "${TITLE}" --notes-file body.md "${kind}" \
               || gh release view "${TAG}" > /dev/null   # made by a run that started at the same moment
           fi
