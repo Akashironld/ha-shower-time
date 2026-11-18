@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.15.2b4 — Beta: a full tank no longer promises 5–7 minutes too many
+
+**Beta, for testers of #10** — only with a tank type or sensor heights set and a bottom sensor; also has everything from v0.15.2b1 to b3.
+
+### Fixes
+- **A full tank no longer promises too much.** With a tank type or sensor heights (the layer model), all hot water from the cold inlet up counted as usable. But the cold water coming in stirs up the water just above the inlet, and that part comes out lukewarm or not at all, however hot it was. Checked against a 24-layer tank model that replays two Weheat 200 L tanks over 12 and 13 days (their sensors, and a water meter on one of them), a full tank showed 4–7 minutes too many, so the minutes ran down faster than the showers took. The usable water now starts above the inlet's mixing zone, about 18 cm above the cold inlet on any tank (never above the bottom sensor). On those two tanks the average error fell from 4.0 and 5.6 to 2.3 and 2.6 minutes; a full 200 L tank at 52 °C now shows about 37 minutes instead of 45. A part-used tank changes little.
+
+### After updating
+In HACS, open Shower Time, choose *Redownload* with *Show beta versions* on and pick v0.15.2b4, then restart Home Assistant. The card shows fewer minutes at once; 100 % moves with it, so the fill level does not jump.
+
 ## v0.15.2b3 — Beta: a full tank that cools overnight loses minutes again
 
 **Beta, for testers of #10** — only with a tank type or sensor heights set and a bottom sensor; also has everything from v0.15.2b1 and b2.

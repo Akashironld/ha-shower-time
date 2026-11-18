@@ -162,6 +162,7 @@ TANK_TYPES: dict[str, dict] = {
     "weheat_wbl300": {"outlet": 1572, "top": 1220, "bottom": 560, "inlet": 230},
 }
 THERMOCLINE = 0.075        # d: width of the thermocline as a share of the column (measured 0.084 on a WBL-200)
+INLET_MIX_MM = 177         # how far above the cold inlet its jet stirs the water up: lukewarm, never at shower temp
 LAYER_FIT_TOL = 0.5        # K: readings fitted this well count as fitting
 GEO_MIN_DRAWS = 4          # showers that reached the thermocline before the top sensor's height moves
 GEO_KEEP = 80              # showers kept for learning it
@@ -183,6 +184,7 @@ def new_geometry(tank_type: str | None, heights: dict | None, learn: bool) -> di
     z = lambda mm: round(min(0.98, max(0.0, (mm - lo) / max(hi - lo, 1.0))), 4)
     zt, zb = z(h["top"]), z(h["bottom"])
     return {"source": source, "learn": bool(learn), "start": [zt, zb], "inlet": z(inlet), "top": zt, "bottom": zb,
+            "mix": z(inlet + INLET_MIX_MM),
             "range": [round(max(zb + 0.1, zt - 0.1), 4), round(min(0.97, zt + 0.3), 4)], "draws": [], "n": 0}
 
 
@@ -216,17 +218,29 @@ def fit_thermocline(top: float, bottom: float, hot: float, cold: float, zt: floa
     return highest if highest is not None else best
 
 
+def mix_floor(geo: dict) -> float:
+    """Where the usable water starts: above the zone the cold inlet's jet stirs up (``INLET_MIX_MM``). Geometry
+    stored before it had this works it out from the inlet's height (the column starts 110 mm below the inlet). Never
+    above the bottom sensor or halfway up: hot water there is hot water."""
+    floor = geo.get("mix")
+    if floor is None:
+        floor = geo["inlet"] * (1 + INLET_MIX_MM / 110)
+    return max(geo["inlet"], min(floor, geo["bottom"] - 0.05, 0.5))
+
+
 def layer_litres(geo: dict, top: float, bottom: float, *, hot: float | None, cold: float, shower_temp: float,
                  volume: float) -> float:
     """Mixed litres at ``shower_temp`` the tank still makes. ``hot`` = the hottest the top was since the last
     reheat (less the standing loss): the water above the top sensor once the thermocline passed it. The integral
-    of the logistic above the shower-temperature point (and above the cold inlet: the water below it stays)."""
+    of the logistic above the shower-temperature point and above the inlet's mixing zone: the cold water coming in
+    stirs up the water just above the inlet, so that water leaves lukewarm (or not at all), however hot it was. Fitted
+    on two Weheat 200 L tanks against a layered tank model (#10: a full tank's minutes were 4-7 too high)."""
     hot = max(hot or top, top)
     if hot <= shower_temp or shower_temp <= cold:
         return 0.0
     z0 = fit_thermocline(top, bottom, hot, cold, geo["top"], geo["bottom"])
     q = (shower_temp - cold) / (hot - cold)
-    z_from = max(geo["inlet"], z0 + THERMOCLINE * math.log(q / (1 - q)))
+    z_from = max(mix_floor(geo), z0 + THERMOCLINE * math.log(q / (1 - q)))
     d = THERMOCLINE
     share = d * (_softplus((1 - z0) / d) - _softplus((z_from - z0) / d))
     return max(0.0, share) * volume / q

@@ -356,7 +356,7 @@ def test_layer_litres_follow_the_hot_water():
     full = model.layer_litres(g, 45.5, 45.4, hot=45.5, **kw)
     mid = model.layer_litres(g, 45.4, 22.0, hot=45.5, **kw)
     low = model.layer_litres(g, 30.0, 16.0, hot=45.5, **kw)
-    assert 300 < full < 380                                          # 300 L at 45.5 makes ~400 L at 38 at most
+    assert 270 < full < 340      # 300 L at 45.5 makes ~400 L at 38 at most; the inlet's mixing zone never comes out hot
     assert full > mid > low >= 0
     assert model.layer_litres(g, 36.0, 16.0, hot=36.0, **kw) == 0.0
 
@@ -422,11 +422,34 @@ def test_a_full_tank_that_cooled_overnight_loses_its_heat_in_minutes():
     assert model.estimate(p, 61.9, 40.0, ref=ref, **used).minutes == model.estimate(p, 61.9, 40.0, **used).minutes
 
 
+def test_a_full_tank_gives_what_a_layered_tank_model_says():
+    # #10: fitted on two Weheat 200 L tanks (a 24-layer tank model replaying their sensors and water meter), a full
+    # tank delivers about 70 % of what its heat could make at shower temperature; the inlet's mixing zone stays behind
+    g = model.new_geometry("weheat_wbl200", None, True)
+    for hot in (52.0, 65.7):
+        most = 200 * (hot - 12.75) / (38.0 - 12.75)
+        litres = model.layer_litres(g, hot, hot - 0.5, hot=hot, cold=12.75, shower_temp=38.0, volume=200)
+        assert 0.68 * most < litres < 0.74 * most
+
+
+def test_the_inlet_mixing_zone_is_the_same_height_on_any_tank():
+    for kind in ("weheat_wbl200", "weheat_wbl300"):
+        g = model.new_geometry(kind, None, True)
+        old = {k: v for k, v in g.items() if k != "mix"}             # stored before b4: worked out from the inlet
+        assert abs(model.mix_floor(old) - model.mix_floor(g)) < 0.002
+    tall, short = model.new_geometry("weheat_wbl300", None, True), model.new_geometry("weheat_wbl200", None, True)
+    assert model.mix_floor(tall) < model.mix_floor(short)             # 177 mm is a smaller share of a taller column
+    # typed in: a high inlet on a short column never cuts off hot water at the bottom sensor, nor empties a full tank
+    g = model.new_geometry("other", {"outlet": 700, "top": 550, "bottom": 420, "inlet": 380}, True)
+    assert model.mix_floor(g) <= g["bottom"] - 0.05
+    assert model.layer_litres(g, 60.0, 59.5, hot=60.0, cold=12.0, shower_temp=38.0, volume=100) > 50
+
+
 def test_layer_litres_formula_matches_a_sum_over_the_column():
     g = model.new_geometry("weheat_wbl200", None, True)
     for top, bottom, hot in ((52.0, 51.5, 52.0), (51.0, 30.0, 52.0), (44.0, 18.0, 52.0)):
         z0 = model.fit_thermocline(top, bottom, hot, 15.0, g["top"], g["bottom"])
-        n, zi = 4000, g["inlet"]
+        n, zi = 4000, model.mix_floor(g)                # above the inlet's mixing zone
         temps = [model.layer_temp(zi + (1 - zi) * (i + 0.5) / n, hot, 15.0, z0) for i in range(n)]
         summed = sum((t - 15.0) / 23.0 for t in temps if t > 38.0) * 200 * (1 - zi) / n
         exact = model.layer_litres(g, top, bottom, hot=hot, cold=15.0, shower_temp=38.0, volume=200)
