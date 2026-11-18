@@ -81,6 +81,8 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: ShowerT
                           "problems": m.problems(), "incomplete_days": m.habits.get("skip", []),
                           "confirm_k": m.confirm_k(), "use_stats": m.use_stats, "coil_events": m.coil_events,
                           "other": m.ledger.other[-30:]},
+        "run_outs": {"columns": ["minutes_before", "top_c", "bottom_c", "minutes_shown", "water_l_min"],
+                     "events": m.run_outs},
         "tank_readings_24h_5min": {"columns": ["minute_since_epoch_utc", "top_c", "bottom_c", "reheating"],
                                    "rows": readings},
         "signals_24h": {"columns": ["minute_since_epoch_utc", "value"], **signals},

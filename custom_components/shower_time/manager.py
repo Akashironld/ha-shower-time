@@ -236,6 +236,10 @@ class ShowerTimeManager:
         self._last_minutes: float | None = None
         # live countdown while someone showers (sensors only report every few minutes)
         self.showering = False
+        # the tank running out while hot water ran: the readings and minutes shown in the hour before, so a
+        # diagnostics file shows how far ahead the card saw it coming (#10)
+        self.run_outs: list[dict] = []
+        self._recent: list[list] = []               # [minute, top, bottom, minutes shown, water L/min], last 90 min
         self.live_offset = 0.0                      # minutes counted down since the last real reading
         self._sensor_at = None                      # utc time of the last top/bottom reading
         self._last_fall_at = None                   # utc time of the last reading that showed hot water use
@@ -322,6 +326,7 @@ class ShowerTimeManager:
             self.full_ref_state = stored.get("full_ref_state")
             self.full_ref_at = stored.get("full_ref_at")
             self.top_ups = stored.get("top_ups") or []
+            self.run_outs = stored.get("run_outs") or []
             # a reference in minutes only (before 0.5.1) depends on the model it was computed with: rebuild it
             self.full_ref = stored.get("full_ref") if self.full_ref_avg is not None else None
         if not stored and self.price and not self.ledger.currency:
@@ -584,6 +589,7 @@ class ShowerTimeManager:
             self._hold_until = None
             self._apply_resume()
             self._classify_use()
+            self._track_run_out()
         self._notify()
 
     # ------------------------------------------------------------------ live countdown
@@ -974,6 +980,40 @@ class ShowerTimeManager:
 
     def _remember_use(self, kind: str, drawn: float) -> None:
         self.use_stats[kind] = (self.use_stats[kind] + [round(drawn, 2)])[-50:]
+        self.request_save()
+
+    @callback
+    def _track_run_out(self) -> None:
+        """Note when the tank runs out while hot water runs: the top falls below the shower temperature + 2 (where
+        the minutes reach 0) from a hot tank, not while reheating. Keeps the last hour of readings and the minutes
+        the card showed, so every run-out is a check of the estimate (``run_outs``, last 10, in diagnostics)."""
+        e, top, now = self.estimate, self.top_value, _now_min()
+        if e is None or top is None:
+            return
+        w = self.water_signal
+        flow = None
+        if w is not None:   # a meter that counts litres keeps its last flow until it moves again: stale once still
+            fresh = w.kind == "rate" or (w.last_flow_at is not None and now - w.last_flow_at <= insights.WATER_GAP_MINUTES)
+            flow = round(w.flow, 2) if fresh else 0.0
+        row = [now, round(top, 2), None if self.bottom_value is None else round(self.bottom_value, 2),
+               round(e.minutes, 1), flow]
+        if self._recent and self._recent[-1][0] == now:
+            self._recent[-1] = row
+        else:
+            self._recent.append(row)
+        self._recent = [r for r in self._recent if r[0] >= now - 90]
+        edge = e.shower_temp + 2                    # where the card reaches 0 (in auto mode the sensed temperature)
+        last = self.run_outs[-1]["minute"] if self.run_outs else None
+        if (top >= edge or self.reheating or not (self.showering or (flow or 0.0) >= 1.0)
+                or (last is not None and now - last < 180)):
+            return
+        hour = [r for r in self._recent if r[0] >= now - 60]
+        if len(hour) < 2 or hour[-2][1] < edge or max(r[1] for r in hour) < edge + 3:
+            return                                  # it just crossed now, from a tank that was hot this hour
+        self.run_outs = (self.run_outs + [{
+            "minute": now, "at": dt_util.now().isoformat(timespec="minutes"), "shower_temp": round(e.shower_temp, 2),
+            "kind": self.use_kind(), "top": row[1], "bottom": row[2],
+            "trace": [[r[0] - now] + r[1:] for r in hour]}])[-10:]
         self.request_save()
 
     def use_kind(self) -> str | None:
@@ -1646,7 +1686,7 @@ class ShowerTimeManager:
             "legionella_at": self.legionella_at, "legionella_since": self.legionella_since,
             "learn_failures": self.learn_failures, "alive_at": self.alive_at,
             "hot_top": self.hot_top, "hot_at": self._hot_at.isoformat() if self._hot_at else None,
-            "blur": round(self.blur, 4), "blur_share": self._blur_share,
+            "blur": round(self.blur, 4), "blur_share": self._blur_share, "run_outs": self.run_outs,
         }
 
     async def _first_learn(self, _now) -> None:

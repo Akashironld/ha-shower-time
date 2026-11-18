@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.15.2b5 — Beta: diagnostics keep every time the tank ran out
+
+**Beta, for testers of #10** — the minutes are the same as in b4; this beta only adds what the diagnostics file keeps. Also has everything from v0.15.2b1 to b4.
+
+### Improvements
+- **Diagnostics note every time the tank runs out.** When the top falls past the shower temperature + 2 °C (where the minutes reach 0) while hot water runs and the tank was hot that hour, Shower Time keeps the hour before: the readings, the minutes the card showed and the water flow, for the last 10 run-outs (`run_outs` in the diagnostics file). Each one shows how far ahead the card saw it coming, which is what the last minutes before empty are tuned on (#10).
+
+### After updating
+In HACS, open Shower Time, choose *Redownload* with *Show beta versions* on and pick v0.15.2b5, then restart Home Assistant. When the tank runs out, download the diagnostics file whenever it suits: the last 10 run-outs are kept.
+
 ## v0.15.2b4 — Beta: a full tank no longer promises 5–7 minutes too many
 
 **Beta, for testers of #10** — only with a tank type or sensor heights set and a bottom sensor; also has everything from v0.15.2b1 to b3.

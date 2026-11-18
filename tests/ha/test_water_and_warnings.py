@@ -409,3 +409,66 @@ async def test_a_shower_the_bathroom_signal_missed_counts_by_its_flow(hass: Home
     await wait(hass, freezer, 7)
     assert state(hass, "sensor.hot_water_showers_today") == "1"
     assert state(hass, "sensor.hot_water_last_shower") == "8"
+
+
+async def test_a_tank_running_out_is_noted_with_the_hour_before(hass: HomeAssistant, deps, freezer) -> None:
+    """#10: every time the tank runs out while hot water runs is a check of the minutes the card showed before."""
+    from custom_components.shower_time.diagnostics import async_get_config_entry_diagnostics
+
+    hass.states.async_set(WATER, "1000", WATER_ATTRS)
+    entry = await setup_entry(hass, {"water_sensor": WATER})
+    m = entry.runtime_data
+    freezer.tick(timedelta(minutes=30))
+    tank(hass, 48.0, 20.0)
+    await hass.async_block_till_done()
+    litres = 1000
+    for top in (47.5, 46.5, 45.0, 43.5, 42.0, 41.0, 40.2, 39.4, 38.6, 37.8):   # 7 L/min, the hot layer runs out
+        freezer.tick(timedelta(minutes=1))
+        litres += 7
+        hass.states.async_set(WATER, str(litres), WATER_ATTRS)
+        tank(hass, top, 15.0)
+        async_fire_time_changed(hass)
+        await hass.async_block_till_done()
+    assert len(m.run_outs) == 1                                    # once, when the top fell past 40 (38 + 2)
+    event = m.run_outs[0]
+    assert event["top"] == 39.4 and event["shower_temp"] == 38.0
+    trace = event["trace"]
+    assert trace[-1][0] == 0 and trace[0][0] < -5 and any(r[1] == 48.0 for r in trace)
+    assert all(len(r) == 5 for r in trace) and trace[-2][4] >= 1.0  # readings, minutes shown and the water flow
+    diag = await async_get_config_entry_diagnostics(hass, entry)
+    assert diag["run_outs"]["events"] == m.run_outs
+    assert m._data()["run_outs"] == m.run_outs
+
+
+async def test_cooling_down_without_water_is_no_run_out(hass: HomeAssistant, deps, freezer) -> None:
+    entry = await setup_entry(hass, {"water_sensor": WATER})
+    m = entry.runtime_data
+    for top in (44.0, 42.0, 40.5, 39.5):
+        freezer.tick(timedelta(hours=2))
+        tank(hass, top, 30.0)
+        async_fire_time_changed(hass)
+        await hass.async_block_till_done()
+    assert m.run_outs == []
+
+
+async def test_a_still_meter_after_a_shower_is_no_run_out(hass: HomeAssistant, deps, freezer) -> None:
+    """A meter that counts litres keeps its last flow until it moves: once it stands still, the water is off."""
+    hass.states.async_set(WATER, "1000", WATER_ATTRS)
+    entry = await setup_entry(hass, {"water_sensor": WATER})
+    m = entry.runtime_data
+    freezer.tick(timedelta(minutes=30))
+    tank(hass, 46.0, 20.0)
+    await hass.async_block_till_done()
+    litres = 1000
+    for _ in range(3):                                             # a short draw, then the meter stands still
+        freezer.tick(timedelta(minutes=1))
+        litres += 7
+        hass.states.async_set(WATER, str(litres), WATER_ATTRS)
+        async_fire_time_changed(hass)
+        await hass.async_block_till_done()
+    for top in (44.0, 42.0, 41.0, 39.5):                           # the top cools past 40 with no water running
+        freezer.tick(timedelta(minutes=10))
+        tank(hass, top, 20.0)
+        async_fire_time_changed(hass)
+        await hass.async_block_till_done()
+    assert not m.showering and m.run_outs == []
