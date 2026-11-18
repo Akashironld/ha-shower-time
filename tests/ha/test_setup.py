@@ -233,3 +233,25 @@ async def test_a_part_used_tank_that_stands_moves_to_the_simple_model(hass: Home
     tank(hass, 55.0, 54.0)                       # reheated: hot water past the bottom sensor again
     await hass.async_block_till_done()
     assert m.blur == 0.0 and m.blurred_minutes == 0.0
+
+
+async def test_a_full_tank_cooling_overnight_shows_as_cooled(hass: HomeAssistant, deps, freezer) -> None:
+    # #10: reheated to 65.7/64.7 °C, 61.9/61.7 eleven hours later and no water used: "cooled" said 0.3 minutes
+    from datetime import timedelta
+
+    from .conftest import tank
+    entry = await setup_entry(hass, data={"tank_type": "weheat_wbl200"}, top=65.7, bottom=64.7)
+    m = entry.runtime_data
+    await hass.async_block_till_done(wait_background_tasks=True)
+    m._set_ref(m.estimate.minutes)                       # the reheat just ended
+    start, ref = m.estimate.minutes, m.full_ref
+    for hour in range(11):
+        freezer.tick(timedelta(hours=1))
+        tank(hass, round(65.7 - 0.345 * (hour + 1), 1), round(64.7 - 0.27 * (hour + 1), 1))
+        await hass.async_block_till_done()
+    lost = (65.2 - m.estimate.average) / m.estimate.per_minute      # the heat that left, in shower minutes
+    assert start - m.estimate.minutes >= lost - 0.3
+    assert m.full_ref == ref                                         # 100 % stays where the reheat left it
+    s = m.since_reheat()
+    assert s["cooling_minutes"] >= lost - 0.3 and s["showered_minutes"] == 0
+    assert abs(s["remaining_minutes"] + s["cooling_minutes"] - s["reference_minutes"]) < 0.2

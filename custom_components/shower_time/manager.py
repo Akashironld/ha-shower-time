@@ -565,12 +565,20 @@ class ShowerTimeManager:
             self._follow_hot_layer()
             kw = dict(volume=self.volume, shower_temp=self.shower_temp, month=now.month, head_flow=head,
                       doy=now.timetuple().tm_yday, ema=self.ema_now, hot=self.hot_top, draw_flow=self.draw_flow())
-            self.estimate = model.estimate(self.params, self.top_value, self.bottom_value, blur=self.blur, **kw)
+            free = model.estimate(self.params, self.top_value, self.bottom_value, blur=self.blur, **kw)
+            self.estimate = free
+            # a full tank loses at least the minutes its heat loss since the last reheat is worth; not while it heats
+            # (the state it is bounded by is the previous reheat's until this one ends)
+            if self.full_ref_state and not self.reheating and not getattr(self, "_was_heating", False):
+                self.estimate = model.estimate(self.params, self.top_value, self.bottom_value, blur=self.blur,
+                                               ref=self.full_ref_state, **kw)
             # minutes the blur took off: hot water turned lukewarm, its heat still in the tank (not lost to cooling)
             self.blurred_minutes = 0.0
             if self.blur > 0.0 and self.params.get("geo") and self.bottom_value is not None:
                 sharp = model.estimate(self.params, self.top_value, self.bottom_value, **kw)
-                self.blurred_minutes = max(0.0, sharp.minutes - self.estimate.minutes)
+                self.blurred_minutes = max(0.0, sharp.minutes - free.minutes)
+            # bounded outside a reheat (unbounded, a full tank cooling evenly creeps up and would set a new 100 %);
+            # while heating and at its end unbounded, so a new 100 % is the layer model's own, as ref_minutes is
             self._track_full(self.estimate.minutes)
             self.ledger.on_estimate(self, self.estimate)
             self._hold_until = None
@@ -1555,7 +1563,7 @@ class ShowerTimeManager:
         avgs: list[list[float]] = []                # tank average every 5 minutes: reheats are read off this
 
         def compute() -> list[list[float]]:
-            out, i, j, top, bot, last, hot, blur = [], 0, 0, None, None, None, None, 0.0
+            out, i, j, top, bot, last, hot, blur, ref = [], 0, 0, None, None, None, None, 0.0, None
             avgs.clear()
             tops, bots = series.get(top_ent, []), series.get(bottom_ent, []) if bottom_ent else []
             t = start.timestamp()
@@ -1568,12 +1576,14 @@ class ShowerTimeManager:
                     j += 1
                 if top is not None and (not bottom_ent or bot is not None):
                     local = dt_util.as_local(datetime.fromtimestamp(t, timezone.utc))
+                    if bot is not None and (hot is None or top >= hot + 0.3) and model.part_used(top, bot) <= 0.0:
+                        ref = (top, bot)            # rising past the hot layer on a full tank: a reheat (not 0.1 K noise)
                     hot = model.hot_layer(params, top, hot, 5.0, False)
                     blur = model.spread(top, bot, blur, 5.0)
                     e = model.estimate(params, top, bot, volume=volume, shower_temp=shower_temp,
                                        month=local.month, head_flow=head, doy=local.timetuple().tm_yday,
                                        ema=_ema_lookup(ema_table, local.date().isoformat()), hot=hot, draw_flow=rate,
-                                       blur=blur)
+                                       blur=blur, ref=ref)
                     v = round(e.minutes)
                     avgs.append([int(t * 1000), v, round(e.average, 2)])
                     if v != last:

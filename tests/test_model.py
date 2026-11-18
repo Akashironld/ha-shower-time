@@ -405,6 +405,23 @@ def test_a_part_used_tank_that_stood_overnight_has_less_than_the_layer_model_say
         full.minutes                                                 # a full tank keeps the layer model
 
 
+def test_a_full_tank_that_cooled_overnight_loses_its_heat_in_minutes():
+    # #10: reheated to 65.7/64.7 °C at midnight, 61.9/61.7 eleven hours later, no water used: the minutes fell 0.4
+    p = model.new_params("generic")
+    p["geo"] = model.new_geometry("weheat_wbl200", None, True)
+    kw = dict(volume=200, shower_temp=38.0, month=11)
+    ref = (65.7, 64.7)
+    start = model.estimate(p, *ref, hot=65.7, ref=ref, **kw)
+    assert start.minutes == model.estimate(p, *ref, hot=65.7, **kw).minutes      # right after the reheat: unchanged
+    morning = model.estimate(p, 61.9, 61.7, hot=61.9, ref=ref, **kw)
+    lost = (start.average - morning.average) / morning.per_minute
+    assert start.minutes - morning.minutes >= lost - 0.05                # the heat that left, in shower minutes
+    assert abs(morning.average - morning.minutes * morning.per_minute - morning.empty_at) < 1e-6
+    # once cold water came in past the bottom sensor the bound is gone: the layer model (and the blur) decide
+    used = dict(hot=61.9, **kw)
+    assert model.estimate(p, 61.9, 40.0, ref=ref, **used).minutes == model.estimate(p, 61.9, 40.0, **used).minutes
+
+
 def test_layer_litres_formula_matches_a_sum_over_the_column():
     g = model.new_geometry("weheat_wbl200", None, True)
     for top, bottom, hot in ((52.0, 51.5, 52.0), (51.0, 30.0, 52.0), (44.0, 18.0, 52.0)):

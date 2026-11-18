@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.15.2b3 — Beta: a full tank that cools overnight loses minutes again
+
+**Beta, for testers of #10** — only with a tank type or sensor heights set and a bottom sensor; also has everything from v0.15.2b1 and b2.
+
+### Fixes
+- **A full tank that cools overnight now loses minutes.** With a tank type or sensor heights (the layer model), a tank that was reheated and then stood cooled all through, top and bottom alike, but the minutes hardly moved: the layer model placed the boundary a little lower as both sensors drew together, and the extra hot water made up for the lower temperature. On a Weheat 200 L tank that went from 65.7/64.7 to 61.9/61.7 °C in 11 hours the minutes fell 0.4, while the heat that left was worth about 4. *Since reheat* showed 0.3 minutes *cooled* (#10). As long as hot water fills the tank past the bottom sensor, the minutes now drop at least by what the heat lost since the last reheat is worth. Once cold water comes in, this fades out and the layer model (with the blur from b1) decides as before. The 24-hour graph does the same.
+
+### After updating
+In HACS, open Shower Time, choose *Redownload* with *Show beta versions* on and pick v0.15.2b3, then restart Home Assistant. The bound starts from the tank's state after the last complete reheat, which survives the restart.
+
 ## v0.15.2b2 — Beta: the right sensor heights for the Weheat WBL-200
 
 **Beta, for testers of #10** — for everyone with the Weheat WBL-200 tank type; also has everything from v0.15.2b1.

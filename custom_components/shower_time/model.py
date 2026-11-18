@@ -261,6 +261,24 @@ def learn_geometry(geo: dict, volume: float) -> dict:
     return geo
 
 
+def heat_bound(params: dict, geo: dict, minutes: float, top: float, bottom: float, ref, *, avg: float,
+               cold: float, per_minute: float, shower_temp: float, volume: float, rate: float) -> float:
+    """A full tank that stood cools all through, top and bottom alike. The layer model barely sees that: with both
+    sensors near the same temperature it fits the boundary a little lower as they draw together, and the extra hot
+    water makes up for the lower temperature (#10: 65.7/64.7 to 61.9/61.7 °C in 11 h, 0.74 kWh or ~4 shower
+    minutes, and the minutes fell 0.4). The heat that left is worth at least its shower minutes, so the minutes stay
+    at or below the minutes right after the reheat less that. The tank average only measures the heat while hot water
+    fills the tank past the bottom sensor; once cold water came in the bound fades out (``part_used``) and the blur
+    takes over."""
+    keep = 1.0 - part_used(top, bottom)
+    if keep <= 0.0:
+        return minutes
+    rt, rb = ref
+    start = layer_litres(geo, rt, rb, hot=rt, cold=cold, shower_temp=shower_temp, volume=volume) / rate
+    cap = max(0.0, start - (tank_average(params, rt, rb) - avg) / per_minute)
+    return minutes - keep * max(0.0, minutes - cap)
+
+
 @dataclass
 class Estimate:
     minutes: float
@@ -294,7 +312,8 @@ def shower_minute(params: dict, cold: float, shower_temp: float, volume: float) 
 
 def estimate(params: dict, top: float, bottom: float | None, *, volume: float, shower_temp: float,
              month: int, head_flow: float | None = None, doy: int | None = None, ema: float | None = None,
-             hot: float | None = None, draw_flow: float | None = None, blur: float | None = None) -> Estimate:
+             hot: float | None = None, draw_flow: float | None = None, blur: float | None = None,
+             ref: list | tuple | None = None) -> Estimate:
     """``shower_temp`` is the fixed temperature or the 38 °C reference in auto mode.
     ``head_flow`` (L/min) is the known shower-head flow, if any: it only changes the litres and the
     reported shower temperature, never the minutes (those come from the learned heat per minute).
@@ -302,6 +321,8 @@ def estimate(params: dict, top: float, bottom: float | None, *, volume: float, s
     then the hottest the top was since the last reheat (None: the top now), and the minutes are the litres over
     ``draw_flow`` (L/min a shower draws at ``shower_temp``, when known) or the learned flow. ``blur`` (see
     ``spread``) moves a part-used tank's minutes from the layer model towards the simple model the longer it stood.
+    ``ref`` is the top and bottom right after the last complete reheat: a tank that is still full loses at least the
+    minutes its heat loss since then is worth (see ``heat_bound``).
     ``empty_at`` is the tank average the minutes run down to, so everything that counts in tank-average degrees
     keeps working."""
     cold = cold_for(params, month, doy, ema)
@@ -318,6 +339,9 @@ def estimate(params: dict, top: float, bottom: float | None, *, volume: float, s
             # a part-used tank that stood: its blurred boundary leaves the tank average as the better guide
             simple = max(0.0, (avg - empty) / per_minute) if top >= shower_temp + 2 else 0.0
             minutes += weight * (simple - minutes)
+        if ref and None not in ref:
+            minutes = heat_bound(params, geo, minutes, top, bottom, ref, avg=avg, cold=cold, per_minute=per_minute,
+                                 shower_temp=shower_temp, volume=volume, rate=rate)
         empty = avg - minutes * per_minute
     else:
         minutes = max(0.0, (avg - empty) / per_minute) if top >= shower_temp + 2 else 0.0
