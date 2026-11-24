@@ -25,6 +25,7 @@ from homeassistant.util import dt as dt_util
 
 from . import insights, model
 from .clock import at as _at, now_min as _now_min
+from .fill import FillLevel
 from .usage import UseTracker
 from .ledger import ShowerLedger
 from .const import (
@@ -177,6 +178,7 @@ class ShowerTimeManager:
         self.cop_manual: float | None = cop if cop and cop != DEFAULT_COP else None
         self.ledger = ShowerLedger()
         self.usage = UseTracker(self)              # the hot water use going on (usage.py)
+        self.fill = FillLevel(self)                 # 100 % and what went where since (fill.py)
         self._ema_by_day: dict[str, float] = {}       # local date -> outdoor running average
         self.ema_now: float | None = None
         self.heating: str | None = cfg.get(CONF_HEATING) or None
@@ -215,15 +217,6 @@ class ShowerTimeManager:
         self.top_value: float | None = None
         self.bottom_value: float | None = None
         self.reheating = False
-        # 100 % = the shower minutes right after the last reheat; the fill level drops with use and standing loss
-        self.full_ref: float | None = None          # minutes at the last reheat (kept for display/compat)
-        self.full_ref_avg: float | None = None      # tank average temperature right after the last reheat
-        self.full_ref_state: list[float] | None = None   # top and bottom right after the last reheat
-        self.full_ref_at: str | None = None
-        self.top_ups: list[dict] = []           # partial reheats since the last complete one
-        self._heat_from: tuple[datetime, float] | None = None
-        self._ref_low: float | None = None
-        self._last_minutes: float | None = None
         self._listeners: list[Callable[[], None]] = []
         self._event_listeners: list[Callable[[str, dict], None]] = []
         self._unsubs: list[CALLBACK_TYPE] = []
@@ -287,13 +280,8 @@ class ShowerTimeManager:
             self._blur_share = stored.get("blur_share")
             self.usage.use_stats = {**self.usage.use_stats, **(stored.get("use_stats") or {})}
             self.ledger.load(stored.get("ledger"))
-            self.full_ref_avg = stored.get("full_ref_avg")
-            self.full_ref_state = stored.get("full_ref_state")
-            self.full_ref_at = stored.get("full_ref_at")
-            self.top_ups = stored.get("top_ups") or []
+            self.fill.load(stored)
             self.usage.run_outs = stored.get("run_outs") or []
-            # a reference in minutes only (before 0.5.1) depends on the model it was computed with: rebuild it
-            self.full_ref = stored.get("full_ref") if self.full_ref_avg is not None else None
         if not stored and self.price and not self.ledger.currency:
             # a new installation: the unit of the monetary sensors is Home Assistant's own currency (ISO code) until
             # the price sensor says otherwise; existing ones keep what they had, whose statistics are in that unit
@@ -499,7 +487,7 @@ class ShowerTimeManager:
             self.estimate = free
             # a full tank loses at least the minutes its heat loss since the last reheat is worth; not while it heats
             # (the state it is bounded by is the previous reheat's until this one ends)
-            if self.full_ref_state and not self.reheating and not getattr(self, "_was_heating", False):
+            if self.full_ref_state and not self.reheating and not self.fill.was_heating:
                 self.estimate = model.estimate(self.params, self.top_value, self.bottom_value, blur=self.blur,
                                                ref=self.full_ref_state, **kw)
             # minutes the blur took off: hot water turned lukewarm, its heat still in the tank (not lost to cooling)
@@ -509,7 +497,7 @@ class ShowerTimeManager:
                 self.blurred_minutes = max(0.0, sharp.minutes - free.minutes)
             # bounded outside a reheat (unbounded, a full tank cooling evenly creeps up and would set a new 100 %);
             # while heating and at its end unbounded, so a new 100 % is the layer model's own, as ref_minutes is
-            self._track_full(self.estimate.minutes)
+            self.fill.track(self.estimate.minutes)
             self.ledger.on_estimate(self, self.estimate)
             self.usage.reading()
             self.usage.apply_resume()
@@ -625,7 +613,7 @@ class ShowerTimeManager:
 
     # ------------------------------------------------------------------ reheat habits
     @callback
-    def _log_reheat(self, now: datetime) -> None:
+    def log_reheat(self, now: datetime) -> None:
         if self._last_reheat_start is not None and now - self._last_reheat_start < timedelta(hours=1):
             return                                          # one reheat in pieces counts once
         self._last_reheat_start = now
@@ -917,162 +905,6 @@ class ShowerTimeManager:
     def cold_source(self) -> str:
         return "outdoor" if self.ema_now is not None else "table"
 
-    # ------------------------------------------------------------------ fill level
-    def _set_ref(self, minutes: float) -> None:
-        self.full_ref = minutes
-        if self.estimate is not None:
-            self.full_ref_avg = self.estimate.average
-        # the readings themselves: with the layer model the tank average alone does not give back the minutes
-        self.full_ref_state = ([self.top_value, self.bottom_value]
-                               if self.top_value is not None and self.bottom_value is not None else None)
-        self.full_ref_at = dt_util.now().isoformat(timespec="seconds")
-        self.top_ups = []
-        self._ref_low = minutes
-        self.save_later(60)
-
-    @callback
-    def _track_full(self, m: float) -> None:
-        """Keep 100 % at the end of the latest *complete* reheat.
-
-        A reheat that leaves the tank evenly hot (top and bottom within 2.5 °C) and about as full as last time
-        (90 %) sets a new 100 %; so does one the day after, also when it heats to a lower temperature (smart
-        controllers vary the target). Anything less is a top-up: it is kept in ``top_ups`` (when, how much) and
-        "since reheat" goes on from the last complete reheat. A top-up never becomes the new 100 % unless it
-        beats the old one.
-        Reheating is taken from the reheat entity, or recognised from the minutes rising 3+ above the lowest
-        point since the last reheat; it ends when the entity switches off or the rise stops for 20 minutes."""
-        now = dt_util.utcnow()
-        prev = self._last_minutes
-        self._last_minutes = m
-        if self.full_ref is None:
-            return                              # still being initialised from the history
-        ref_now = self.ref_minutes() or self.full_ref
-        if self._ref_low is None or m < self._ref_low:
-            self._ref_low = m
-        if self.heating:
-            heating = self.reheating
-        else:
-            rising = prev is not None and m > prev + 0.2
-            if rising and m >= self._ref_low + 3:
-                self._rise_at = now
-            heating = getattr(self, "_rise_at", None) is not None and (now - self._rise_at).total_seconds() < 1200
-        was = getattr(self, "_was_heating", False)
-        self._was_heating = heating
-        if heating and not was:
-            self._log_reheat(now)
-            self._heat_from = (now, prev if prev is not None else m)
-        if was and not heating:                 # a reheat just finished
-            even = self.bottom_value is None or (self.top_value is not None and self.top_value - self.bottom_value <= 2.5)
-            since = dt_util.parse_datetime(self.full_ref_at) if self.full_ref_at else None
-            old = since is None or now - since > timedelta(hours=20)
-            if m > ref_now or (even and (m >= 0.9 * ref_now or old)):
-                self._set_ref(m)
-            elif self._heat_from is not None:
-                start, before = self._heat_from
-                self.top_ups = (self.top_ups + [{
-                    "at": dt_util.as_local(start).isoformat(timespec="minutes"),
-                    "until": dt_util.as_local(now).isoformat(timespec="minutes"),
-                    "added_minutes": round(max(0.0, m - before), 1),
-                    "top": round(self.top_value, 1) if self.top_value is not None else None}])[-10:]
-                self.request_save()
-            self._heat_from = None
-            self._rise_at = None
-            return
-        # sensors still settling after the reheat state switched off. Not for less than a minute: with the layer
-        # model a full tank's minutes rise a little when the top reads 0.1 K lower before the bottom updates
-        if not heating and m > ref_now + 1.0:
-            self._set_ref(m)
-
-    def ref_minutes(self) -> float | None:
-        """Minutes the tank held right after the last reheat, with the *current* model (so the fill level does
-        not jump when the model learns or the cold water estimate changes)."""
-        e = self.estimate
-        if e is None:
-            return self.full_ref
-        if self.full_ref_state and self.params.get("geo"):
-            # layer model: the minutes in the tank as it was then (its empty point moves with the tank's state)
-            top, bottom = self.full_ref_state
-            now = dt_util.now()
-            return model.estimate(self.params, top, bottom, volume=self.volume, shower_temp=self.shower_temp,
-                                  month=now.month, doy=now.timetuple().tm_yday, ema=self.ema_now, hot=top,
-                                  draw_flow=self.draw_flow()).minutes
-        if self.full_ref_avg is not None:
-            return max(0.0, (self.full_ref_avg - e.empty_at) / e.per_minute)
-        return self.full_ref
-
-    def since_reheat(self) -> dict | None:
-        """Where the hot water went since the last complete reheat: left, showered, other hot water (a bath, the
-        sink) and lost to cooling, plus what a reheat in between added.
-
-        Showers count in minutes (one shower minute takes about one minute off the estimate), other hot water by
-        the heat it took. Cooling is the tank's standing loss over the time since the reheat, or the drop that is
-        left unexplained when that is more. When the tank holds more than that adds up to and a reheat was seen in
-        between, it put heat back in: that is ``reheated_minutes``. Without a reheat the uses are cut back to what
-        the tank lost (``overcounted_minutes``). Left + showered + other + cooling = reference + reheated."""
-        e, ref = self.current, self.ref_minutes()
-        if e is None or not ref or not self.full_ref_at or e.per_minute <= 0:
-            return None
-        try:
-            since = dt_util.parse_datetime(self.full_ref_at)
-        except (TypeError, ValueError):
-            return None
-        if since is None:
-            return None
-        hours = max(0.0, (dt_util.now() - since).total_seconds() / 3600)
-        key = dt_util.as_local(since).isoformat(timespec="minutes")
-        showered = sum(x["minutes"] for x in self.ledger.showers() if x["start"] >= key)
-        per_min_kwh = e.per_minute * self.volume * model.CP
-        # a bath is a session of its own, but not a shower: it stays with the tap and bucket it was while it ran (#10)
-        bath = sum(x["heat_kwh"] for x in self.ledger.baths() if x["start"] >= key) / per_min_kwh
-        other = bath + sum(x["heat_kwh"] for x in self.ledger.other if x["start"] >= key) / per_min_kwh
-        kind = self.use_kind()
-        if kind == "shower" and self.ledger.session_start:
-            until = self.shower_stopped_at() or dt_util.utcnow()      # the meter saw the shower stop: no further
-            showered += max(0.0, (until - self.ledger.session_start).total_seconds() / 60)
-        elif kind not in (None, "coil") and self.use is not None:
-            other += self.use.drawn / e.per_minute       # a bath or tap running now: the heat it took so far
-        standing = self.loss_k_h() * hours / e.per_minute
-        heating_now = getattr(self, "_was_heating", False) and self._heat_from is not None   # a top-up going on now
-        s = insights.split_since_reheat(ref, e.minutes, showered, other, standing, bool(self.top_ups) or heating_now)
-        cooling, reheated = s["cooling"], s["reheated"]
-        # hot water that turned lukewarm while the tank stood counts as cooled minutes, but its heat is still there
-        heat = max(min(cooling, standing), cooling - self.blurred_minutes) * per_min_kwh
-        price = self.ledger.tank_price
-        if price is None:
-            p, _ = self.ledger.price_now(self)
-            price = p / self.ledger.cop(self) if p is not None else None
-        last_top_up = self.top_ups[-1]["at"] if self.top_ups else None
-        if heating_now:
-            last_top_up = dt_util.as_local(self._heat_from[0]).isoformat(timespec="minutes")
-        return {"since": self.full_ref_at, "hours": round(hours, 1), "reference_minutes": round(ref, 1),
-                "top_ups": self.top_ups, "last_top_up_at": last_top_up,
-                "remaining_minutes": round(e.minutes, 1), "showered_minutes": round(s["showered"], 1),
-                "other_minutes": round(s["other"], 1),
-                "bath_minutes": round(bath * s["other"] / other, 1) if other else 0.0,   # its share of other
-                "cooling_minutes": round(cooling, 1), "lukewarm_minutes": round(min(cooling, self.blurred_minutes), 1),
-                "reheated_minutes": round(reheated, 1), "total_minutes": round(ref + reheated, 1),
-                "overcounted_minutes": round(s["overcounted"], 1),
-                "cooling_kwh_heat": round(heat, 2),
-                "cooling_cost": round(heat * price, 2) if price is not None else None}
-
-    def standing_loss_per_day(self) -> dict:
-        """What standing loss costs per day (heat, electricity, money) with the learned loss rate."""
-        heat = self.params["loss"]["v"] * 24 * self.volume * model.CP
-        elec = heat / self.ledger.cop(self)
-        price = self.ledger.tank_price
-        if price is None:
-            p, _ = self.ledger.price_now(self)
-            price = p / self.ledger.cop(self) if p is not None else None
-        return {"kwh_heat": round(heat, 2), "kwh_electricity": round(elec, 2),
-                "cost": round(heat * price, 2) if price is not None else None,
-                "cost_year": round(heat * price * 365) if price is not None else None}
-
-    def fill_percent(self) -> int | None:
-        e, ref = self.current, self.ref_minutes()
-        if e is None or not ref or ref <= 0:
-            return None
-        return int(round(max(0.0, min(100.0, 100 * e.minutes / ref))))
-
     async def _init_full_ref(self) -> None:
         """First run (and the first run of a version with the layer model): the minutes at the end of the last
         reheat in the past two days, the tank readings then, and the hot layer now, all from the history, so the
@@ -1081,34 +913,35 @@ class ShowerTimeManager:
             points = await self.async_history(48, with_average=True)
         except Exception:  # noqa: BLE001
             points = []
-        ref = low = prev = ts = avg = state = None
-        for t, v, a, top, bot in points:        # same rules as _track_full, replayed over the history
-            if ref is None:
-                ref = low = prev = v
-                ts, avg, state = t, a, [top, bot]
-                continue
-            low = min(low, v)
-            if (v > prev and v >= low + 3) or v > ref:
-                ref, ts, low, avg, state = v, t, v, a, [top, bot]
-            prev = v
         if not self._hot_stored and getattr(self, "_hist_hot", None) is not None:
             self.hot_top = max(self.hot_top or 0.0, self._hist_hot)
             self._hot_stored = True
         if not self._blur_stored and getattr(self, "_hist_blur", None) is not None:
             self.blur = self._hist_blur              # an update to this version: how long the tank stood, from history
             self._blur_stored = True
-        self.full_ref_state = state if state and None not in state else None
-        if ref is None and self.estimate:
-            ref = self.estimate.minutes
-        if ref is not None:
-            self.full_ref = float(ref)
-            self.full_ref_avg = avg if avg is not None else (
-                self.estimate.empty_at + float(ref) * self.estimate.per_minute if self.estimate else None)
-            self.full_ref_at = (dt_util.as_local(datetime.fromtimestamp(ts / 1000, timezone.utc)).isoformat(timespec="seconds")
-                                if ts else dt_util.now().isoformat(timespec="seconds"))
-            self._ref_low = self.estimate.minutes if self.estimate else ref
+        if self.fill.from_history(points):
             self.save_later(5)
             self.update()
+
+    # ------------------------------------------------------------------ the fill level (fill.FillLevel)
+    # read by the entities, the ledger and the diagnostics
+    full_ref = property(lambda self: self.fill.full_ref)
+    full_ref_avg = property(lambda self: self.fill.full_ref_avg)
+    full_ref_state = property(lambda self: self.fill.full_ref_state)
+    full_ref_at = property(lambda self: self.fill.full_ref_at)
+    top_ups = property(lambda self: self.fill.top_ups)
+
+    def ref_minutes(self) -> float | None:
+        return self.fill.ref_minutes()
+
+    def since_reheat(self) -> dict | None:
+        return self.fill.since_reheat()
+
+    def standing_loss_per_day(self) -> dict:
+        return self.fill.standing_loss_per_day()
+
+    def fill_percent(self) -> int | None:
+        return self.fill.fill_percent()
 
     # ------------------------------------------------------------------ history for the card
     async def async_history(self, hours: int = 24, with_average: bool = False) -> list[list[float]]:

@@ -116,8 +116,8 @@ async def test_reheats_are_learned_per_day(hass: HomeAssistant, entry) -> None:
     m._update_reheat_habits()
     r = m.habits["reheat"]
     assert r["days"] == 8 and r["hours"][13] > 0.9 and r["last_day"] == (today - timedelta(days=1)).isoformat()
-    m._log_reheat(dt_util.utcnow())                           # live: a reheat starts now
-    m._log_reheat(dt_util.utcnow() + timedelta(minutes=20))   # the same reheat resuming: not a second one
+    m.log_reheat(dt_util.utcnow())                           # live: a reheat starts now
+    m.log_reheat(dt_util.utcnow() + timedelta(minutes=20))   # the same reheat resuming: not a second one
     assert m.reheat_log[today.isoformat()] == [dt_util.now().hour]
 
 
@@ -125,15 +125,15 @@ async def test_a_top_up_keeps_since_reheat_and_a_full_reheat_starts_it_again(has
     """A reheat to a lower temperature in between is a top-up: "since reheat" goes on and notes when and how
     much. A reheat that brings the tank back to (about) full starts it again."""
     m = entry.runtime_data
-    m._set_ref(m.estimate.minutes)
+    m.fill.set_ref(m.estimate.minutes)
     since, ref = m.full_ref_at, m.ref_minutes()
 
     def reheat(low: float, high: float, top: float, bottom: float) -> None:
         for v in (low, low + 1, low + 4, high):          # the minutes fall, then rise: a reheat (no reheat entity)
-            m._track_full(v)
+            m.fill.track(v)
         freezer.tick(timedelta(minutes=21))              # the rise stopped 20 minutes ago: the reheat is over
         m.top_value, m.bottom_value = top, bottom
-        m._track_full(high)
+        m.fill.track(high)
 
     freezer.tick(timedelta(hours=1))
     reheat(0.3 * ref, 0.6 * ref, 45.0, 44.0)             # even, but only to 45 °C
@@ -152,14 +152,14 @@ async def test_no_reheated_without_a_reheat(hass: HomeAssistant, entry, freezer)
     """#10: uses logged longer than the tank lost showed up as 'reheated' while nothing reheated. Without a seen
     reheat they are cut back to what the tank lost; with a top-up the surplus is what it added."""
     m = entry.runtime_data
-    m._set_ref(m.estimate.minutes)
+    m.fill.set_ref(m.estimate.minutes)
     freezer.tick(timedelta(hours=1))
     m.ledger.log.append({"start": dt_util.now().isoformat(timespec="minutes"), "minutes": 8.0, "heat_kwh": 1.0,
                          "electricity_kwh": 0.4, "cost": None, "source": "live", "kind": "shower"})
     split = m.since_reheat()
     assert split["reheated_minutes"] == 0 and split["overcounted_minutes"] > 7
     assert split["showered_minutes"] < 1 and split["total_minutes"] == split["reference_minutes"]
-    m.top_ups = [{"at": dt_util.now().isoformat(timespec="minutes"), "until": None, "added_minutes": 8.0, "top": 55.0}]
+    m.fill.top_ups = [{"at": dt_util.now().isoformat(timespec="minutes"), "until": None, "added_minutes": 8.0, "top": 55.0}]
     split = m.since_reheat()
     assert split["reheated_minutes"] > 7 and split["showered_minutes"] == 8.0 and split["overcounted_minutes"] == 0
 
@@ -373,7 +373,7 @@ async def test_washing_up_in_a_nearly_empty_tank_is_a_tap(hass: HomeAssistant, d
     freezer.tick(timedelta(minutes=30))
     tank(hass, 59.3, 23.6)
     await hass.async_block_till_done(wait_background_tasks=True)   # the startup's own reference is set first
-    m._set_ref(m.estimate.minutes)
+    m.fill.set_ref(m.estimate.minutes)
     left = m.estimate.minutes
     for i, (flow, reading) in enumerate(LOW_TANK_WASHING_UP):
         await flow_and_tank(hass, freezer, flow, reading)

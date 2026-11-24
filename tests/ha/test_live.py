@@ -116,7 +116,7 @@ async def test_a_bath_is_a_session_but_no_shower(hass: HomeAssistant, deps, free
     per_minute = m.estimate.per_minute
     await start_reading(hass, freezer)
     await hass.async_block_till_done(wait_background_tasks=True)   # the startup's own reference is set first
-    m._set_ref(m.estimate.minutes)                           # the tank is full: "since reheat" starts here
+    m.fill.set_ref(m.estimate.minutes)                           # the tank is full: "since reheat" starts here
     freezer.tick(timedelta(minutes=1))
     hass.states.async_set(HUMIDITY, "66", {"unit_of_measurement": "%", "device_class": "humidity"})
     await hass.async_block_till_done()
@@ -292,7 +292,7 @@ async def test_layer_model_keeps_the_full_tank_reference_through_the_day(hass: H
     entry = await setup_entry(hass, data={"tank_type": "weheat_wbl200"}, top=52.8, bottom=52.5)
     m = entry.runtime_data
     await hass.async_block_till_done(wait_background_tasks=True)
-    m._set_ref(m.estimate.minutes)
+    m.fill.set_ref(m.estimate.minutes)
     ref = m.ref_minutes()
     assert abs(ref - m.estimate.minutes) < 0.01
     for top, bottom in ((52.7, 40.0), (52.5, 25.0), (48.0, 18.0)):

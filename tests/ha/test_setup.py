@@ -243,7 +243,7 @@ async def test_a_full_tank_cooling_overnight_shows_as_cooled(hass: HomeAssistant
     entry = await setup_entry(hass, data={"tank_type": "weheat_wbl200"}, top=65.7, bottom=64.7)
     m = entry.runtime_data
     await hass.async_block_till_done(wait_background_tasks=True)
-    m._set_ref(m.estimate.minutes)                       # the reheat just ended
+    m.fill.set_ref(m.estimate.minutes)                       # the reheat just ended
     start, ref = m.estimate.minutes, m.full_ref
     for hour in range(11):
         freezer.tick(timedelta(hours=1))

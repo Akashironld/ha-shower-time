@@ -16,7 +16,7 @@ def LOG(m) -> list[dict]:
 
 async def _shower_running(hass, freezer, entry) -> None:
     """A shower recognised and 10 minutes under way; the water has just stopped (not closed yet)."""
-    entry.runtime_data._set_ref(entry.runtime_data.estimate.minutes)
+    entry.runtime_data.fill.set_ref(entry.runtime_data.estimate.minutes)
     await start_reading(hass, freezer)
     await step(hass, freezer, 2, 55.0, 47.0)
     await step(hass, freezer, 2, 55.0, 44.0)
