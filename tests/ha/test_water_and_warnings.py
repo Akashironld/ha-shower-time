@@ -440,6 +440,30 @@ async def test_a_tank_running_out_is_noted_with_the_hour_before(hass: HomeAssist
     assert m._data()["run_outs"] == m.run_outs
 
 
+async def test_a_run_out_as_the_heat_pump_starts_is_still_noted(hass: HomeAssistant, deps, freezer) -> None:
+    """#10: a bath empties the tank and the heat pump starts at about the moment the top falls past 40."""
+    hass.states.async_set(WATER, "1000", WATER_ATTRS)
+    hass.states.async_set("sensor.heat_pump", "standby")
+    entry = await setup_entry(hass, {"water_sensor": WATER, "heating_entity": "sensor.heat_pump"})
+    m = entry.runtime_data
+    freezer.tick(timedelta(minutes=30))
+    tank(hass, 56.0, 45.0)
+    await hass.async_block_till_done()
+    litres = 1000
+    for top in (55.0, 53.0, 50.0, 46.0, 41.5, 37.0, 30.0, 22.0):    # 13 L/min into the bath
+        freezer.tick(timedelta(minutes=2))
+        litres += 26
+        hass.states.async_set(WATER, str(litres), WATER_ATTRS)
+        if top < 41.0:
+            hass.states.async_set("sensor.heat_pump", "dhw")         # the heat pump starts as the tank runs out
+        tank(hass, top, 15.0)
+        async_fire_time_changed(hass)
+        await hass.async_block_till_done()
+    assert m.reheating
+    assert len(m.run_outs) == 1
+    assert m.run_outs[0]["top"] == 37.0 and m.run_outs[0]["reheating"] is True
+
+
 async def test_cooling_down_without_water_is_no_run_out(hass: HomeAssistant, deps, freezer) -> None:
     entry = await setup_entry(hass, {"water_sensor": WATER})
     m = entry.runtime_data

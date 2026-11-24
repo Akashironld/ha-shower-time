@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.15.2b6 — Beta: a run-out while the heat pump starts is kept too
+
+**Beta, for testers of #10** — the minutes are the same as in b5; also has everything from v0.15.2b1 to b5.
+
+### Fixes
+- **A tank that runs out as the heat pump starts is noted too.** A bath or long shower usually starts the heat pump at about the moment the tank runs out, and b5 skipped every run-out while the heat pump ran, so most were never kept. Each run-out now also notes whether the heat pump was running (#10).
+
+### After updating
+In HACS, open Shower Time, choose *Redownload* with *Show beta versions* on and pick v0.15.2b6, then restart Home Assistant. When the tank runs out, download the diagnostics file whenever it suits: the last 10 run-outs are kept.
+
 ## v0.15.2b5 — Beta: diagnostics keep every time the tank ran out
 
 **Beta, for testers of #10** — the minutes are the same as in b4; this beta only adds what the diagnostics file keeps. Also has everything from v0.15.2b1 to b4.

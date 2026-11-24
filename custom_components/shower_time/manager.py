@@ -985,8 +985,10 @@ class ShowerTimeManager:
     @callback
     def _track_run_out(self) -> None:
         """Note when the tank runs out while hot water runs: the top falls below the shower temperature + 2 (where
-        the minutes reach 0) from a hot tank, not while reheating. Keeps the last hour of readings and the minutes
-        the card showed, so every run-out is a check of the estimate (``run_outs``, last 10, in diagnostics)."""
+        the minutes reach 0) from a hot tank. Also while reheating: a long draw (a bath) starts the heat pump just
+        as the tank runs out, so that is when most run-outs happen (#10); the water running and a top that was hot
+        this hour keep a reheat on its own from counting. Keeps the last hour of readings and the minutes the card
+        showed, so every run-out is a check of the estimate (``run_outs``, last 10, in diagnostics)."""
         e, top, now = self.estimate, self.top_value, _now_min()
         if e is None or top is None:
             return
@@ -1004,7 +1006,7 @@ class ShowerTimeManager:
         self._recent = [r for r in self._recent if r[0] >= now - 90]
         edge = e.shower_temp + 2                    # where the card reaches 0 (in auto mode the sensed temperature)
         last = self.run_outs[-1]["minute"] if self.run_outs else None
-        if (top >= edge or self.reheating or not (self.showering or (flow or 0.0) >= 1.0)
+        if (top >= edge or not (self.showering or (flow or 0.0) >= 1.0)
                 or (last is not None and now - last < 180)):
             return
         hour = [r for r in self._recent if r[0] >= now - 60]
@@ -1012,7 +1014,7 @@ class ShowerTimeManager:
             return                                  # it just crossed now, from a tank that was hot this hour
         self.run_outs = (self.run_outs + [{
             "minute": now, "at": dt_util.now().isoformat(timespec="minutes"), "shower_temp": round(e.shower_temp, 2),
-            "kind": self.use_kind(), "top": row[1], "bottom": row[2],
+            "kind": self.use_kind(), "top": row[1], "bottom": row[2], "reheating": self.reheating,
             "trace": [[r[0] - now] + r[1:] for r in hour]}])[-10:]
         self.request_save()
 
