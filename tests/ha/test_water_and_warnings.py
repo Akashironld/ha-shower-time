@@ -87,7 +87,7 @@ async def test_cold_water_alone_is_not_a_shower(hass: HomeAssistant, deps, freez
 async def test_warnings_reach_the_card(hass: HomeAssistant, entry) -> None:
     m = entry.runtime_data
     m.legionella.checked, m.legionella.at = True, (dt_util.now() - timedelta(days=12)).isoformat(timespec="minutes")
-    m.loss = {**m.loss, "leak_like": True}
+    m.heat.loss = {**m.loss, "leak_like": True}
     tank(hass, 55.0, 49.7)
     await hass.async_block_till_done()
     problems = hass.states.get("sensor.hot_water_shower_time").attributes["problems"]

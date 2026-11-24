@@ -28,6 +28,7 @@ from .clock import at as _at, now_min as _now_min
 from .fill import FillLevel
 from .habits import Habits, Legionella
 from .health import Health
+from .learning import HeatLoss, Learner
 from .usage import UseTracker
 from .ledger import ShowerLedger
 from .const import (
@@ -74,7 +75,6 @@ from .const import (
     DEFAULT_SHOWER_TEMP,
     DEFAULT_VOLUME,
     DOMAIN,
-    HISTORY_DAYS,
     LEARN_HOUR,
     LEARN_MINUTE,
     STORAGE_VERSION,
@@ -127,8 +127,6 @@ def reheat_events(points: list[list[float]]) -> list[dict]:
     if run is not None and run[3] - run[2] >= REHEAT_MIN_RISE:
         out.append({"start": run[0], "end": run[1], "kind": "reheat"})
     return out
-
-
 
 
 def _num(state) -> float | None:
@@ -184,6 +182,8 @@ class ShowerTimeManager:
         self.legionella = Legionella(self, float(cfg.get(CONF_LEGIONELLA_TEMP, DEFAULT_LEGIONELLA_TEMP)),
                                      float(cfg.get(CONF_LEGIONELLA_DAYS, DEFAULT_LEGIONELLA_DAYS)))
         self.health = Health(self)                  # repairs, problems for the card, downtime (health.py)
+        self.heat = HeatLoss(self)                  # heat-loss measurements and night drips (learning.py)
+        self.learner = Learner(self, _num, _temp, _local)   # the history and the nightly learning (learning.py)
         self._ema_by_day: dict[str, float] = {}       # local date -> outdoor running average
         self.ema_now: float | None = None
         self.heating: str | None = cfg.get(CONF_HEATING) or None
@@ -209,11 +209,6 @@ class ShowerTimeManager:
         self._store: Store = Store(hass, STORAGE_VERSION, f"{DOMAIN}.{entry.entry_id}")
         self.params: dict = model.new_params(self.profile)
         self._apply_geometry()
-        self.processed_until: int = 0
-        self.last_cycle: model.Cycle | None = None
-        self.last_learn: str | None = None
-        self.last_samples: dict = {}
-        self.learning = False
         self._hist_lock = asyncio.Lock()
         self._loaded = False                        # the store was read (never save empty data over a good store)
         self._stopped = False                       # unloaded: nothing may save or change state any more
@@ -226,11 +221,6 @@ class ShowerTimeManager:
         self._event_listeners: list[Callable[[str, dict], None]] = []
         self._unsubs: list[CALLBACK_TYPE] = []
         # smart extras (insights.py): habits and today's forecast, heat loss and leaks, legionella, health
-        self.loss_samples: list[dict] = []
-        self.drip_nights: list[dict] = []
-        self.loss_backfilled = False                # the full history was searched once for heat-loss measurements
-        self.loss: dict = self._loss_status()
-        self.learn_failures = 0
         # the signals that confirm a hot water use (a bathroom sensor, a water meter); followed in usage.UseTracker
         self.bath: str | None = cfg.get(CONF_BATH) or None
         self.bathtub = bool(cfg.get(CONF_BATHTUB, DEFAULT_BATHTUB))   # without a bath a fast fill is a bucket
@@ -242,11 +232,11 @@ class ShowerTimeManager:
         self._loaded = True
         if stored and stored.get("profile") == self.profile:
             self.params = model.ensure_params(stored["params"])
-            self.processed_until = stored.get("processed_until", 0)
+            self.learner.processed_until = stored.get("processed_until", 0)
             lc = stored.get("last_cycle")
-            self.last_cycle = model.Cycle(**lc) if lc else None
-            self.last_learn = stored.get("last_learn")
-            self.last_samples = stored.get("last_samples", {})
+            self.learner.last_cycle = model.Cycle(**lc) if lc else None
+            self.learner.last_learn = stored.get("last_learn")
+            self.learner.last_samples = stored.get("last_samples", {})
             self._apply_geometry()
             if stored.get("top_sensor") not in (None, self.top):
                 # another top sensor (Reconfigure): where the old one sat says nothing about this one, so the
@@ -255,15 +245,13 @@ class ShowerTimeManager:
                 self._apply_geometry()
         if stored:
             self.routine.habits = stored.get("habits") or self.routine.habits
-            self.loss_samples = stored.get("loss_samples") or []
-            self.drip_nights = stored.get("drip_nights") or []
-            self.loss_backfilled = stored.get("loss_backfilled", False)
+            self.heat.load(stored)
             self.routine.reheat_log = stored.get("reheat_log") or {}
             self.routine.reheat_since = stored.get("reheat_since")
-            self.loss = self._loss_status()
+            self.heat.loss = self.heat.status()
             self.legionella.at = stored.get("legionella_at")
             self.legionella.since = stored.get("legionella_since")
-            self.learn_failures = stored.get("learn_failures", 0)
+            self.learner.learn_failures = stored.get("learn_failures", 0)
             self.health.alive_at = stored.get("alive_at")
             self.hot_top = stored.get("hot_top")
             self._hot_stored = self.hot_top is not None
@@ -291,7 +279,7 @@ class ShowerTimeManager:
         self._unsubs.append(async_track_time_change(self.hass, self._midnight, hour=0, minute=0, second=5))
         self._unsubs.append(async_track_time_interval(self.hass, self.health.check, timedelta(minutes=10)))
         self.entry.async_create_background_task(self.hass, self._start_ledger(), f"{DOMAIN}_ledger")
-        if not self.last_learn:                 # first install: learn from what the recorder already has
+        if not self.learner.last_learn:                 # first install: learn from what the recorder already has
             self._unsubs.append(async_call_later(self.hass, 120, self._first_learn))
         if self.outdoor:
             self.entry.async_create_background_task(self.hass, self._refresh_ema(update=True), f"{DOMAIN}_ema")
@@ -307,11 +295,6 @@ class ShowerTimeManager:
         else:
             self.legionella.checked = True
         self.health.sync_loss_issues()
-
-
-
-
-
 
     async def async_stop(self) -> None:
         self._stopped = True
@@ -606,16 +589,6 @@ class ShowerTimeManager:
     def problems(self) -> list[dict]:
         return self.health.problems()
 
-    def loss_k_h(self) -> float:
-        """How fast the tank cools now: from its measured heat-loss coefficient (and how hot it is), else the
-        standing loss the model learned."""
-        t, b = self.top_value, self.bottom_value
-        mean = (t + b) / 2 if t is not None and b is not None else t
-        measured = insights.loss_k_per_h(self.loss.get("ua_recent"), mean, self.volume)
-        return measured if measured is not None else self.params["loss"]["v"]
-
-
-
     async def _init_legionella(self) -> None:
         """The last hour in which the whole tank (top and bottom) reached the legionella temperature."""
         try:
@@ -630,21 +603,6 @@ class ShowerTimeManager:
             _LOGGER.exception("Could not search the history for the last legionella heat-up")
         self.notify()
 
-
-    def _loss_status(self) -> dict:
-        st = insights.loss_status(self.loss_samples)
-        st["dripping"] = insights.drip_status(self.drip_nights)
-        st["leak_like"] = bool(st["leak_like"] or st["dripping"])
-        return st
-
-
-    def heat_loss_now(self) -> float | None:
-        """Watts the tank loses right now, from its measured heat-loss coefficient."""
-        if self.top_value is None:
-            return None
-        mean = (self.top_value + self.bottom_value) / 2 if self.bottom_value is not None else self.top_value
-        return insights.heat_loss_watts(self.loss.get("ua_recent"), mean)
-
     @callback
     def request_save(self) -> None:
         self.save_later(30)
@@ -658,7 +616,7 @@ class ShowerTimeManager:
         if not self.ledger.backfilled:
             end = dt_util.utcnow()
             try:
-                rows = await self._fetch_rows(end - timedelta(days=8), end)
+                rows = await self.learner.fetch_rows(end - timedelta(days=8), end)
                 await self.ledger.async_backfill(self, rows)
             except Exception:  # noqa: BLE001
                 _LOGGER.exception("Could not fill the shower log from the history")
@@ -827,7 +785,6 @@ class ShowerTimeManager:
         self._hist_hot, self._hist_blur = (hot_state[-2], hot_state[-1]) if hot_state else (None, None)
         self._hist_cache = (hours, now, result, avgs)
 
-
     async def async_events(self, hours: int = 24) -> dict:
         """The card's history: ``points`` (as async_history) and ``events``, the bands drawn over it: showers and
         baths from the log, other hot water, and reheats read off the tank average in the same series."""
@@ -861,201 +818,61 @@ class ShowerTimeManager:
             "top_sensor": self.top,
             "resume": {"at": self.health.alive_at, "top_sensor": self.top, "bottom_sensor": self.bottom, "top": self.top_value, "bottom": self.bottom_value, "avg": avg,
                        "use": self.usage.running_use()},
-            "profile": self.profile, "params": self.params, "processed_until": self.processed_until,
-            "last_cycle": asdict(self.last_cycle) if self.last_cycle else None, "last_learn": self.last_learn,
-            "last_samples": self.last_samples, "full_ref": self.full_ref, "full_ref_avg": self.full_ref_avg,
+            "profile": self.profile, "params": self.params, "processed_until": self.learner.processed_until,
+            "last_cycle": asdict(self.learner.last_cycle) if self.learner.last_cycle else None, "last_learn": self.learner.last_learn,
+            "last_samples": self.learner.last_samples, "full_ref": self.full_ref, "full_ref_avg": self.full_ref_avg,
             "full_ref_state": self.full_ref_state,
             "full_ref_at": self.full_ref_at, "top_ups": self.top_ups, "ledger": self.ledger.to_dict(),
-            "habits": self.routine.habits, "loss_samples": self.loss_samples, "drip_nights": self.drip_nights,
-            "use_stats": self.use_stats, "loss_backfilled": self.loss_backfilled,
+            "habits": self.routine.habits, "loss_samples": self.heat.loss_samples, "drip_nights": self.heat.drip_nights,
+            "use_stats": self.use_stats, "loss_backfilled": self.heat.loss_backfilled,
             "reheat_log": self.routine.reheat_log, "reheat_since": self.routine.reheat_since,
             "legionella_at": self.legionella.at, "legionella_since": self.legionella.since,
-            "learn_failures": self.learn_failures, "alive_at": self.health.alive_at,
+            "learn_failures": self.learner.learn_failures, "alive_at": self.health.alive_at,
             "hot_top": self.hot_top, "hot_at": self._hot_at.isoformat() if self._hot_at else None,
             "blur": round(self.blur, 4), "blur_share": self._blur_share, "run_outs": self.run_outs,
         }
 
     async def _first_learn(self, _now) -> None:
-        await self.async_learn()
+        await self.learner.async_learn()
 
     async def _nightly(self, _now) -> None:
-        await self.async_learn()
+        await self.learner.async_learn()
+
+    async def save_now(self) -> None:
+        await self._store.async_save(self._data())
+
+    @property
+    def stopped(self) -> bool:
+        return self._stopped
+
+    def is_f(self, entity: str | None) -> bool:
+        return self._is_f(entity)
+
+    def ema_on(self, day: str) -> float | None:
+        return self._ema_on(day)
+
+    async def refresh_ema(self, update: bool = False) -> None:
+        await self._refresh_ema(update)
+
+    # ------------------------------------------------------------------ learning and heat loss (learning.py)
+    # read by the entities, the ledger, the card and the diagnostics
+    processed_until = property(lambda self: self.learner.processed_until)
+    last_cycle = property(lambda self: self.learner.last_cycle)
+    last_learn = property(lambda self: self.learner.last_learn)
+    last_samples = property(lambda self: self.learner.last_samples)
+    learning = property(lambda self: self.learner.learning)
+    learn_failures = property(lambda self: self.learner.learn_failures)
+    loss = property(lambda self: self.heat.loss)
+    loss_samples = property(lambda self: self.heat.loss_samples)
+    drip_nights = property(lambda self: self.heat.drip_nights)
+    loss_backfilled = property(lambda self: self.heat.loss_backfilled)
 
     async def async_learn(self) -> None:
-        if self.learning or self._stopped:
-            return
-        self.learning = True
-        try:
-            await self._learn()
-            if not self._stopped:
-                self.learn_failures = 0
-        except Exception:  # noqa: BLE001 - learning must never break the integration
-            if self._stopped:
-                return
-            _LOGGER.exception("Learning failed; keeping the current model")
-            self.learn_failures += 1
-            self.request_save()
-        finally:
-            self.learning = False
-            if not self._stopped:
-                self.health.check()
-                self.update()
+        await self.learner.async_learn()
 
-    async def _learn(self) -> None:
-        if self.outdoor:
-            await self._refresh_ema()
-        await self.ledger.async_refresh_cop(self)
-        if self._stopped:
-            return
-        now = dt_util.utcnow()
-        end = now - timedelta(minutes=30)
-        start = now - timedelta(days=HISTORY_DAYS)
-        if self.processed_until:
-            start = max(start, _at(self.processed_until) - timedelta(hours=6))
-        recorder = get_instance(self.hass)
-        series = await self._fetch_series(start, end)
-        rows = await self.hass.async_add_executor_job(self._rows, series, start, end)
-        if self._stopped:
-            return
-        if rows and not self.heating and not any(r.heating for r in rows):
-            model.mark_heating_from_temperature(rows)
-        await self._update_heat_loss(rows, end)
-        if self._stopped or len(rows) < 600:
-            _LOGGER.info("Not enough history to learn yet (%d minutes)", len(rows))
-            return
-        energy = None
-        if self.energy:
-            stats = await recorder.async_add_executor_job(
-                statistics.statistics_during_period, self.hass, start, end, {self.energy}, "hour",
-                {"energy": "kWh"}, {"change"})
-            energy = {}
-            for row in stats.get(self.energy, []):
-                ts = row["start"]
-                ts = ts.timestamp() if isinstance(ts, datetime) else float(ts)
-                energy[int(ts // 60)] = float(row.get("change") or 0.0)
-            if self._stopped:
-                return
+    def loss_k_h(self) -> float:
+        return self.heat.loss_k_h()
 
-        water = self._water_series(series.get(self.water, [])) if self.water and self.flow_source == "water_meter" else None
+    def heat_loss_now(self) -> float | None:
+        return self.heat.heat_loss_now()
 
-        def ema_of(minute: int) -> float | None:
-            return self._ema_on(_local(minute).date().isoformat())
-
-        confirm_k = self.confirm_k()
-        fill_rate = self.fill_rate()
-        # what a use was followed live as (with the bathroom and water signals): a tap, or a bath or bucket being
-        # filled. A bath the water meter told apart can fall slower than the fill rate the history judges by (#10)
-        live = [(datetime.fromisoformat(e["start"]).timestamp() / 60, "tap" if e["kind"] == "tap" else "fill")
-                for e in self.ledger.other + self.ledger.baths() if e.get("kind") in ("tap", "fill", "bath")]
-
-        def draw_kind(d: model.Draw) -> str:            # only real showers teach shower length and flow
-            if kind := next((k for t, k in live if abs(d.start - t) <= 5), None):
-                return kind
-            local = _local(d.start)
-            cold = model.cold_for(self.params, local.month, local.timetuple().tm_yday,
-                                  ema_of(d.start) if self.outdoor else None)
-            return insights.draw_kind(self.params, rows, d.start, d.minutes, cold, confirm_k, fill_rate,
-                                      model.shower_minute(self.params, cold, self.shower_temp, self.volume))
-
-        result, last = await self.hass.async_add_executor_job(
-            lambda: model.learn(self.params, rows, volume=self.volume, shower_temp=self.shower_temp,
-                                since=self.processed_until, energy_by_hour=energy, previous_cycle=self.last_cycle,
-                                month_of=lambda t: _local(t).month, doy_of=lambda t: _local(t).timetuple().tm_yday,
-                                water=water, ema_of=ema_of if self.outdoor else None, draw_kind=draw_kind,
-                                draw_flow=self.draw_flow()))
-        if self._stopped:                               # unloaded while learning: the final save is already written
-            return
-        self.params = result.params
-        self.last_cycle = last
-
-        self.processed_until = int(end.timestamp() // 60)
-        self.last_learn = dt_util.now().isoformat(timespec="seconds")
-        self.last_samples = result.samples
-        await self._store.async_save(self._data())
-        _LOGGER.debug("Learned from %d cycles / %d draws: %s", result.cycles, result.draws, result.samples)
-
-    async def _update_heat_loss(self, rows: list[model.Row], end: datetime) -> None:
-        """Heat-loss measurements and night drips from the rows just read. The first time (also after an
-        update) from all the history there is, so the baseline is there right away."""
-        first = not self.loss_backfilled or self.routine.reheat_since is None
-        if first:
-            rows = await self._fetch_rows(end - timedelta(days=HISTORY_DAYS), end)
-
-        samples, drips, reheats = await self.hass.async_add_executor_job(
-            lambda: (insights.loss_samples(rows, volume=self.volume, local_of=_local),
-                     insights.night_drips(rows, local_of=_local),
-                     insights.reheat_starts(rows, local_of=_local)))
-        for day, hours in reheats.items():                  # the reheats the history shows, with the live ones
-            self.routine.reheat_log[day] = sorted(set(self.routine.reheat_log.get(day, [])) | set(hours))
-        if first and rows:
-            self.routine.reheat_since = (_local(rows[0].minute).date() + timedelta(days=1)).isoformat()
-        self.routine.prune_reheat_log()
-        self.routine.update_reheat_habits()
-        self.loss_samples = insights.merge_samples(self.loss_samples, samples)
-        self.drip_nights = insights.merge_drips(self.drip_nights, drips)
-        self.loss_backfilled = True
-        self.loss = self._loss_status()
-        self.health.sync_loss_issues()
-        self.request_save()
-
-    async def _fetch_series(self, start: datetime, end: datetime) -> dict[str, list]:
-        recorder = get_instance(self.hass)
-        series: dict[str, list] = {}
-        for ent in (self.top, self.bottom, self.heating, self.water if self.flow_source == "water_meter" else None):
-            if not ent:
-                continue
-            res = await recorder.async_add_executor_job(
-                history.state_changes_during_period, self.hass, start, end, ent, True, False, None, True)
-            series[ent] = res.get(ent, [])
-        return series
-
-    async def _fetch_rows(self, start: datetime, end: datetime) -> list[model.Row]:
-        series = await self._fetch_series(start, end)
-        rows = await self.hass.async_add_executor_job(self._rows, series, start, end)
-        if rows and not any(r.heating for r in rows):
-            model.mark_heating_from_temperature(rows)
-        return rows
-
-    def _water_series(self, states: list) -> tuple[str, list[tuple[int, float]]] | None:
-        """Water meter history as ("rate", L/min) or ("total", litres), whatever the meter reports."""
-        st = self.hass.states.get(self.water)
-        unit = str((st.attributes.get("unit_of_measurement") if st else "") or "").replace(" ", "").lower()
-        rates = {"l/min": 1.0, "l/h": 1 / 60, "m³/h": 1000 / 60, "m3/h": 1000 / 60, "gal/min": 3.785}
-        totals = {"l": 1.0, "m³": 1000.0, "m3": 1000.0, "gal": 3.785}
-        if unit in rates:
-            kind, factor = "rate", rates[unit]
-        elif unit in totals:
-            kind, factor = "total", totals[unit]
-        else:
-            _LOGGER.warning("Water meter %s has unit %r; expected a flow (L/min) or a volume (L, m³)", self.water, unit)
-            return None
-        out = []
-        for s in states:
-            v = _num(s)
-            if v is not None:
-                out.append((int(s.last_changed.timestamp() // 60), v * factor))
-        return kind, out
-
-    def _rows(self, series: dict[str, list], start: datetime, end: datetime) -> list[model.Row]:
-        """Forward-fill all series onto a one-minute grid."""
-        def prep(ent, conv):
-            out = []
-            for st in series.get(ent, []):
-                out.append((int(st.last_changed.timestamp() // 60), conv(st)))
-            return out
-        ft, fb = self._is_f(self.top), self._is_f(self.bottom)
-        top = [x for x in prep(self.top, lambda st: _temp(st, ft)) if x[1] is not None]   # skip invalid readings
-        bottom = [x for x in prep(self.bottom, lambda st: _temp(st, fb)) if x[1] is not None] if self.bottom else []
-        heat = prep(self.heating, lambda s: str(s.state).lower() in self.heating_states) if self.heating else []
-        idx = {"t": 0, "b": 0, "h": 0}
-        cur = {"t": None, "b": None, "h": False}
-        rows: list[model.Row] = []
-        for m in range(int(start.timestamp() // 60), int(end.timestamp() // 60)):
-            for key, seq in (("t", top), ("b", bottom), ("h", heat)):
-                while idx[key] < len(seq) and seq[idx[key]][0] <= m:
-                    cur[key] = seq[idx[key]][1]
-                    idx[key] += 1
-            if cur["t"] is None or (self.bottom and cur["b"] is None):
-                continue
-            rows.append(model.Row(minute=m, top=cur["t"], bottom=cur["b"] if self.bottom else None, heating=bool(cur["h"])))
-        return rows

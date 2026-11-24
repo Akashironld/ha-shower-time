@@ -34,8 +34,8 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: ShowerT
     end = dt_util.utcnow()
     start = end - timedelta(hours=24)
     try:
-        series = await m._fetch_series(start, end)
-        rows = await hass.async_add_executor_job(m._rows, series, start, end)
+        series = await m.learner.fetch_series(start, end)
+        rows = await hass.async_add_executor_job(m.learner.rows, series, start, end)
         for r in rows[::5]:
             readings.append([r.minute, round(r.top, 1), None if r.bottom is None else round(r.bottom, 1), int(r.heating)])
     except Exception as err:  # noqa: BLE001 - diagnostics must always download

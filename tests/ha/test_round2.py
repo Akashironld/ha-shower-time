@@ -144,7 +144,7 @@ async def test_a_new_top_sensor_restarts_the_height_learning_only(hass: HomeAssi
     start_top = m.params["geo"]["start"][0]
     m.params["geo"]["top"] = start_top + 0.07           # learned
     m.params["geo"]["n"] = 12
-    m.last_learn = "2026-10-15T10:00:00+00:00"
+    m.learner.last_learn = "2026-10-15T10:00:00+00:00"
     hass.states.async_set("sensor.new_top", "54", TEMP_ATTRS)
 
     async def reconfigure(top: str, bottom: str):

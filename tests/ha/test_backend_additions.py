@@ -22,7 +22,7 @@ async def test_state_survives_an_immediate_reload(hass: HomeAssistant, deps) -> 
     entry = await setup_entry(hass)
     m = entry.runtime_data
     await hass.async_block_till_done(wait_background_tasks=True)
-    m.last_learn = "2026-10-15T10:00:00+00:00"
+    m.learner.last_learn = "2026-10-15T10:00:00+00:00"
     m.ledger.other_ended(m, "tap", dt_util.utcnow(), 3.0, 0.4)
     assert await hass.config_entries.async_unload(entry.entry_id)
     assert m._stopped
@@ -40,13 +40,13 @@ async def test_a_stopped_manager_does_not_learn_or_save(hass: HomeAssistant, dep
     await m.async_stop()
     m._store.async_save = AsyncMock()
     m._store.async_delay_save = MagicMock()
-    m._learn = AsyncMock()
+    m.learner._learn = AsyncMock()
     before = m.last_learn
     await m.async_learn()
     await m._nightly(None)
     m.request_save()
     m.save_later(5)
-    m._learn.assert_not_called()
+    m.learner._learn.assert_not_called()
     m._store.async_save.assert_not_called()
     m._store.async_delay_save.assert_not_called()
     assert m.last_learn == before and not m.learning
