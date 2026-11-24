@@ -86,7 +86,7 @@ async def test_cold_water_alone_is_not_a_shower(hass: HomeAssistant, deps, freez
 
 async def test_warnings_reach_the_card(hass: HomeAssistant, entry) -> None:
     m = entry.runtime_data
-    m.legionella_checked, m.legionella_at = True, (dt_util.now() - timedelta(days=12)).isoformat(timespec="minutes")
+    m.legionella.checked, m.legionella.at = True, (dt_util.now() - timedelta(days=12)).isoformat(timespec="minutes")
     m.loss = {**m.loss, "leak_like": True}
     tank(hass, 55.0, 49.7)
     await hass.async_block_till_done()
@@ -97,23 +97,23 @@ async def test_warnings_reach_the_card(hass: HomeAssistant, entry) -> None:
 
 async def test_days_with_home_assistant_off_are_left_out_of_the_habits(hass: HomeAssistant, entry) -> None:
     m = entry.runtime_data
-    m.alive_at = (dt_util.utcnow() - timedelta(days=2)).isoformat()
-    m._note_downtime()
+    m.health.alive_at = (dt_util.utcnow() - timedelta(days=2)).isoformat()
+    m.health.note_downtime()
     skipped = m.habits.get("skip", [])
     assert len(skipped) == 3 and skipped[-1] == dt_util.now().date().isoformat()
     m.ledger.covered_from = (dt_util.now() - timedelta(days=5)).date().isoformat()
-    m.habits = {**m.habits, "days": 0, "last_day": None}
-    m._update_habits()
+    m.routine.habits = {**m.habits, "days": 0, "last_day": None}
+    m.routine.update()
     assert m.habits["days"] == 3                               # 5 complete days back, 2 of them skipped
 
 
 async def test_reheats_are_learned_per_day(hass: HomeAssistant, entry) -> None:
     m = entry.runtime_data
     today = dt_util.now().date()
-    m.reheat_since = (today - timedelta(days=8)).isoformat()
+    m.routine.reheat_since = (today - timedelta(days=8)).isoformat()
     for d in range(1, 9):                                     # a reheat at 13:00 on each of the last 8 days
         m.reheat_log[(today - timedelta(days=d)).isoformat()] = [13]
-    m._update_reheat_habits()
+    m.routine.update_reheat_habits()
     r = m.habits["reheat"]
     assert r["days"] == 8 and r["hours"][13] > 0.9 and r["last_day"] == (today - timedelta(days=1)).isoformat()
     m.log_reheat(dt_util.utcnow())                           # live: a reheat starts now

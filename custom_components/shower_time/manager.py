@@ -5,7 +5,7 @@ import asyncio
 from collections.abc import Callable
 import copy
 from dataclasses import asdict, replace
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 import logging
 import math
 
@@ -13,7 +13,7 @@ from homeassistant.components.recorder import get_instance, history, statistics
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, callback
-from homeassistant.helpers import entity_registry as er, issue_registry as ir
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.event import (
     async_call_later,
     async_track_state_change_event,
@@ -26,6 +26,8 @@ from homeassistant.util import dt as dt_util
 from . import insights, model
 from .clock import at as _at, now_min as _now_min
 from .fill import FillLevel
+from .habits import Habits, Legionella
+from .health import Health
 from .usage import UseTracker
 from .ledger import ShowerLedger
 from .const import (
@@ -75,7 +77,6 @@ from .const import (
     HISTORY_DAYS,
     LEARN_HOUR,
     LEARN_MINUTE,
-    LOG_DAYS,
     STORAGE_VERSION,
 )
 
@@ -179,6 +180,10 @@ class ShowerTimeManager:
         self.ledger = ShowerLedger()
         self.usage = UseTracker(self)              # the hot water use going on (usage.py)
         self.fill = FillLevel(self)                 # 100 % and what went where since (fill.py)
+        self.routine = Habits(self)                 # shower and reheat habits, today's forecast (habits.py)
+        self.legionella = Legionella(self, float(cfg.get(CONF_LEGIONELLA_TEMP, DEFAULT_LEGIONELLA_TEMP)),
+                                     float(cfg.get(CONF_LEGIONELLA_DAYS, DEFAULT_LEGIONELLA_DAYS)))
+        self.health = Health(self)                  # repairs, problems for the card, downtime (health.py)
         self._ema_by_day: dict[str, float] = {}       # local date -> outdoor running average
         self.ema_now: float | None = None
         self.heating: str | None = cfg.get(CONF_HEATING) or None
@@ -221,27 +226,15 @@ class ShowerTimeManager:
         self._event_listeners: list[Callable[[str, dict], None]] = []
         self._unsubs: list[CALLBACK_TYPE] = []
         # smart extras (insights.py): habits and today's forecast, heat loss and leaks, legionella, health
-        self.habits: dict = insights.new_habits()
         self.loss_samples: list[dict] = []
         self.drip_nights: list[dict] = []
         self.loss_backfilled = False                # the full history was searched once for heat-loss measurements
-        self.reheat_log: dict[str, list[int]] = {}  # local day -> hours in which a reheat started
-        self.reheat_since: str | None = None        # first day the reheat log is complete from
-        self._last_reheat_start: datetime | None = None
         self.loss: dict = self._loss_status()
-        self.legionella_temp = float(cfg.get(CONF_LEGIONELLA_TEMP, DEFAULT_LEGIONELLA_TEMP))
-        self.legionella_days = float(cfg.get(CONF_LEGIONELLA_DAYS, DEFAULT_LEGIONELLA_DAYS))
-        self.legionella_at: str | None = None
-        self.legionella_checked = False             # the history was searched (so "never" means never)
-        self.legionella_since: str | None = None    # how far back we can tell: the oldest statistic, or when we began
         self.learn_failures = 0
-        self._missing_since: dict[str, datetime] = {}
-        self._swap_since: datetime | None = None
         # the signals that confirm a hot water use (a bathroom sensor, a water meter); followed in usage.UseTracker
         self.bath: str | None = cfg.get(CONF_BATH) or None
         self.bathtub = bool(cfg.get(CONF_BATHTUB, DEFAULT_BATHTUB))   # without a bath a fast fill is a bucket
         self._water_factor = 1.0
-        self.alive_at: str | None = None            # saved every 10 minutes: shows when Home Assistant was off
 
     # ------------------------------------------------------------------ lifecycle
     async def async_start(self) -> None:
@@ -261,17 +254,17 @@ class ShowerTimeManager:
                 self.params.pop("geo", None)
                 self._apply_geometry()
         if stored:
-            self.habits = stored.get("habits") or self.habits
+            self.routine.habits = stored.get("habits") or self.routine.habits
             self.loss_samples = stored.get("loss_samples") or []
             self.drip_nights = stored.get("drip_nights") or []
             self.loss_backfilled = stored.get("loss_backfilled", False)
-            self.reheat_log = stored.get("reheat_log") or {}
-            self.reheat_since = stored.get("reheat_since")
+            self.routine.reheat_log = stored.get("reheat_log") or {}
+            self.routine.reheat_since = stored.get("reheat_since")
             self.loss = self._loss_status()
-            self.legionella_at = stored.get("legionella_at")
-            self.legionella_since = stored.get("legionella_since")
+            self.legionella.at = stored.get("legionella_at")
+            self.legionella.since = stored.get("legionella_since")
             self.learn_failures = stored.get("learn_failures", 0)
-            self.alive_at = stored.get("alive_at")
+            self.health.alive_at = stored.get("alive_at")
             self.hot_top = stored.get("hot_top")
             self._hot_stored = self.hot_top is not None
             self._hot_at = dt_util.parse_datetime(stored["hot_at"]) if stored.get("hot_at") else None
@@ -289,14 +282,14 @@ class ShowerTimeManager:
         watch = [e for e in (self.top, self.bottom, self.heating, self.bath, self.water) if e]
         if stored:
             self.usage.restore(stored.get("resume"))
-        self._note_downtime()
+        self.health.note_downtime()
         self._resolve_signals()
         self._unsubs.append(async_track_state_change_event(self.hass, watch, self._state_changed))
         self._unsubs.append(async_track_state_change_event(self.hass, self._device_temperatures(), self._temp_changed))
         self._unsubs.append(async_track_time_change(self.hass, self._nightly, hour=LEARN_HOUR, minute=LEARN_MINUTE, second=0))
         self._unsubs.append(async_track_time_interval(self.hass, self.usage.tick, timedelta(seconds=15)))
         self._unsubs.append(async_track_time_change(self.hass, self._midnight, hour=0, minute=0, second=5))
-        self._unsubs.append(async_track_time_interval(self.hass, self._check_health, timedelta(minutes=10)))
+        self._unsubs.append(async_track_time_interval(self.hass, self.health.check, timedelta(minutes=10)))
         self.entry.async_create_background_task(self.hass, self._start_ledger(), f"{DOMAIN}_ledger")
         if not self.last_learn:                 # first install: learn from what the recorder already has
             self._unsubs.append(async_call_later(self.hass, 120, self._first_learn))
@@ -307,13 +300,13 @@ class ShowerTimeManager:
         # (updated from an older version), so the fill level and the hot layer are right straight away
         if self.full_ref is None or (self.params.get("geo") and (not self.full_ref_state or not self._hot_stored)):
             self.entry.async_create_background_task(self.hass, self._init_full_ref(), f"{DOMAIN}_full_ref")
-        if self.legionella_since is None:
-            self.legionella_since = dt_util.utcnow().isoformat()
-        if self.legionella_at is None:          # the last legionella-proof heat-up, from the statistics
+        if self.legionella.since is None:
+            self.legionella.since = dt_util.utcnow().isoformat()
+        if self.legionella.at is None:          # the last legionella-proof heat-up, from the statistics
             self.entry.async_create_background_task(self.hass, self._init_legionella(), f"{DOMAIN}_legionella")
         else:
-            self.legionella_checked = True
-        self._sync_loss_issues()
+            self.legionella.checked = True
+        self.health.sync_loss_issues()
 
 
 
@@ -474,7 +467,7 @@ class ShowerTimeManager:
         self._feed_bath()
         self._feed_water()
         self.usage.detect()
-        self._track_legionella()
+        self.legionella.track()
         if self.top_value is None:
             self.estimate = None
         else:
@@ -581,88 +574,37 @@ class ShowerTimeManager:
 
     @callback
     def _midnight(self, _now) -> None:
-        self._update_habits()
+        self.routine.update()
         self.notify()              # "today" counters start again
 
     # ------------------------------------------------------------------ shower habits and today's forecast
-    @callback
-    def _update_habits(self) -> None:
-        """Add every completed day the shower log fully covers to the habit profile."""
-        cov = self.ledger.covered_from
-        if not cov:
-            return
-        today = dt_util.now().date()
-        day = max(date.fromisoformat(cov), today - timedelta(days=LOG_DAYS - 1))
-        if self.habits.get("last_day"):
-            day = max(day, date.fromisoformat(self.habits["last_day"]) + timedelta(days=1))
-        by_day: dict[date, list[tuple[float, float]]] = {}
-        for e in self.ledger.log:
-            t = dt_util.as_local(datetime.fromisoformat(e["start"]))
-            by_day.setdefault(t.date(), []).append((t.hour + t.minute / 60, e["minutes"]))
-        changed = False
-        while day < today:
-            if insights.is_incomplete(self.habits, day.isoformat()):
-                self.habits["last_day"] = day.isoformat()          # showers may have been missed: skip the day
-            else:
-                insights.add_day(self.habits, day.weekday(), day.isoformat(), insights.minutes_by_hour(by_day.get(day, [])))
-            day += timedelta(days=1)
-            changed = True
-        if changed:
-            self.request_save()
-        self._update_reheat_habits()
 
-    # ------------------------------------------------------------------ reheat habits
-    @callback
+
+    # ------------------------------------------------------------------ habits, legionella, health (habits.py, health.py)
+    # read by the entities and the diagnostics
+    habits = property(lambda self: self.routine.habits)
+    reheat_log = property(lambda self: self.routine.reheat_log)
+    reheat_since = property(lambda self: self.routine.reheat_since)
+    legionella_temp = property(lambda self: self.legionella.temp)
+    legionella_days = property(lambda self: self.legionella.days)
+    legionella_at = property(lambda self: self.legionella.at)
+    legionella_checked = property(lambda self: self.legionella.checked)
+    legionella_since = property(lambda self: self.legionella.since)
+
     def log_reheat(self, now: datetime) -> None:
-        if self._last_reheat_start is not None and now - self._last_reheat_start < timedelta(hours=1):
-            return                                          # one reheat in pieces counts once
-        self._last_reheat_start = now
-        local = dt_util.as_local(now)
-        day = local.date().isoformat()
-        self.reheat_log[day] = sorted(set(self.reheat_log.get(day, [])) | {local.hour})
-        if self.reheat_since is None:
-            self.reheat_since = (local.date() + timedelta(days=1)).isoformat()
-        self._prune_reheat_log()
-        self.request_save()
-
-    def _prune_reheat_log(self) -> None:
-        cutoff = (dt_util.now().date() - timedelta(days=LOG_DAYS + 6)).isoformat()
-        self.reheat_log = {d: h for d, h in self.reheat_log.items() if d >= cutoff}
-
-    @callback
-    def _update_reheat_habits(self) -> None:
-        """Add every completed day since the reheat log is complete to the reheat profile."""
-        if not self.reheat_since:
-            return
-        today = dt_util.now().date()
-        r = self.habits.get("reheat") or {}
-        day = date.fromisoformat(self.reheat_since)
-        if r.get("last_day"):
-            day = max(day, date.fromisoformat(r["last_day"]) + timedelta(days=1))
-        day = max(day, today - timedelta(days=LOG_DAYS + 5))
-        changed = False
-        while day < today:
-            iso = day.isoformat()
-            if not insights.is_incomplete(self.habits, iso):
-                insights.add_reheat_day(self.habits, self.reheat_log.get(iso, []))
-            self.habits.setdefault("reheat", {"days": 0, "hours": [0.0] * 24})["last_day"] = iso
-            day += timedelta(days=1)
-            changed = True
-        if changed:
-            self.request_save()
+        self.routine.log_reheat(now)
 
     def forecast(self) -> insights.Forecast | None:
-        """Will the hot water last today (without a reheat in between)? None until a week of habits is known."""
-        e = self.current
-        if e is None or not self.bottom or not insights.habits_ready(self.habits):
-            return None                             # without a bottom sensor showers are not seen
-        minutes = e.minutes
-        if self.reheating:                          # being filled: count on what it holds when full
-            minutes = max(minutes, self.ref_minutes() or 0.0)
-        now = dt_util.now()
-        return insights.forecast(self.habits, weekday=now.weekday(), hour=now.hour + now.minute / 60,
-                                 minutes_now=minutes, per_minute=e.per_minute, loss_k_h=self.loss_k_h(),
-                                 typical=self.params["duration"]["v"])
+        return self.routine.forecast()
+
+    def forecast_attrs(self) -> dict | None:
+        return self.routine.forecast_attrs()
+
+    def legionella_overdue(self) -> bool | None:
+        return self.legionella.overdue()
+
+    def problems(self) -> list[dict]:
+        return self.health.problems()
 
     def loss_k_h(self) -> float:
         """How fast the tank cools now: from its measured heat-loss coefficient (and how hot it is), else the
@@ -672,30 +614,7 @@ class ShowerTimeManager:
         measured = insights.loss_k_per_h(self.loss.get("ua_recent"), mean, self.volume)
         return measured if measured is not None else self.params["loss"]["v"]
 
-    def forecast_attrs(self) -> dict | None:
-        """Today's forecast with clock times instead of hours (for attributes and notifications)."""
-        f = self.forecast()
-        if f is None:
-            return None
-        now = dt_util.now()
-        day = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        return {"enough": f.enough, "expected_minutes": f.expected_minutes, "available_minutes": f.available_minutes,
-                "reheat_chance": f.reheat_chance,
-                "runs_out_at": (day + timedelta(hours=f.runs_out_at)).isoformat(timespec="minutes")
-                if f.runs_out_at is not None else None,
-                "next_shower_at": (now + timedelta(hours=f.next_shower_at)).replace(second=0, microsecond=0)
-                .isoformat(timespec="minutes") if f.next_shower_at is not None else None}
 
-    # ------------------------------------------------------------------ legionella
-    @callback
-    def _track_legionella(self) -> None:
-        t, b = self.top_value, self.bottom_value
-        if t is not None and t >= self.legionella_temp and (self.bottom is None or (b is not None and b >= self.legionella_temp)):
-            stamp = dt_util.now().isoformat(timespec="minutes")
-            if stamp != self.legionella_at:
-                self.legionella_at = stamp
-                self.legionella_checked = True
-                self.request_save()
 
     async def _init_legionella(self) -> None:
         """The last hour in which the whole tank (top and bottom) reached the legionella temperature."""
@@ -706,113 +625,11 @@ class ShowerTimeManager:
                 statistics.statistics_during_period, self.hass, end - timedelta(days=45), end, ids, "hour",
                 {"temperature": "°C"}, {"max"})
 
-            def by_hour(ent: str) -> dict[float, float]:
-                out = {}
-                for r in stats.get(ent, []):
-                    ts = r["start"]
-                    if r.get("max") is not None:
-                        out[ts.timestamp() if isinstance(ts, datetime) else float(ts)] = float(r["max"])
-                return out
-            top = by_hour(self.top)
-            bot = by_hour(self.bottom) if self.bottom else None
-            if not top:
-                return                              # no long-term statistics: wait for the live readings
-            # "no hit" only means something for as long as the statistics reach back (of both sensors)
-            first = max(min(top), min(bot)) if bot else min(top)
-            old = dt_util.parse_datetime(self.legionella_since) if self.legionella_since else None
-            if old is None or first < old.timestamp():
-                self.legionella_since = datetime.fromtimestamp(first, timezone.utc).isoformat()
-                self.request_save()
-            hits = [t for t, v in top.items() if v >= self.legionella_temp
-                    and (bot is None or bot.get(t, -99.0) >= self.legionella_temp)]
-            if hits and self.legionella_at is None:
-                self.legionella_at = dt_util.as_local(datetime.fromtimestamp(max(hits) + 3599, timezone.utc)).isoformat(timespec="minutes")
-                self.request_save()
-            self.legionella_checked = True
+            self.legionella.from_statistics(stats)
         except Exception:  # noqa: BLE001
             _LOGGER.exception("Could not search the history for the last legionella heat-up")
         self.notify()
 
-    def legionella_overdue(self) -> bool | None:
-        if not self.legionella_checked:
-            return None
-        if self.legionella_at is None:
-            # no heat-up found: overdue only once we could have seen one for the whole period (a tank with a few
-            # days of statistics, or just installed, has not been proven overdue)
-            since = dt_util.parse_datetime(self.legionella_since) if self.legionella_since else None
-            if since is None or dt_util.utcnow() - since < timedelta(days=self.legionella_days):
-                return None
-            return True
-        age = dt_util.now() - datetime.fromisoformat(self.legionella_at)
-        return age > timedelta(days=self.legionella_days)
-
-    # ------------------------------------------------------------------ health (Home Assistant repairs)
-    def _issue_id(self, key: str) -> str:
-        return f"{self.entry.entry_id}_{key.replace(':', '_')}"
-
-    @callback
-    def _issue(self, key: str, active: bool, placeholders: dict | None = None) -> None:
-        if active:
-            ir.async_create_issue(self.hass, DOMAIN, self._issue_id(key), is_fixable=False,
-                                  severity=ir.IssueSeverity.WARNING, translation_key=key.split(":")[0],
-                                  translation_placeholders={"name": self.entry.title, **(placeholders or {})})
-        else:
-            ir.async_delete_issue(self.hass, DOMAIN, self._issue_id(key))
-
-    @callback
-    def _note_downtime(self) -> None:
-        """Home Assistant was off for a while: the days in between may miss showers, so the habits skip them."""
-        if self.alive_at:
-            last = dt_util.parse_datetime(self.alive_at)
-            if last is not None and dt_util.utcnow() - last > timedelta(hours=1):
-                day, today = dt_util.as_local(last).date(), dt_util.now().date()
-                days = []
-                while day <= today:
-                    days.append(day.isoformat())
-                    day += timedelta(days=1)
-                insights.mark_incomplete(self.habits, days)
-        self.alive_at = dt_util.utcnow().isoformat()
-
-    def problems(self) -> list[dict]:
-        """What needs attention, for the card: a possible leak, raised heat loss, legionella, a silent sensor."""
-        out = []
-        if self.loss.get("leak_like"):
-            out.append({"key": "leak"})
-        elif self.loss.get("raised"):
-            out.append({"key": "heat_loss", "ratio": self.loss.get("ratio")})
-        if self.legionella_overdue():
-            days = None
-            if self.legionella_at:
-                days = (dt_util.now() - datetime.fromisoformat(self.legionella_at)).days
-            out.append({"key": "legionella", "days": days})
-        now = dt_util.utcnow()
-        if any(now - t >= timedelta(hours=2) for t in self._missing_since.values()):
-            out.append({"key": "sensor"})
-        return out
-
-    @callback
-    def _check_health(self, _now=None) -> None:
-        now = dt_util.utcnow()
-        self.alive_at = now.isoformat()
-        self.request_save()
-        for key, ent, val in (("top", self.top, self.top_value), ("bottom", self.bottom, self.bottom_value)):
-            if not ent:
-                self._issue(f"sensor_missing:{key}", False)     # a sensor emptied under Configure
-                continue
-            if val is None:
-                since = self._missing_since.setdefault(key, now)
-                self._issue(f"sensor_missing:{key}", now - since >= timedelta(hours=2), {"entity": ent})
-                if now - since >= timedelta(hours=2):        # showers may be missed today
-                    insights.mark_incomplete(self.habits, [dt_util.now().date().isoformat()])
-            else:
-                self._missing_since.pop(key, None)
-                self._issue(f"sensor_missing:{key}", False)
-        t, b = self.top_value, self.bottom_value
-        swapped = t is not None and b is not None and b > t + 5 and not self.reheating
-        self._swap_since = (self._swap_since or now) if swapped else None
-        self._issue("sensors_swapped", bool(self._swap_since and now - self._swap_since >= timedelta(hours=6)),
-                    {"top": self.top, "bottom": self.bottom or ""})
-        self._issue("learning_failed", self.learn_failures >= 3, {"nights": str(self.learn_failures)})
 
     def _loss_status(self) -> dict:
         st = insights.loss_status(self.loss_samples)
@@ -820,14 +637,6 @@ class ShowerTimeManager:
         st["leak_like"] = bool(st["leak_like"] or st["dripping"])
         return st
 
-    @callback
-    def _sync_loss_issues(self) -> None:
-        st = self.loss
-        ph = {"baseline": f"{st['ua_baseline']:.2f}" if st.get("ua_baseline") else "-",
-              "recent": f"{st['ua_recent']:.2f}" if st.get("ua_recent") else "-",
-              "ratio": f"{st['ratio']:.1f}" if st.get("ratio") else "-"}
-        self._issue("possible_leak", bool(st.get("leak_like")), ph)
-        self._issue("heat_loss_raised", bool(st.get("raised")) and not st.get("leak_like"), ph)
 
     def heat_loss_now(self) -> float | None:
         """Watts the tank loses right now, from its measured heat-loss coefficient."""
@@ -853,7 +662,7 @@ class ShowerTimeManager:
                 await self.ledger.async_backfill(self, rows)
             except Exception:  # noqa: BLE001
                 _LOGGER.exception("Could not fill the shower log from the history")
-        self._update_habits()
+        self.routine.update()
         self.update()
 
     @property
@@ -1045,23 +854,23 @@ class ShowerTimeManager:
     # ------------------------------------------------------------------ learning
     def _data(self) -> dict:
         # stamped at every write: after a restart this is when Home Assistant went away
-        self.alive_at = dt_util.utcnow().isoformat()
+        self.health.alive_at = dt_util.utcnow().isoformat()
         avg = (model.tank_average(self.params, self.top_value, self.bottom_value)
                if self.top_value is not None and (not self.bottom or self.bottom_value is not None) else None)
         return {
             "top_sensor": self.top,
-            "resume": {"at": self.alive_at, "top_sensor": self.top, "bottom_sensor": self.bottom, "top": self.top_value, "bottom": self.bottom_value, "avg": avg,
+            "resume": {"at": self.health.alive_at, "top_sensor": self.top, "bottom_sensor": self.bottom, "top": self.top_value, "bottom": self.bottom_value, "avg": avg,
                        "use": self.usage.running_use()},
             "profile": self.profile, "params": self.params, "processed_until": self.processed_until,
             "last_cycle": asdict(self.last_cycle) if self.last_cycle else None, "last_learn": self.last_learn,
             "last_samples": self.last_samples, "full_ref": self.full_ref, "full_ref_avg": self.full_ref_avg,
             "full_ref_state": self.full_ref_state,
             "full_ref_at": self.full_ref_at, "top_ups": self.top_ups, "ledger": self.ledger.to_dict(),
-            "habits": self.habits, "loss_samples": self.loss_samples, "drip_nights": self.drip_nights,
+            "habits": self.routine.habits, "loss_samples": self.loss_samples, "drip_nights": self.drip_nights,
             "use_stats": self.use_stats, "loss_backfilled": self.loss_backfilled,
-            "reheat_log": self.reheat_log, "reheat_since": self.reheat_since,
-            "legionella_at": self.legionella_at, "legionella_since": self.legionella_since,
-            "learn_failures": self.learn_failures, "alive_at": self.alive_at,
+            "reheat_log": self.routine.reheat_log, "reheat_since": self.routine.reheat_since,
+            "legionella_at": self.legionella.at, "legionella_since": self.legionella.since,
+            "learn_failures": self.learn_failures, "alive_at": self.health.alive_at,
             "hot_top": self.hot_top, "hot_at": self._hot_at.isoformat() if self._hot_at else None,
             "blur": round(self.blur, 4), "blur_share": self._blur_share, "run_outs": self.run_outs,
         }
@@ -1089,7 +898,7 @@ class ShowerTimeManager:
         finally:
             self.learning = False
             if not self._stopped:
-                self._check_health()
+                self.health.check()
                 self.update()
 
     async def _learn(self) -> None:
@@ -1168,7 +977,7 @@ class ShowerTimeManager:
     async def _update_heat_loss(self, rows: list[model.Row], end: datetime) -> None:
         """Heat-loss measurements and night drips from the rows just read. The first time (also after an
         update) from all the history there is, so the baseline is there right away."""
-        first = not self.loss_backfilled or self.reheat_since is None
+        first = not self.loss_backfilled or self.routine.reheat_since is None
         if first:
             rows = await self._fetch_rows(end - timedelta(days=HISTORY_DAYS), end)
 
@@ -1177,16 +986,16 @@ class ShowerTimeManager:
                      insights.night_drips(rows, local_of=_local),
                      insights.reheat_starts(rows, local_of=_local)))
         for day, hours in reheats.items():                  # the reheats the history shows, with the live ones
-            self.reheat_log[day] = sorted(set(self.reheat_log.get(day, [])) | set(hours))
+            self.routine.reheat_log[day] = sorted(set(self.routine.reheat_log.get(day, [])) | set(hours))
         if first and rows:
-            self.reheat_since = (_local(rows[0].minute).date() + timedelta(days=1)).isoformat()
-        self._prune_reheat_log()
-        self._update_reheat_habits()
+            self.routine.reheat_since = (_local(rows[0].minute).date() + timedelta(days=1)).isoformat()
+        self.routine.prune_reheat_log()
+        self.routine.update_reheat_habits()
         self.loss_samples = insights.merge_samples(self.loss_samples, samples)
         self.drip_nights = insights.merge_drips(self.drip_nights, drips)
         self.loss_backfilled = True
         self.loss = self._loss_status()
-        self._sync_loss_issues()
+        self.health.sync_loss_issues()
         self.request_save()
 
     async def _fetch_series(self, start: datetime, end: datetime) -> dict[str, list]:

@@ -76,10 +76,10 @@ async def test_a_tank_with_a_few_days_of_statistics_is_not_overdue(hass: HomeAss
     m = entry.runtime_data
     await hass.async_block_till_done(wait_background_tasks=True)
     now = dt_util.utcnow()
-    m.legionella_checked, m.legionella_at = True, None
-    m.legionella_since = (now - timedelta(days=3)).isoformat()
+    m.legionella.checked, m.legionella.at = True, None
+    m.legionella.since = (now - timedelta(days=3)).isoformat()
     assert m.legionella_overdue() is None and {"key": "legionella", "days": None} not in m.problems()
-    m.legionella_since = (now - timedelta(days=8)).isoformat()
+    m.legionella.since = (now - timedelta(days=8)).isoformat()
     assert m.legionella_overdue() is True
 
 
@@ -87,7 +87,7 @@ async def test_the_statistics_set_how_far_back_no_hit_counts(hass: HomeAssistant
     entry = await setup_entry(hass, data={"legionella_days": 7})
     m = entry.runtime_data
     await hass.async_block_till_done(wait_background_tasks=True)
-    m.legionella_checked, m.legionella_at, m.legionella_since = False, None, dt_util.utcnow().isoformat()
+    m.legionella.checked, m.legionella.at, m.legionella.since = False, None, dt_util.utcnow().isoformat()
     first = (dt_util.utcnow() - timedelta(days=3)).timestamp()
     rows = [{"start": first + h * 3600, "max": 50.0} for h in range(60)]       # three days, never hot enough
     with patch("custom_components.shower_time.manager.statistics.statistics_during_period",
@@ -97,7 +97,7 @@ async def test_the_statistics_set_how_far_back_no_hit_counts(hass: HomeAssistant
     assert abs(dt_util.parse_datetime(m.legionella_since).timestamp() - first) < 1
     assert m.legionella_overdue() is None                                     # 3 days of 7: not proven
     hot = rows[:10] + [{"start": first + 20 * 3600, "max": 62.0}]
-    m.legionella_at = None
+    m.legionella.at = None
     with patch("custom_components.shower_time.manager.statistics.statistics_during_period",
                return_value={TOP: hot, BOTTOM: hot}):
         await m._init_legionella()
