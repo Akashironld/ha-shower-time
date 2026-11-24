@@ -107,7 +107,7 @@ async def test_other_sensors_after_reconfigure_are_not_compared_with_the_old_one
     hass.states.async_set("sensor.new_bottom", "20", TEMP_ATTRS)
     m = await _reconfigure(hass, entry, "sensor.new_top", "sensor.new_bottom")
     await wait(hass, freezer, 4)
-    assert LOG(m) == [] and m.ledger.other == [] and not m.showering and m._gap is None
+    assert LOG(m) == [] and m.ledger.other == [] and not m.showering and m.usage._gap is None
 
 
 async def test_a_changed_bottom_sensor_is_not_compared_with_the_old_one(hass: HomeAssistant, entry, freezer) -> None:

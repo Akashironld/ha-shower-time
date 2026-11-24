@@ -45,7 +45,7 @@ async def test_a_stopped_manager_does_not_learn_or_save(hass: HomeAssistant, dep
     await m.async_learn()
     await m._nightly(None)
     m.request_save()
-    m._save_later(5)
+    m.save_later(5)
     m._learn.assert_not_called()
     m._store.async_save.assert_not_called()
     m._store.async_delay_save.assert_not_called()

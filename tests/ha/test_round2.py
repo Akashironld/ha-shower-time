@@ -222,7 +222,7 @@ async def test_loads_data_stored_by_an_older_version(hass: HomeAssistant, deps, 
     m = entry.runtime_data
     assert m.params["head_flow"]["n"] == 0 and "cold_model" in m.params
     assert len(m.ledger.showers()) == 1 and m.ledger.summary()["today_showers"] == 1
-    assert not m.showering and m._resume is None and m.use is None          # nothing of the restart keys
+    assert not m.showering and m.usage._resume is None and m.use is None          # nothing of the restart keys
     assert m.legionella_since is not None and m.ledger.totals["showers"] == 0
     assert float(state(hass, "sensor.hot_water_shower_time")) > 0
     await hass.config_entries.async_unload(entry.entry_id)

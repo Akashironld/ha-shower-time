@@ -145,7 +145,7 @@ async def test_a_bath_is_a_session_but_no_shower(hass: HomeAssistant, deps, free
     assert attrs["today_baths"] == 1 and attrs["last"] is None         # the card: "+ bath" under today's showers
     assert last["drawn"] > 0 and last["seen"] == ["bathroom"]           # why it counted, for the diagnostics
     # one showers after the other, not after a bath: a use right after it is no shower by habit
-    assert not m._shower_time_of_day(dt_util.utcnow())
+    assert not m.usage._shower_time_of_day(dt_util.utcnow())
 
 
 async def test_a_bucket_stays_other_hot_water(hass: HomeAssistant, entry, freezer) -> None:
