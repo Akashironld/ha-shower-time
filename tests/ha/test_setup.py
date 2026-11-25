@@ -101,6 +101,24 @@ async def test_diagnostics_show_what_the_bathroom_signal_saw(hass: HomeAssistant
     assert shown["shower"][-1][1] == "off"
 
 
+async def test_diagnostics_keep_what_a_use_looked_like_while_it_went_on(hass: HomeAssistant, deps, freezer) -> None:
+    """#10: the in-use sensor stays on while the use is first unknown and then a shower; both are in the file."""
+    from datetime import timedelta
+    from homeassistant.util import dt as dt_util
+    from custom_components.shower_time.diagnostics import _changes
+    ent = "binary_sensor.in_use_test"
+    start = dt_util.utcnow() - timedelta(minutes=1)
+    hass.states.async_set(ent, "on", {"kind": "unknown"})
+    freezer.tick(timedelta(minutes=3))
+    hass.states.async_set(ent, "on", {"kind": "shower"})            # the state stays on: only the kind changes
+    freezer.tick(timedelta(minutes=3))
+    hass.states.async_set(ent, "off", {"kind": None})
+    await async_wait_recording_done(hass)
+    rows = await _changes(hass, ent, start, dt_util.utcnow() + timedelta(minutes=1), "kind")
+    assert [r[1:] for r in rows] == [["on", "unknown"], ["on", "shower"], ["off", None]]
+    assert rows[1][0] - rows[0][0] == 3
+
+
 async def test_reload_and_unload(hass: HomeAssistant, entry) -> None:
     assert await hass.config_entries.async_reload(entry.entry_id)
     await hass.async_block_till_done()

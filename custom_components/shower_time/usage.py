@@ -509,7 +509,7 @@ class UseTracker:
         self._recent = [r for r in self._recent if r[0] >= now - 90]
         edge = e.shower_temp + 2                    # where the card reaches 0 (in auto mode the sensed temperature)
         last = self.run_outs[-1]["minute"] if self.run_outs else None
-        if (top >= edge or not (self.showering or (flow or 0.0) >= 1.0)
+        if (top >= edge or not ((self.showering and self.use_kind() != "coil") or (flow or 0.0) >= 1.0)
                 or (last is not None and now - last < 180)):
             return
         hour = [r for r in self._recent if r[0] >= now - 60]

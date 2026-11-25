@@ -57,11 +57,13 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: ShowerT
     shown: dict[str, list] = {}
     for name, key, attr in SHOWN:
         entity = reg.async_get_entity_id(_platform(key), DOMAIN, f"{entry.entry_id}_{key}")
-        if entity:
-            try:
-                shown[name] = await _changes(hass, entity, start, end, attr)
-            except Exception as err:  # noqa: BLE001
-                shown[name] = [["error", str(err)]]
+        if not entity:
+            shown[name] = [["missing", "no such entity"]]
+            continue
+        try:
+            shown[name] = await _changes(hass, entity, start, end, attr) or [["missing", "no recorder history"]]
+        except Exception as err:  # noqa: BLE001
+            shown[name] = [["error", str(err)]]
 
     return {
         "versions": {"integration": str(integration.version), "home_assistant": HA_VERSION},
@@ -110,14 +112,20 @@ def _platform(key: str) -> str:
 
 
 async def _changes(hass: HomeAssistant, entity: str, start, end, attr: str | None = None) -> list[list]:
-    """The values an entity reported in a period: the last one of every minute, with one of its attributes."""
-    res = await get_instance(hass).async_add_executor_job(
-        history.state_changes_during_period, hass, start, end, entity, attr is None, False, None, True)
+    """The values an entity reported in a period: the last one of every minute. With ``attr``, also every update
+    where only that attribute changed (a use first unknown, then a shower, while the sensor stays on), with it."""
+    if attr is None:
+        res = await get_instance(hass).async_add_executor_job(
+            history.state_changes_during_period, hass, start, end, entity, True, False, None, True)
+    else:                       # state_changes_during_period leaves out updates of the attributes alone
+        res = await get_instance(hass).async_add_executor_job(
+            history.get_significant_states, hass, start, end, [entity], None, True, False, False, False)
     by_minute: dict[int, list] = {}
     for st in res.get(entity, []):
         try:
             value: float | str = round(float(st.state), 2)
         except ValueError:
             value = st.state
-        by_minute[int(st.last_changed.timestamp() // 60)] = [value] + ([st.attributes.get(attr)] if attr else [])
+        at = st.last_updated if attr else st.last_changed
+        by_minute[int(at.timestamp() // 60)] = [value] + ([st.attributes.get(attr)] if attr else [])
     return [[minute, *v] for minute, v in sorted(by_minute.items())]
