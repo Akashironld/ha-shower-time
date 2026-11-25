@@ -77,8 +77,8 @@ async def test_diagnostics(hass: HomeAssistant, entry) -> None:
     data = await async_get_config_entry_diagnostics(hass, entry)
     assert data["config"]["top_sensor"] == "sensor.tank_top"
     assert data["live"]["top"] == 55.0
-    for key in ("learned", "ledger", "habits", "heat_loss", "legionella", "hot_water_use", "tank_readings_24h_5min",
-                "signals_24h"):
+    for key in ("learned", "ledger", "habits", "heat_loss", "legionella", "hot_water_use", "tank_readings_48h_5min",
+                "signals_48h", "shown_48h"):
         assert key in data, key
     assert "cop_learned" in data["ledger"]
 
@@ -92,8 +92,13 @@ async def test_diagnostics_show_what_the_bathroom_signal_saw(hass: HomeAssistant
     hass.states.async_set(water[0], "7.5", water[1])
     await async_wait_recording_done(hass)
     data = await async_get_config_entry_diagnostics(hass, entry)
-    assert data["signals_24h"]["bathroom"][-1][1] == 71.25
-    assert data["signals_24h"]["water_meter"][-1][1] == 7.5
+    assert data["signals_48h"]["bathroom"][-1][1] == 71.25
+    assert data["signals_48h"]["water_meter"][-1][1] == 7.5
+    # and what the card showed meanwhile: the minutes, no hot water in use (its kind with it), no shower
+    shown = data["shown_48h"]
+    assert isinstance(shown["minutes"][-1][1], float) and shown["minutes"][-1][1] > 0
+    assert shown["in_use"][-1][1:] == ["off", None]
+    assert shown["shower"][-1][1] == "off"
 
 
 async def test_reload_and_unload(hass: HomeAssistant, entry) -> None:

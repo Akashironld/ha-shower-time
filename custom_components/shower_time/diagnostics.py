@@ -1,9 +1,10 @@
 """Diagnostics download: everything needed to reproduce a user's situation, nothing private.
 
 Attach the downloaded file to a GitHub issue. It contains the settings (entity ids, no credentials), what
-has been learned, the current estimate, the shower log, the tank readings of the last 24 hours at a
-5-minute grid (so the situation can be replayed in the model's test simulator) and what the bathroom signal
-and water meter showed in that time.
+has been learned, the current estimate, the shower log, the tank readings of the last 48 hours at a
+5-minute grid (so the situation can be replayed in the model's test simulator), what the bathroom signal
+and water meter showed in that time, and what the card showed: the minutes, whether hot water was in use and
+as what, and whether it counted as a shower (so a tester's "it said 20 minutes and ran cold" can be checked).
 """
 from __future__ import annotations
 
@@ -14,11 +15,16 @@ from typing import Any
 from homeassistant.components.recorder import get_instance, history
 from homeassistant.const import __version__ as HA_VERSION
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 from homeassistant.loader import async_get_integration
 from homeassistant.util import dt as dt_util
 
 from . import ShowerTimeConfigEntry
 from .const import DOMAIN
+
+HOURS = 48              # how far back the readings, the signals and what the card showed go
+# what the card showed, by entity key: the minutes, hot water in use (with what it looked like) and a shower
+SHOWN = (("minutes", "shower_minutes", None), ("in_use", "showering", "kind"), ("shower", "shower_active", None))
 
 
 async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: ShowerTimeConfigEntry) -> dict[str, Any]:
@@ -32,7 +38,7 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: ShowerT
 
     readings: list[list] = []
     end = dt_util.utcnow()
-    start = end - timedelta(hours=24)
+    start = end - timedelta(hours=HOURS)
     try:
         series = await m.learner.fetch_series(start, end)
         rows = await hass.async_add_executor_job(m.learner.rows, series, start, end)
@@ -47,6 +53,15 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: ShowerT
                 signals[name] = await _changes(hass, entity, start, end)
             except Exception as err:  # noqa: BLE001
                 signals[name] = [["error", str(err)]]
+    reg = er.async_get(hass)
+    shown: dict[str, list] = {}
+    for name, key, attr in SHOWN:
+        entity = reg.async_get_entity_id(_platform(key), DOMAIN, f"{entry.entry_id}_{key}")
+        if entity:
+            try:
+                shown[name] = await _changes(hass, entity, start, end, attr)
+            except Exception as err:  # noqa: BLE001
+                shown[name] = [["error", str(err)]]
 
     return {
         "versions": {"integration": str(integration.version), "home_assistant": HA_VERSION},
@@ -83,21 +98,26 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: ShowerT
                           "other": m.ledger.other[-30:]},
         "run_outs": {"columns": ["minutes_before", "top_c", "bottom_c", "minutes_shown", "water_l_min"],
                      "events": m.usage.run_outs},
-        "tank_readings_24h_5min": {"columns": ["minute_since_epoch_utc", "top_c", "bottom_c", "reheating"],
+        "tank_readings_48h_5min": {"columns": ["minute_since_epoch_utc", "top_c", "bottom_c", "reheating"],
                                    "rows": readings},
-        "signals_24h": {"columns": ["minute_since_epoch_utc", "value"], **signals},
+        "signals_48h": {"columns": ["minute_since_epoch_utc", "value"], **signals},
+        "shown_48h": {"columns": ["minute_since_epoch_utc", "value", "kind (in_use only)"], **shown},
     }
 
 
-async def _changes(hass: HomeAssistant, entity: str, start, end) -> list[list]:
-    """The values an entity reported in a period: the last one of every minute."""
+def _platform(key: str) -> str:
+    return "sensor" if key == "shower_minutes" else "binary_sensor"
+
+
+async def _changes(hass: HomeAssistant, entity: str, start, end, attr: str | None = None) -> list[list]:
+    """The values an entity reported in a period: the last one of every minute, with one of its attributes."""
     res = await get_instance(hass).async_add_executor_job(
-        history.state_changes_during_period, hass, start, end, entity, True, False, None, True)
-    by_minute: dict[int, float | str] = {}
+        history.state_changes_during_period, hass, start, end, entity, attr is None, False, None, True)
+    by_minute: dict[int, list] = {}
     for st in res.get(entity, []):
         try:
             value: float | str = round(float(st.state), 2)
         except ValueError:
             value = st.state
-        by_minute[int(st.last_changed.timestamp() // 60)] = value
-    return [[minute, value] for minute, value in sorted(by_minute.items())]
+        by_minute[int(st.last_changed.timestamp() // 60)] = [value] + ([st.attributes.get(attr)] if attr else [])
+    return [[minute, *v] for minute, v in sorted(by_minute.items())]

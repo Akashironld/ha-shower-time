@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.15.2b7 — Beta: the diagnostics file shows what the card showed, over 48 hours
+
+**Beta, for testers of #10** — the minutes are the same as in b6; this beta only adds to the diagnostics file. Also has everything from v0.15.2b1 to b6.
+
+### Improvements
+- **The diagnostics file shows what the card showed.** Minute by minute: the shower minutes, whether hot water was in use and what it looked like (shower, tap, fill), and whether it counted as a shower (`shown_48h`). So "it said 15 minutes and ran cold" can be checked against what the tank did at that moment (#10).
+- **48 hours instead of 24.** The tank readings, the bathroom signal and the water meter go back two days (`tank_readings_48h_5min`, `signals_48h`), so a use from yesterday is still in a file downloaded today.
+
+### Under the hood
+- The code is split into parts with their own state (following a use, the fill level, habits and legionella, health, learning); following a use now runs without Home Assistant, so a use from a diagnostics file can be replayed in a quick test. Nothing changes in what Shower Time shows.
+
+### After updating
+In HACS, open Shower Time, choose *Redownload* with *Show beta versions* on and pick v0.15.2b7, then restart Home Assistant. After a use that looked wrong, download the diagnostics file within two days and say roughly when it happened.
+
 ## v0.15.2b6 — Beta: a run-out while the heat pump starts is kept too
 
 **Beta, for testers of #10** — the minutes are the same as in b5; also has everything from v0.15.2b1 to b5.
