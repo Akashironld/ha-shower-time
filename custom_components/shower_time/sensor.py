@@ -67,9 +67,9 @@ class MinutesSensor(ShowerTimeEntity, SensorEntity):
             "typical_shower_minutes": round(p["duration"]["v"]),
             "litres": round(e.liters, -1),
             "full_tank_minutes": round(e.full_minutes) if e.full_minutes is not None else None,
-            "fill_percent": m.fill_percent(),
-            "full_reference_minutes": round(m.ref_minutes()) if m.ref_minutes() is not None else None,
-            "full_reference_at": m.full_ref_at,
+            "fill_percent": m.fill.fill_percent(),
+            "full_reference_minutes": round(m.fill.ref_minutes()) if m.fill.ref_minutes() is not None else None,
+            "full_reference_at": m.fill.full_ref_at,
             "hot_fraction": round(e.hot_fraction, 2),
             "tank_average": round(e.average, 1),
             "top_temperature": m.top_value,
@@ -82,27 +82,27 @@ class MinutesSensor(ShowerTimeEntity, SensorEntity):
             "shower_temperature_mode": ("fixed" if m.temp_mode == "fixed" else ("sensed" if e.shower_temp_sensed else "reference")),
             "head_flow_source": m.head_flow()[1],
             "reheating": m.reheating,
-            "showering": m.showering,
+            "showering": m.usage.showering,
             **{k: v for k, v in m.ledger.summary().items()},
             "currency": m.ledger.currency or None,
             "currency_symbol": currency_symbol(m.ledger.currency),
             "hot_water_price_per_kwh": round(m.ledger.tank_price, 3) if m.ledger.tank_price is not None else None,
             "cop": m.ledger.cop(m),
             "cop_heat_pump": m.ledger.cop_heat_pump(m)[0], "cop_source": m.ledger.cop_heat_pump(m)[1],
-            "since_reheat": m.since_reheat(),
-            "standing_loss_per_day": m.standing_loss_per_day(),
+            "since_reheat": m.fill.since_reheat(),
+            "standing_loss_per_day": m.fill.standing_loss_per_day(),
             "reheat_full_at": m.ledger.eta_full.isoformat(timespec="minutes") if m.ledger.eta_full else None,
             "reheat_one_shower_at": m.ledger.eta_one.isoformat(timespec="minutes") if m.ledger.eta_one else None,
-            "live_countdown": m.live_offset > 0,
+            "live_countdown": m.usage.live_offset > 0,
             "low_threshold": m.low_minutes,
             "current_shower": m.ledger.running(m, dt_util.utcnow()),
             # after the shower stopped on the water meter the tank may still fall, or a tap run: hot water, no shower
-            "hot_water_use": {"kind": "unknown" if m.shower_stopped_at() else m.use_kind(), "bathroom_signal": m.bath_active(),
-                              "water_meter": m.water_active()} if m.showering else None,
-            "problems": m.problems(),
+            "hot_water_use": {"kind": "unknown" if m.usage.shower_stopped_at() else m.usage.use_kind(), "bathroom_signal": m.usage.bath_active(),
+                              "water_meter": m.usage.water_active()} if m.usage.showering else None,
+            "problems": m.health.problems(),
             "other_today": m.ledger.other_today(),
-            "forecast": m.forecast_attrs(),
-            "learned_at": m.last_learn,
+            "forecast": m.routine.forecast_attrs(),
+            "learned_at": m.learner.last_learn,
             "observations": p["flow"]["n"],
             "sensor_heights": _sensor_fractions(p.get("geo")),
         }
@@ -151,14 +151,14 @@ class FillSensor(ShowerTimeEntity, SensorEntity):
 
     @property
     def native_value(self):
-        return self.manager.fill_percent()
+        return self.manager.fill.fill_percent()
 
     @property
     def extra_state_attributes(self):
         m = self.manager
-        return {"full_reference_minutes": round(m.ref_minutes()) if m.ref_minutes() is not None else None,
-                "full_reference_tank_average": round(m.full_ref_avg, 1) if m.full_ref_avg is not None else None,
-                "full_reference_at": m.full_ref_at}
+        return {"full_reference_minutes": round(m.fill.ref_minutes()) if m.fill.ref_minutes() is not None else None,
+                "full_reference_tank_average": round(m.fill.full_ref_avg, 1) if m.fill.full_ref_avg is not None else None,
+                "full_reference_at": m.fill.full_ref_at}
 
 
 class ShowerTemperatureSensor(ShowerTimeEntity, SensorEntity):
@@ -233,8 +233,8 @@ class ModelSensor(ShowerTimeEntity, SensorEntity):
             "outdoor_average_3w": m.ema_now,
             "usual_full_temperature": p.get("full_temp"),
             "observations": {k: p[k]["n"] for k in ("flow", "phi", "loss", "duration")},
-            "last_learn": m.last_learn,
-            "last_learn_samples": m.last_samples,
+            "last_learn": m.learner.last_learn,
+            "last_learn_samples": m.learner.last_samples,
         }
 
 
@@ -403,16 +403,16 @@ class ExpectedTodaySensor(ShowerTimeEntity, SensorEntity):
 
     @property
     def available(self) -> bool:
-        return self.manager.forecast() is not None
+        return self.manager.routine.forecast() is not None
 
     @property
     def native_value(self):
-        f = self.manager.forecast()
+        f = self.manager.routine.forecast()
         return round(f.expected_minutes) if f else None
 
     @property
     def extra_state_attributes(self):
-        return {**(self.manager.forecast_attrs() or {}), "days_learned": self.manager.habits["days"]}
+        return {**(self.manager.routine.forecast_attrs() or {}), "days_learned": self.manager.routine.habits["days"]}
 
 
 class _TotalSensor(_LogSensor):
@@ -486,13 +486,13 @@ class LegionellaSensor(_LogSensor):
 
     @property
     def native_value(self):
-        at = self.manager.legionella_at
+        at = self.manager.legionella.at
         return dt_util.parse_datetime(at) if at else None
 
     @property
     def extra_state_attributes(self):
         m = self.manager
-        return {"temperature": m.legionella_temp, "max_days": m.legionella_days, "overdue": m.legionella_overdue()}
+        return {"temperature": m.legionella.temp, "max_days": m.legionella.days, "overdue": m.legionella.overdue()}
 
 
 class HeatLossSensor(ShowerTimeEntity, SensorEntity):
@@ -510,16 +510,16 @@ class HeatLossSensor(ShowerTimeEntity, SensorEntity):
 
     @property
     def available(self) -> bool:
-        return self.manager.heat_loss_now() is not None
+        return self.manager.heat.heat_loss_now() is not None
 
     @property
     def native_value(self):
-        return self.manager.heat_loss_now()
+        return self.manager.heat.heat_loss_now()
 
     @property
     def extra_state_attributes(self):
-        st = self.manager.loss
-        last = self.manager.loss_samples[-1] if self.manager.loss_samples else None
+        st = self.manager.heat.loss
+        last = self.manager.heat.loss_samples[-1] if self.manager.heat.loss_samples else None
         return {"coefficient_w_per_k": st.get("ua_recent"), "baseline_w_per_k": st.get("ua_baseline"),
                 "ratio": st.get("ratio"), "raised": st.get("raised"), "leak_like": st.get("leak_like"),
                 "measurements": st.get("measurements"), "last_measurement": last}

@@ -64,11 +64,11 @@ class ShoweringSensor(ShowerTimeEntity, BinarySensorEntity):
 
     @property
     def is_on(self):
-        return self.manager.showering and self.manager.use_kind() != "coil"
+        return self.manager.usage.showering and self.manager.usage.use_kind() != "coil"
 
     @property
     def extra_state_attributes(self):
-        return {"kind": self.manager.use_kind()}
+        return {"kind": self.manager.usage.use_kind()}
 
 
 class ShowerActiveSensor(ShowerTimeEntity, BinarySensorEntity):
@@ -87,7 +87,7 @@ class ShowerActiveSensor(ShowerTimeEntity, BinarySensorEntity):
 
     @property
     def is_on(self):
-        return self.manager.use_kind() == "shower" and self.manager.shower_stopped_at() is None
+        return self.manager.usage.use_kind() == "shower" and self.manager.usage.shower_stopped_at() is None
 
 
 class EnoughTodaySensor(ShowerTimeEntity, BinarySensorEntity):
@@ -100,16 +100,16 @@ class EnoughTodaySensor(ShowerTimeEntity, BinarySensorEntity):
 
     @property
     def available(self) -> bool:
-        return self.manager.forecast() is not None
+        return self.manager.routine.forecast() is not None
 
     @property
     def is_on(self):
-        f = self.manager.forecast()
+        f = self.manager.routine.forecast()
         return f.enough if f else None
 
     @property
     def extra_state_attributes(self):
-        return self.manager.forecast_attrs()
+        return self.manager.routine.forecast_attrs()
 
 
 class LegionellaOverdueSensor(ShowerTimeEntity, BinarySensorEntity):
@@ -123,11 +123,11 @@ class LegionellaOverdueSensor(ShowerTimeEntity, BinarySensorEntity):
 
     @property
     def available(self) -> bool:
-        return self.manager.legionella_overdue() is not None
+        return self.manager.legionella.overdue() is not None
 
     @property
     def is_on(self):
-        return self.manager.legionella_overdue()
+        return self.manager.legionella.overdue()
 
 
 class HeatLossRaisedSensor(ShowerTimeEntity, BinarySensorEntity):
@@ -141,16 +141,16 @@ class HeatLossRaisedSensor(ShowerTimeEntity, BinarySensorEntity):
 
     @property
     def available(self) -> bool:                # a drip is seen from the first nights, the trend after ~11 days
-        st = self.manager.loss
-        return bool(st.get("ready") or self.manager.drip_nights)
+        st = self.manager.heat.loss
+        return bool(st.get("ready") or self.manager.heat.drip_nights)
 
     @property
     def is_on(self):
-        st = self.manager.loss
+        st = self.manager.heat.loss
         return bool(st.get("raised") or st.get("leak_like"))
 
     @property
     def extra_state_attributes(self):
-        st = self.manager.loss
+        st = self.manager.heat.loss
         return {"leak_like": st.get("leak_like"), "steady_drip_at_night": st.get("dripping"), "ratio": st.get("ratio"),
                 "coefficient_w_per_k": st.get("ua_recent"), "baseline_w_per_k": st.get("ua_baseline")}

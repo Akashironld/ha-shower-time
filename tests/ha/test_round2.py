@@ -78,9 +78,9 @@ async def test_a_tank_with_a_few_days_of_statistics_is_not_overdue(hass: HomeAss
     now = dt_util.utcnow()
     m.legionella.checked, m.legionella.at = True, None
     m.legionella.since = (now - timedelta(days=3)).isoformat()
-    assert m.legionella_overdue() is None and {"key": "legionella", "days": None} not in m.problems()
+    assert m.legionella.overdue() is None and {"key": "legionella", "days": None} not in m.health.problems()
     m.legionella.since = (now - timedelta(days=8)).isoformat()
-    assert m.legionella_overdue() is True
+    assert m.legionella.overdue() is True
 
 
 async def test_the_statistics_set_how_far_back_no_hit_counts(hass: HomeAssistant, deps) -> None:
@@ -93,15 +93,15 @@ async def test_the_statistics_set_how_far_back_no_hit_counts(hass: HomeAssistant
     with patch("custom_components.shower_time.manager.statistics.statistics_during_period",
                return_value={TOP: rows, BOTTOM: rows}):
         await m._init_legionella()
-    assert m.legionella_checked and m.legionella_at is None
-    assert abs(dt_util.parse_datetime(m.legionella_since).timestamp() - first) < 1
-    assert m.legionella_overdue() is None                                     # 3 days of 7: not proven
+    assert m.legionella.checked and m.legionella.at is None
+    assert abs(dt_util.parse_datetime(m.legionella.since).timestamp() - first) < 1
+    assert m.legionella.overdue() is None                                     # 3 days of 7: not proven
     hot = rows[:10] + [{"start": first + 20 * 3600, "max": 62.0}]
     m.legionella.at = None
     with patch("custom_components.shower_time.manager.statistics.statistics_during_period",
                return_value={TOP: hot, BOTTOM: hot}):
         await m._init_legionella()
-    assert m.legionella_at is not None and m.legionella_overdue() is False
+    assert m.legionella.at is not None and m.legionella.overdue() is False
 
 
 # ------------------------------------------------------------------ history requests
@@ -158,7 +158,7 @@ async def test_a_new_top_sensor_restarts_the_height_learning_only(hass: HomeAssi
     assert m2.params["geo"]["top"] == pytest.approx(start_top + 0.07) and m2.params["geo"]["n"] == 12
     m3 = await reconfigure("sensor.new_top", "sensor.new_bottom")
     assert m3.params["geo"]["top"] == start_top and m3.params["geo"]["n"] == 0
-    assert m3.last_learn == "2026-10-15T10:00:00+00:00"          # the rest is kept
+    assert m3.learner.last_learn == "2026-10-15T10:00:00+00:00"          # the rest is kept
 
 
 # ------------------------------------------------------------------ Fahrenheit
@@ -222,8 +222,8 @@ async def test_loads_data_stored_by_an_older_version(hass: HomeAssistant, deps, 
     m = entry.runtime_data
     assert m.params["head_flow"]["n"] == 0 and "cold_model" in m.params
     assert len(m.ledger.showers()) == 1 and m.ledger.summary()["today_showers"] == 1
-    assert not m.showering and m.usage._resume is None and m.use is None          # nothing of the restart keys
-    assert m.legionella_since is not None and m.ledger.totals["showers"] == 0
+    assert not m.usage.showering and m.usage._resume is None and m.usage.use is None          # nothing of the restart keys
+    assert m.legionella.since is not None and m.ledger.totals["showers"] == 0
     assert float(state(hass, "sensor.hot_water_shower_time")) > 0
     await hass.config_entries.async_unload(entry.entry_id)
     assert hass_storage[f"shower_time.{entry_id}"]["data"]["top_sensor"] == TOP

@@ -27,7 +27,7 @@ async def minute(hass: HomeAssistant, freezer, water: float | None, bottom: floa
 async def test_water_meter_confirms_early_and_times_the_shower(hass: HomeAssistant, deps, freezer) -> None:
     hass.states.async_set(WATER, "1000", WATER_ATTRS)
     entry = await setup_entry(hass, {"water_sensor": WATER})
-    assert entry.runtime_data.water_signal.kind == "total"
+    assert entry.runtime_data.usage.water_signal.kind == "total"
     freezer.tick(timedelta(minutes=30))                       # the meter has been still for a while
     tank(hass, 55.0, 50.0)
     await hass.async_block_till_done()
@@ -87,7 +87,7 @@ async def test_cold_water_alone_is_not_a_shower(hass: HomeAssistant, deps, freez
 async def test_warnings_reach_the_card(hass: HomeAssistant, entry) -> None:
     m = entry.runtime_data
     m.legionella.checked, m.legionella.at = True, (dt_util.now() - timedelta(days=12)).isoformat(timespec="minutes")
-    m.heat.loss = {**m.loss, "leak_like": True}
+    m.heat.loss = {**m.heat.loss, "leak_like": True}
     tank(hass, 55.0, 49.7)
     await hass.async_block_till_done()
     problems = hass.states.get("sensor.hot_water_shower_time").attributes["problems"]
@@ -99,12 +99,12 @@ async def test_days_with_home_assistant_off_are_left_out_of_the_habits(hass: Hom
     m = entry.runtime_data
     m.health.alive_at = (dt_util.utcnow() - timedelta(days=2)).isoformat()
     m.health.note_downtime()
-    skipped = m.habits.get("skip", [])
+    skipped = m.routine.habits.get("skip", [])
     assert len(skipped) == 3 and skipped[-1] == dt_util.now().date().isoformat()
     m.ledger.covered_from = (dt_util.now() - timedelta(days=5)).date().isoformat()
-    m.routine.habits = {**m.habits, "days": 0, "last_day": None}
+    m.routine.habits = {**m.routine.habits, "days": 0, "last_day": None}
     m.routine.update()
-    assert m.habits["days"] == 3                               # 5 complete days back, 2 of them skipped
+    assert m.routine.habits["days"] == 3                               # 5 complete days back, 2 of them skipped
 
 
 async def test_reheats_are_learned_per_day(hass: HomeAssistant, entry) -> None:
@@ -112,13 +112,13 @@ async def test_reheats_are_learned_per_day(hass: HomeAssistant, entry) -> None:
     today = dt_util.now().date()
     m.routine.reheat_since = (today - timedelta(days=8)).isoformat()
     for d in range(1, 9):                                     # a reheat at 13:00 on each of the last 8 days
-        m.reheat_log[(today - timedelta(days=d)).isoformat()] = [13]
+        m.routine.reheat_log[(today - timedelta(days=d)).isoformat()] = [13]
     m.routine.update_reheat_habits()
-    r = m.habits["reheat"]
+    r = m.routine.habits["reheat"]
     assert r["days"] == 8 and r["hours"][13] > 0.9 and r["last_day"] == (today - timedelta(days=1)).isoformat()
-    m.log_reheat(dt_util.utcnow())                           # live: a reheat starts now
-    m.log_reheat(dt_util.utcnow() + timedelta(minutes=20))   # the same reheat resuming: not a second one
-    assert m.reheat_log[today.isoformat()] == [dt_util.now().hour]
+    m.routine.log_reheat(dt_util.utcnow())                           # live: a reheat starts now
+    m.routine.log_reheat(dt_util.utcnow() + timedelta(minutes=20))   # the same reheat resuming: not a second one
+    assert m.routine.reheat_log[today.isoformat()] == [dt_util.now().hour]
 
 
 async def test_a_top_up_keeps_since_reheat_and_a_full_reheat_starts_it_again(hass: HomeAssistant, entry, freezer) -> None:
@@ -126,7 +126,7 @@ async def test_a_top_up_keeps_since_reheat_and_a_full_reheat_starts_it_again(has
     much. A reheat that brings the tank back to (about) full starts it again."""
     m = entry.runtime_data
     m.fill.set_ref(m.estimate.minutes)
-    since, ref = m.full_ref_at, m.ref_minutes()
+    since, ref = m.fill.full_ref_at, m.fill.ref_minutes()
 
     def reheat(low: float, high: float, top: float, bottom: float) -> None:
         for v in (low, low + 1, low + 4, high):          # the minutes fall, then rise: a reheat (no reheat entity)
@@ -137,15 +137,15 @@ async def test_a_top_up_keeps_since_reheat_and_a_full_reheat_starts_it_again(has
 
     freezer.tick(timedelta(hours=1))
     reheat(0.3 * ref, 0.6 * ref, 45.0, 44.0)             # even, but only to 45 °C
-    assert m.full_ref_at == since and len(m.top_ups) == 1
-    assert m.top_ups[0]["added_minutes"] == round(0.6 * ref - (0.3 * ref + 1), 1) and m.top_ups[0]["top"] == 45.0
-    split = m.since_reheat()
-    assert split["since"] == since and split["last_top_up_at"] == m.top_ups[0]["at"]
+    assert m.fill.full_ref_at == since and len(m.fill.top_ups) == 1
+    assert m.fill.top_ups[0]["added_minutes"] == round(0.6 * ref - (0.3 * ref + 1), 1) and m.fill.top_ups[0]["top"] == 45.0
+    split = m.fill.since_reheat()
+    assert split["since"] == since and split["last_top_up_at"] == m.fill.top_ups[0]["at"]
 
     freezer.tick(timedelta(hours=1))
     reheat(0.5 * ref, 0.95 * ref, 55.0, 54.0)            # back to full
-    assert m.full_ref_at != since and m.top_ups == []
-    assert m.since_reheat()["last_top_up_at"] is None
+    assert m.fill.full_ref_at != since and m.fill.top_ups == []
+    assert m.fill.since_reheat()["last_top_up_at"] is None
 
 
 async def test_no_reheated_without_a_reheat(hass: HomeAssistant, entry, freezer) -> None:
@@ -156,11 +156,11 @@ async def test_no_reheated_without_a_reheat(hass: HomeAssistant, entry, freezer)
     freezer.tick(timedelta(hours=1))
     m.ledger.log.append({"start": dt_util.now().isoformat(timespec="minutes"), "minutes": 8.0, "heat_kwh": 1.0,
                          "electricity_kwh": 0.4, "cost": None, "source": "live", "kind": "shower"})
-    split = m.since_reheat()
+    split = m.fill.since_reheat()
     assert split["reheated_minutes"] == 0 and split["overcounted_minutes"] > 7
     assert split["showered_minutes"] < 1 and split["total_minutes"] == split["reference_minutes"]
     m.fill.top_ups = [{"at": dt_util.now().isoformat(timespec="minutes"), "until": None, "added_minutes": 8.0, "top": 55.0}]
-    split = m.since_reheat()
+    split = m.fill.since_reheat()
     assert split["reheated_minutes"] > 7 and split["showered_minutes"] == 8.0 and split["overcounted_minutes"] == 0
 
 
@@ -230,11 +230,11 @@ async def test_signals_that_load_after_startup_are_still_followed(hass: HomeAssi
     hass.states.async_set(HUMIDITY, "unavailable", {})
     entry = await setup_entry(hass, {"water_sensor": FLOW, "bathroom_sensor": HUMIDITY})
     m = entry.runtime_data
-    assert m.water_signal is None and m.bath_signal is None
+    assert m.usage.water_signal is None and m.usage.bath_signal is None
     hass.states.async_set(FLOW, "0", FLOW_ATTRS)
     hass.states.async_set(HUMIDITY, "60", HUMIDITY_ATTRS)
     await hass.async_block_till_done()
-    assert m.water_signal.kind == "rate" and m.bath_signal.kind == "humidity"
+    assert m.usage.water_signal.kind == "rate" and m.usage.bath_signal.kind == "humidity"
 
 
 async def test_washing_up_in_bursts_after_a_shower_is_no_shower(hass: HomeAssistant, deps, freezer) -> None:
@@ -258,7 +258,7 @@ async def test_washing_up_in_bursts_after_a_shower_is_no_shower(hass: HomeAssist
         bottom -= 1.2
         await flow_minute(hass, freezer, flow, bottom)
         # the humidity of the shower before does not make it a shower while it runs either
-        assert entry.runtime_data.use_kind() != "shower"
+        assert entry.runtime_data.usage.use_kind() != "shower"
     await wait(hass, freezer, 7)
     assert state(hass, "sensor.hot_water_showers_today") == "0"
     other = entry.runtime_data.ledger.other
@@ -302,7 +302,7 @@ async def test_a_tap_after_a_metered_shower_is_a_tap_and_the_shower_stops_counti
         await flow_minute(hass, freezer, 0.0, bottom)
     assert state(hass, "binary_sensor.hot_water_hot_water_in_use") == "on"   # the tank still falls
     assert state(hass, "binary_sensor.hot_water_showering") == "off"         # but nobody showers any more
-    assert m.shower_stopped_at() is not None and m.use_kind() == "shower"
+    assert m.usage.shower_stopped_at() is not None and m.usage.use_kind() == "shower"
     live = m.ledger.running(m, dt_util.utcnow())["minutes"]
     assert live <= 9.5
     attrs = hass.states.get("sensor.hot_water_shower_time").attributes
@@ -377,15 +377,15 @@ async def test_washing_up_in_a_nearly_empty_tank_is_a_tap(hass: HomeAssistant, d
     left = m.estimate.minutes
     for i, (flow, reading) in enumerate(LOW_TANK_WASHING_UP):
         await flow_and_tank(hass, freezer, flow, reading)
-        assert m.use_kind() != "shower"
+        assert m.usage.use_kind() != "shower"
         if i >= 3:                                            # the meter saw enough water: no coil after all
-            assert m.use_kind() in (None, "unknown")
+            assert m.usage.use_kind() in (None, "unknown")
     await wait(hass, freezer, 7)
-    assert m.coil_events == 0 and not m.showering
+    assert m.usage.coil_events == 0 and not m.usage.showering
     assert state(hass, "sensor.hot_water_showers_today") == "0"
     tap = m.ledger.other[-1]
     assert tap["kind"] == "tap" and tap["rule"] == "unseen" and tap["drawn"] > 5
-    split = m.since_reheat()
+    split = m.fill.since_reheat()
     assert split["other_minutes"] >= 0.9 * (left - split["remaining_minutes"]) and split["cooling_minutes"] < 0.5
 
 
@@ -404,8 +404,8 @@ async def test_a_shower_the_bathroom_signal_missed_counts_by_its_flow(hass: Home
         bottom -= 2.0 if i < 8 else 0.5
         await flow_and_tank(hass, freezer, 6.6 if i < 8 else 0.0, (55.0, bottom))
         if i == 3:
-            assert m.use_kind() == "unknown"                  # 4 minutes: could still be the kitchen tap
-    assert m.use_kind() == "shower"
+            assert m.usage.use_kind() == "unknown"                  # 4 minutes: could still be the kitchen tap
+    assert m.usage.use_kind() == "shower"
     await wait(hass, freezer, 7)
     assert state(hass, "sensor.hot_water_showers_today") == "1"
     assert state(hass, "sensor.hot_water_last_shower") == "8"
@@ -429,15 +429,15 @@ async def test_a_tank_running_out_is_noted_with_the_hour_before(hass: HomeAssist
         tank(hass, top, 15.0)
         async_fire_time_changed(hass)
         await hass.async_block_till_done()
-    assert len(m.run_outs) == 1                                    # once, when the top fell past 40 (38 + 2)
-    event = m.run_outs[0]
+    assert len(m.usage.run_outs) == 1                                    # once, when the top fell past 40 (38 + 2)
+    event = m.usage.run_outs[0]
     assert event["top"] == 39.4 and event["shower_temp"] == 38.0
     trace = event["trace"]
     assert trace[-1][0] == 0 and trace[0][0] < -5 and any(r[1] == 48.0 for r in trace)
     assert all(len(r) == 5 for r in trace) and trace[-2][4] >= 1.0  # readings, minutes shown and the water flow
     diag = await async_get_config_entry_diagnostics(hass, entry)
-    assert diag["run_outs"]["events"] == m.run_outs
-    assert m._data()["run_outs"] == m.run_outs
+    assert diag["run_outs"]["events"] == m.usage.run_outs
+    assert m._data()["run_outs"] == m.usage.run_outs
 
 
 async def test_a_run_out_as_the_heat_pump_starts_is_still_noted(hass: HomeAssistant, deps, freezer) -> None:
@@ -460,8 +460,8 @@ async def test_a_run_out_as_the_heat_pump_starts_is_still_noted(hass: HomeAssist
         async_fire_time_changed(hass)
         await hass.async_block_till_done()
     assert m.reheating
-    assert len(m.run_outs) == 1
-    assert m.run_outs[0]["top"] == 37.0 and m.run_outs[0]["reheating"] is True
+    assert len(m.usage.run_outs) == 1
+    assert m.usage.run_outs[0]["top"] == 37.0 and m.usage.run_outs[0]["reheating"] is True
 
 
 async def test_cooling_down_without_water_is_no_run_out(hass: HomeAssistant, deps, freezer) -> None:
@@ -472,7 +472,7 @@ async def test_cooling_down_without_water_is_no_run_out(hass: HomeAssistant, dep
         tank(hass, top, 30.0)
         async_fire_time_changed(hass)
         await hass.async_block_till_done()
-    assert m.run_outs == []
+    assert m.usage.run_outs == []
 
 
 async def test_a_still_meter_after_a_shower_is_no_run_out(hass: HomeAssistant, deps, freezer) -> None:
@@ -495,4 +495,4 @@ async def test_a_still_meter_after_a_shower_is_no_run_out(hass: HomeAssistant, d
         tank(hass, top, 20.0)
         async_fire_time_changed(hass)
         await hass.async_block_till_done()
-    assert not m.showering and m.run_outs == []
+    assert not m.usage.showering and m.usage.run_outs == []

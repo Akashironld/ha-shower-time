@@ -27,4 +27,4 @@ class LearnButton(ShowerTimeEntity, ButtonEntity):
         return True
 
     async def async_press(self) -> None:
-        await self.manager.async_learn()
+        await self.manager.learner.async_learn()

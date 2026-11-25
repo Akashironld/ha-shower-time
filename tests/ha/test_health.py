@@ -17,9 +17,9 @@ async def test_learn_now_runs_every_step(hass: HomeAssistant, entry) -> None:
     await hass.services.async_call("button", "press", {"entity_id": "button.hot_water_learn_now"}, blocking=True)
     await hass.async_block_till_done()
     m = entry.runtime_data
-    assert m.learn_failures == 0
-    assert m.loss_backfilled is True
-    assert not m.learning
+    assert m.learner.learn_failures == 0
+    assert m.heat.loss_backfilled is True
+    assert not m.learner.learning
 
 
 async def test_tank_sensor_not_reporting_raises_and_clears_a_repair(hass: HomeAssistant, entry, freezer) -> None:

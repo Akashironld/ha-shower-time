@@ -89,13 +89,13 @@ async def test_heat_leaving_without_water_is_ignored(hass: HomeAssistant, entry,
     await wait(hass, freezer, 6)
     assert state(hass, "sensor.hot_water_showers_today") == "0"
     assert float(state(hass, "sensor.hot_water_other_hot_water_today")) == 0
-    assert entry.runtime_data.coil_events == 1
+    assert entry.runtime_data.usage.coil_events == 1
 
 
 async def test_bathroom_signal_recognises_a_shower_at_once(hass: HomeAssistant, deps, freezer) -> None:
     hass.states.async_set(HUMIDITY, "60", {"unit_of_measurement": "%", "device_class": "humidity"})
     entry = await setup_entry(hass, {"bathroom_sensor": HUMIDITY})
-    assert entry.runtime_data.bath_signal.kind == "humidity"
+    assert entry.runtime_data.usage.bath_signal.kind == "humidity"
     await start_reading(hass, freezer)
     freezer.tick(timedelta(minutes=1))
     hass.states.async_set(HUMIDITY, "66", {"unit_of_measurement": "%", "device_class": "humidity"})
@@ -126,7 +126,7 @@ async def test_a_bath_is_a_session_but_no_shower(hass: HomeAssistant, deps, free
         await step(hass, freezer, 1, 55.0, bottom)
     assert hass.states.get(IN_USE).attributes["kind"] == "fill"
     assert state(hass, SHOWERING) == "off"
-    other_running = m.since_reheat()["other_minutes"]
+    other_running = m.fill.since_reheat()["other_minutes"]
     assert other_running > 0                                   # while it runs: tap / bucket
     await wait(hass, freezer, 6)
     assert state(hass, "sensor.hot_water_showers_today") == "0"
@@ -138,7 +138,7 @@ async def test_a_bath_is_a_session_but_no_shower(hass: HomeAssistant, deps, free
     assert m.ledger.totals["showers"] == 0
     assert hass.states.get(EVENT).attributes["event_type"] == "shower_ended"
     assert hass.states.get(EVENT).attributes["kind"] == "bath"
-    split = m.since_reheat()                                   # still other hot water once done, not showered
+    split = m.fill.since_reheat()                                   # still other hot water once done, not showered
     assert split["showered_minutes"] == 0 and split["other_minutes"] >= 0.95 * other_running
     assert split["bath_minutes"] == split["other_minutes"]
     attrs = hass.states.get("sensor.hot_water_shower_time").attributes
@@ -271,7 +271,7 @@ async def test_washing_up_with_a_shower_s_heat_but_not_its_pace_is_a_tap(hass: H
     assert not any(e["source"] == "live" for e in m.ledger.log) and [o["kind"] for o in m.ledger.other] == ["tap"]
     last = m.ledger.other[-1]
     assert last["rule"] == "slow" and last["drawn"] >= 1.8 and last["seen"] == []
-    assert m.use_stats["tap"] == [] and m.use_stats["shower"] == []    # says nothing about a tap's heat
+    assert m.usage.use_stats["tap"] == [] and m.usage.use_stats["shower"] == []    # says nothing about a tap's heat
 
 
 async def test_a_slow_use_the_bathroom_signal_saw_is_a_shower(hass: HomeAssistant, deps, freezer) -> None:
@@ -293,11 +293,11 @@ async def test_layer_model_keeps_the_full_tank_reference_through_the_day(hass: H
     m = entry.runtime_data
     await hass.async_block_till_done(wait_background_tasks=True)
     m.fill.set_ref(m.estimate.minutes)
-    ref = m.ref_minutes()
+    ref = m.fill.ref_minutes()
     assert abs(ref - m.estimate.minutes) < 0.01
     for top, bottom in ((52.7, 40.0), (52.5, 25.0), (48.0, 18.0)):
         await step(hass, freezer, 15, top, bottom)
-        assert abs(m.ref_minutes() - ref) < 0.01
-    split = m.since_reheat()
+        assert abs(m.fill.ref_minutes() - ref) < 0.01
+    split = m.fill.since_reheat()
     assert split["reference_minutes"] == round(ref, 1)
-    assert 0 < m.fill_percent() < 60
+    assert 0 < m.fill.fill_percent() < 60

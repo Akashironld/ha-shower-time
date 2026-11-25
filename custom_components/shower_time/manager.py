@@ -286,7 +286,7 @@ class ShowerTimeManager:
         self.update()
         # find the last reheat in the history once; with the layer model also when its readings are not known yet
         # (updated from an older version), so the fill level and the hot layer are right straight away
-        if self.full_ref is None or (self.params.get("geo") and (not self.full_ref_state or not self._hot_stored)):
+        if self.fill.full_ref is None or (self.params.get("geo") and (not self.fill.full_ref_state or not self._hot_stored)):
             self.entry.async_create_background_task(self.hass, self._init_full_ref(), f"{DOMAIN}_full_ref")
         if self.legionella.since is None:
             self.legionella.since = dt_util.utcnow().isoformat()
@@ -344,16 +344,11 @@ class ShowerTimeManager:
         bottom = _temp(self.hass.states.get(self.bottom), self._is_f(self.bottom)) if self.bottom else None
         return top, bottom
 
-    # ------------------------------------------------------------------ the hot water use (usage.UseTracker)
-    # read by the entities, the ledger and the diagnostics
+    # ------------------------------------------------------------------ host members from the parts
+    # what the other parts' host protocols (and ledger.LedgerHost) read through the manager; everything else is
+    # read from its owner: self.usage, self.fill, self.routine, self.legionella, self.health, self.learner, self.heat
     showering = property(lambda self: self.usage.showering)
     use = property(lambda self: self.usage.use)
-    live_offset = property(lambda self: self.usage.live_offset)
-    run_outs = property(lambda self: self.usage.run_outs)
-    use_stats = property(lambda self: self.usage.use_stats)
-    coil_events = property(lambda self: self.usage.coil_events)
-    bath_signal = property(lambda self: self.usage.bath_signal)
-    water_signal = property(lambda self: self.usage.water_signal)
 
     def use_kind(self) -> str | None:
         return self.usage.use_kind()
@@ -366,18 +361,6 @@ class ShowerTimeManager:
 
     def fill_rate(self) -> float:
         return self.usage.fill_rate()
-
-    def bath_active(self) -> bool:
-        return self.usage.bath_active()
-
-    def water_active(self) -> bool:
-        return self.usage.water_active()
-
-    def fast_flow(self) -> bool:
-        return self.usage.fast_flow()
-
-    def signal_active(self) -> bool:
-        return self.usage.signal_active()
 
     # ------------------------------------------------------------------ sensor heights
     def _guess_tank_type(self) -> str:
@@ -463,9 +446,9 @@ class ShowerTimeManager:
             self.estimate = free
             # a full tank loses at least the minutes its heat loss since the last reheat is worth; not while it heats
             # (the state it is bounded by is the previous reheat's until this one ends)
-            if self.full_ref_state and not self.reheating and not self.fill.was_heating:
+            if self.fill.full_ref_state and not self.reheating and not self.fill.was_heating:
                 self.estimate = model.estimate(self.params, self.top_value, self.bottom_value, blur=self.blur,
-                                               ref=self.full_ref_state, **kw)
+                                               ref=self.fill.full_ref_state, **kw)
             # minutes the blur took off: hot water turned lukewarm, its heat still in the tank (not lost to cooling)
             self.blurred_minutes = 0.0
             if self.blur > 0.0 and self.params.get("geo") and self.bottom_value is not None:
@@ -486,12 +469,12 @@ class ShowerTimeManager:
     def _resolve_signals(self) -> None:
         """Follow the water meter and the bathroom signal once their kind is known. It follows from the unit of a
         real state: at startup a sensor may not be loaded yet, or unavailable without its unit (#10)."""
-        if self.water and self.water_signal is None:
+        if self.water and self.usage.water_signal is None:
             kind = self._water_kind()
             if kind is not None:
                 self.usage.water_signal = insights.WaterSignal(kind[0])
                 self._water_factor = kind[1]
-        if self.bath and self.bath_signal is None:
+        if self.bath and self.usage.bath_signal is None:
             kind = self._bath_kind()
             if kind is not None:
                 self.usage.bath_signal = insights.BathSignal(kind)
@@ -511,18 +494,18 @@ class ShowerTimeManager:
     def _bath_value(self, st):
         if st is None or st.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
             return None
-        if self.bath_signal and self.bath_signal.kind == "on_off":
+        if self.usage.bath_signal and self.usage.bath_signal.kind == "on_off":
             return str(st.state).lower() in ("on", "open", "detected", "home", "playing")
         return _num(st)
 
     @callback
     def _feed_bath(self) -> None:
-        if self.bath_signal is not None:
-            self.bath_signal.feed(_now_min(), self._bath_value(self.hass.states.get(self.bath)))
+        if self.usage.bath_signal is not None:
+            self.usage.bath_signal.feed(_now_min(), self._bath_value(self.hass.states.get(self.bath)))
 
     async def _seed_bath(self) -> None:
         """The usual power of a bathroom fan is learned from the last day of its history."""
-        if self.bath_signal is None or self.bath_signal.kind != "power":
+        if self.usage.bath_signal is None or self.usage.bath_signal.kind != "power":
             return
         try:
             end = dt_util.utcnow()
@@ -531,8 +514,8 @@ class ShowerTimeManager:
             for st in res.get(self.bath, []):
                 v = _num(st)
                 if v is not None:
-                    self.bath_signal.feed(st.last_changed.timestamp() / 60, v)
-            self.bath_signal.active_at = None       # the past day does not count as "in use now"
+                    self.usage.bath_signal.feed(st.last_changed.timestamp() / 60, v)
+            self.usage.bath_signal.active_at = None       # the past day does not count as "in use now"
         except Exception:  # noqa: BLE001
             _LOGGER.debug("No history for the bathroom signal yet")
 
@@ -551,43 +534,19 @@ class ShowerTimeManager:
 
     @callback
     def _feed_water(self) -> None:
-        if self.water_signal is not None:
+        if self.usage.water_signal is not None:
             v = _num(self.hass.states.get(self.water))
-            self.water_signal.feed(_now_min(), None if v is None else v * self._water_factor)
+            self.usage.water_signal.feed(_now_min(), None if v is None else v * self._water_factor)
 
     @callback
     def _midnight(self, _now) -> None:
         self.routine.update()
         self.notify()              # "today" counters start again
 
-    # ------------------------------------------------------------------ shower habits and today's forecast
-
-
-    # ------------------------------------------------------------------ habits, legionella, health (habits.py, health.py)
-    # read by the entities and the diagnostics
     habits = property(lambda self: self.routine.habits)
-    reheat_log = property(lambda self: self.routine.reheat_log)
-    reheat_since = property(lambda self: self.routine.reheat_since)
-    legionella_temp = property(lambda self: self.legionella.temp)
-    legionella_days = property(lambda self: self.legionella.days)
-    legionella_at = property(lambda self: self.legionella.at)
-    legionella_checked = property(lambda self: self.legionella.checked)
-    legionella_since = property(lambda self: self.legionella.since)
 
     def log_reheat(self, now: datetime) -> None:
         self.routine.log_reheat(now)
-
-    def forecast(self) -> insights.Forecast | None:
-        return self.routine.forecast()
-
-    def forecast_attrs(self) -> dict | None:
-        return self.routine.forecast_attrs()
-
-    def legionella_overdue(self) -> bool | None:
-        return self.legionella.overdue()
-
-    def problems(self) -> list[dict]:
-        return self.health.problems()
 
     async def _init_legionella(self) -> None:
         """The last hour in which the whole tank (top and bottom) reached the legionella temperature."""
@@ -627,9 +586,9 @@ class ShowerTimeManager:
     def current(self) -> model.Estimate | None:
         """The estimate as shown: the last real one minus the live countdown while showering."""
         e = self.estimate
-        if e is None or self.live_offset <= 0:
+        if e is None or self.usage.live_offset <= 0:
             return e
-        m = max(0.0, e.minutes - self.live_offset)
+        m = max(0.0, e.minutes - self.usage.live_offset)
         return replace(e, minutes=m, liters=m * e.flow, showers=int(m // self.params["duration"]["v"]))
 
     # ------------------------------------------------------------------ outdoor running average (cold water)
@@ -690,25 +649,10 @@ class ShowerTimeManager:
             self.save_later(5)
             self.update()
 
-    # ------------------------------------------------------------------ the fill level (fill.FillLevel)
-    # read by the entities, the ledger and the diagnostics
-    full_ref = property(lambda self: self.fill.full_ref)
     full_ref_avg = property(lambda self: self.fill.full_ref_avg)
-    full_ref_state = property(lambda self: self.fill.full_ref_state)
-    full_ref_at = property(lambda self: self.fill.full_ref_at)
-    top_ups = property(lambda self: self.fill.top_ups)
 
     def ref_minutes(self) -> float | None:
         return self.fill.ref_minutes()
-
-    def since_reheat(self) -> dict | None:
-        return self.fill.since_reheat()
-
-    def standing_loss_per_day(self) -> dict:
-        return self.fill.standing_loss_per_day()
-
-    def fill_percent(self) -> int | None:
-        return self.fill.fill_percent()
 
     # ------------------------------------------------------------------ history for the card
     async def async_history(self, hours: int = 24, with_average: bool = False) -> list[list[float]]:
@@ -808,7 +752,7 @@ class ShowerTimeManager:
         events = sorted((x for x in events if x["end"] >= begin and x["start"] <= end), key=lambda x: x["start"])
         return {"points": [p[:2] for p in full], "events": events}
 
-    # ------------------------------------------------------------------ learning
+    # ------------------------------------------------------------------ storage and the hooks the parts use
     def _data(self) -> dict:
         # stamped at every write: after a restart this is when Home Assistant went away
         self.health.alive_at = dt_util.utcnow().isoformat()
@@ -820,16 +764,16 @@ class ShowerTimeManager:
                        "use": self.usage.running_use()},
             "profile": self.profile, "params": self.params, "processed_until": self.learner.processed_until,
             "last_cycle": asdict(self.learner.last_cycle) if self.learner.last_cycle else None, "last_learn": self.learner.last_learn,
-            "last_samples": self.learner.last_samples, "full_ref": self.full_ref, "full_ref_avg": self.full_ref_avg,
-            "full_ref_state": self.full_ref_state,
-            "full_ref_at": self.full_ref_at, "top_ups": self.top_ups, "ledger": self.ledger.to_dict(),
+            "last_samples": self.learner.last_samples, "full_ref": self.fill.full_ref, "full_ref_avg": self.fill.full_ref_avg,
+            "full_ref_state": self.fill.full_ref_state,
+            "full_ref_at": self.fill.full_ref_at, "top_ups": self.fill.top_ups, "ledger": self.ledger.to_dict(),
             "habits": self.routine.habits, "loss_samples": self.heat.loss_samples, "drip_nights": self.heat.drip_nights,
-            "use_stats": self.use_stats, "loss_backfilled": self.heat.loss_backfilled,
+            "use_stats": self.usage.use_stats, "loss_backfilled": self.heat.loss_backfilled,
             "reheat_log": self.routine.reheat_log, "reheat_since": self.routine.reheat_since,
             "legionella_at": self.legionella.at, "legionella_since": self.legionella.since,
             "learn_failures": self.learner.learn_failures, "alive_at": self.health.alive_at,
             "hot_top": self.hot_top, "hot_at": self._hot_at.isoformat() if self._hot_at else None,
-            "blur": round(self.blur, 4), "blur_share": self._blur_share, "run_outs": self.run_outs,
+            "blur": round(self.blur, 4), "blur_share": self._blur_share, "run_outs": self.usage.run_outs,
         }
 
     async def _first_learn(self, _now) -> None:
@@ -854,25 +798,9 @@ class ShowerTimeManager:
     async def refresh_ema(self, update: bool = False) -> None:
         await self._refresh_ema(update)
 
-    # ------------------------------------------------------------------ learning and heat loss (learning.py)
-    # read by the entities, the ledger, the card and the diagnostics
-    processed_until = property(lambda self: self.learner.processed_until)
-    last_cycle = property(lambda self: self.learner.last_cycle)
-    last_learn = property(lambda self: self.learner.last_learn)
-    last_samples = property(lambda self: self.learner.last_samples)
-    learning = property(lambda self: self.learner.learning)
     learn_failures = property(lambda self: self.learner.learn_failures)
     loss = property(lambda self: self.heat.loss)
-    loss_samples = property(lambda self: self.heat.loss_samples)
-    drip_nights = property(lambda self: self.heat.drip_nights)
-    loss_backfilled = property(lambda self: self.heat.loss_backfilled)
-
-    async def async_learn(self) -> None:
-        await self.learner.async_learn()
 
     def loss_k_h(self) -> float:
         return self.heat.loss_k_h()
-
-    def heat_loss_now(self) -> float | None:
-        return self.heat.heat_loss_now()
 

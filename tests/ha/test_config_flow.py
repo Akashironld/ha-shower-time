@@ -70,7 +70,7 @@ async def test_options_suggest_and_save_a_bathroom_signal(hass: HomeAssistant, d
     await hass.async_block_till_done()
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert entry.options["bathroom_sensor"] == "sensor.badkamer_humidity"
-    assert entry.runtime_data.bath_signal is not None and entry.runtime_data.bath_signal.kind == "humidity"
+    assert entry.runtime_data.usage.bath_signal is not None and entry.runtime_data.usage.bath_signal.kind == "humidity"
 
 
 def _suggested(result) -> dict:
@@ -112,7 +112,7 @@ async def test_an_emptied_bathroom_signal_is_not_suggested_again(hass: HomeAssis
     values = {k: v for k, v in suggested.items() if v is not None and k != "bathroom_sensor"}   # emptied
     result = await hass.config_entries.options.async_configure(result["flow_id"], values)
     await hass.async_block_till_done()
-    assert entry.options["bathroom_sensor"] is None and entry.runtime_data.bath_signal is None
+    assert entry.options["bathroom_sensor"] is None and entry.runtime_data.usage.bath_signal is None
     result = await hass.config_entries.options.async_init(entry.entry_id)
     assert _suggested(result)["bathroom_sensor"] is None
 

@@ -30,7 +30,7 @@ async def test_state_survives_an_immediate_reload(hass: HomeAssistant, deps) -> 
     await hass.async_block_till_done(wait_background_tasks=True)
     m2 = entry.runtime_data
     assert m2 is not m
-    assert m2.last_learn == "2026-10-15T10:00:00+00:00"
+    assert m2.learner.last_learn == "2026-10-15T10:00:00+00:00"
     assert len(m2.ledger.other) == 1 and m2.ledger.other[0]["kind"] == "tap"
 
 
@@ -41,15 +41,15 @@ async def test_a_stopped_manager_does_not_learn_or_save(hass: HomeAssistant, dep
     m._store.async_save = AsyncMock()
     m._store.async_delay_save = MagicMock()
     m.learner._learn = AsyncMock()
-    before = m.last_learn
-    await m.async_learn()
+    before = m.learner.last_learn
+    await m.learner.async_learn()
     await m._nightly(None)
     m.request_save()
     m.save_later(5)
     m.learner._learn.assert_not_called()
     m._store.async_save.assert_not_called()
     m._store.async_delay_save.assert_not_called()
-    assert m.last_learn == before and not m.learning
+    assert m.learner.last_learn == before and not m.learner.learning
 
 
 async def test_stop_before_the_store_was_read_saves_nothing(hass: HomeAssistant, deps) -> None:
