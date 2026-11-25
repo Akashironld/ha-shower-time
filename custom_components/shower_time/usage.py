@@ -2,7 +2,8 @@
 or a bathroom signal), what it was (shower, bath, tap, coil), gaps in the readings, a use carried on over a restart and
 the tank running out while the water ran. One per tank (UseTracker); it owns that state and reaches the rest of
 the integration only through UseHost: the readings and the estimate, the ledger it books into, and notify/save/fire.
-Home Assistant itself (states, the recorder) stays in the manager: the signals are fed in from there."""
+Pure: no Home Assistant (states, the recorder, its clock) here; the manager feeds the signals in and hands
+it the clock, so a use can be replayed without Home Assistant (tests/test_usage_core.py)."""
 from __future__ import annotations
 
 from dataclasses import asdict
@@ -10,11 +11,8 @@ from datetime import datetime, timedelta
 import logging
 from typing import Any, Protocol
 
-from homeassistant.core import callback
-from homeassistant.util import dt as dt_util
-
 from . import insights, model
-from .clock import at as _at, now_min as _now_min
+from .clock import Clock, at as _at
 from .const import MAX_SHOWER_MINUTES, MIN_SHOWER_MINUTES
 
 _LOGGER = logging.getLogger(__name__)
@@ -51,8 +49,9 @@ class UseHost(Protocol):
 class UseTracker:
     """The hot water use going on, and what is kept of past ones (use_stats, run_outs, coil_events)."""
 
-    def __init__(self, host: UseHost) -> None:
+    def __init__(self, host: UseHost, clock: Clock) -> None:
         self.h = host
+        self.clock = clock
         self.showering = False                      # a hot water use is going on (shower or not)
         self.use: insights.UseSession | None = None
         # the tank running out while hot water ran: the readings and minutes shown in the hour before, so a
@@ -67,7 +66,7 @@ class UseTracker:
         # changed (minutes), when a tank sensor was unavailable, and when this run started
         self._temp_seen: list[float] = []
         self._unavailable_at: float | None = None
-        self._started_at = _now_min()
+        self._started_at = self._now_min()
         self._gap: dict | None = None               # a gap being closed: the readings before it, the last change
         # what kind of hot water use: followed live, confirmed by heat or a bathroom signal (insights.UseSession)
         self.bath_signal: insights.BathSignal | None = None
@@ -75,17 +74,21 @@ class UseTracker:
         self.use_stats: dict[str, list[float]] = {"shower": [], "tap": [], "shower_rate": []}
         self._hold_until: datetime | None = None    # a restored use is not closed before this while no reading is back
         self._resume: dict | None = None            # readings from before a restart, judged at the first estimate
-        self._resume_since = _now_min()
+        self._resume_since = self._now_min()
         self._use_saved: datetime | None = None
         self.coil_events = 0                        # heat that left without water (reheat start, coil)
 
+    def _now_min(self) -> float:
+        """Now, in minutes since the epoch."""
+        return self.clock.utcnow().timestamp() / 60
+
     def note_temp(self) -> None:
         """A temperature of the tank's device was reported (it shows the device is alive)."""
-        self._temp_seen = (self._temp_seen + [_now_min()])[-50:]
+        self._temp_seen = (self._temp_seen + [self._now_min()])[-50:]
 
     def note_unavailable(self) -> None:
         """A tank sensor has no reading now."""
-        self._unavailable_at = _now_min()
+        self._unavailable_at = self._now_min()
 
     def reading(self) -> None:
         """A new estimate was made from a reading: a restored use is no longer held."""
@@ -96,16 +99,15 @@ class UseTracker:
     RESTORE_HOLD = timedelta(minutes=3)      # the tank sensors are often not loaded yet right after a restart
     RESUME_LOOKBACK = timedelta(hours=3)     # a restart longer ago: reheats and more uses in between, nothing to judge
 
-    @callback
     def restore(self, rec: dict | None) -> None:
         """Home Assistant was restarted: carry on a use that was going on, or judge the heat that left meanwhile
         (the tank readings from before) with the rules for a gap, so it does not turn into "cooling"."""
-        at = dt_util.parse_datetime(rec["at"]) if isinstance(rec, dict) and rec.get("at") else None
+        at = self.clock.parse(rec["at"]) if isinstance(rec, dict) and rec.get("at") else None
         if at is None:
             return
         if rec.get("top_sensor") != self.h.top or rec.get("bottom_sensor") != self.h.bottom:
             return                                  # other sensors (Reconfigure, options): these readings are not theirs
-        now = dt_util.utcnow()
+        now = self.clock.utcnow()
         down = now - at
         if down < timedelta(0) or down > self.RESUME_LOOKBACK:
             return
@@ -114,8 +116,8 @@ class UseTracker:
         try:
             use = insights.UseSession(**{k: v for k, v in saved["use"].items()
                                          if k in insights.UseSession.__dataclass_fields__}) if saved else None
-            start = dt_util.parse_datetime(saved["start"]) if saved else None
-            fall = dt_util.parse_datetime(saved["last_fall"]) if saved else None
+            start = self.clock.parse(saved["start"]) if saved else None
+            fall = self.clock.parse(saved["last_fall"]) if saved else None
         except (KeyError, TypeError, ValueError):
             use = start = fall = None
         if use is not None and start is not None and fall is not None:
@@ -134,7 +136,6 @@ class UseTracker:
         if top0 is not None and (bottom0 is not None or not self.h.bottom):
             self._resume = {"top": top0, "bottom": bottom0, "since": at}
 
-    @callback
     def apply_resume(self) -> None:
         """The first estimate after a restart: hot water that left since the readings kept before it is a gap."""
         r = self._resume
@@ -143,14 +144,13 @@ class UseTracker:
         if self.h.top_value is None or (self.h.bottom and self.h.bottom_value is None):
             return
         self._resume = None
-        e, hours = self.h.estimate, (dt_util.utcnow() - r["since"]).total_seconds() / 3600
+        e, hours = self.h.estimate, (self.clock.utcnow() - r["since"]).total_seconds() / 3600
         if insights.gap_use(self.h.params, (r["top"], r["bottom"]), (self.h.top_value, self.h.bottom_value), e.cold,
                             e.per_minute, self.confirm_k(), cooling=self.h.loss_k_h() * hours) is None:
             return                                  # standing loss only: no use, and no gap to hold the live rules up
-        self._gap = {"top": r["top"], "bottom": r["bottom"], "since": r["since"], "last": dt_util.utcnow(),
+        self._gap = {"top": r["top"], "bottom": r["bottom"], "since": r["since"], "last": self.clock.utcnow(),
                      "estimate": self.h.estimate}
 
-    @callback
     def _drop_restored_use(self) -> None:
         """The sensors did not come back in time to close a restored use: it is left to the gap rules, which judge
         it from the readings before it and the first ones after (nothing is booked when they never return)."""
@@ -160,7 +160,7 @@ class UseTracker:
         if use is not None and start is not None and use.start_top is not None \
                 and (use.start_bottom is not None or not self.h.bottom):
             self._resume = {"top": use.start_top, "bottom": use.start_bottom, "since": start}
-            self._resume_since = _now_min()
+            self._resume_since = self._now_min()
         self.h.notify()
 
     def running_use(self) -> dict | None:
@@ -179,10 +179,9 @@ class UseTracker:
     LIVE_MAX_MINUTES = 4.0          # never count down further than this without a new reading
     USE_TIMEOUT = timedelta(minutes=5)
 
-    @callback
     def detect(self) -> None:
         """A new tank reading that falls fast (cold water coming in) while not reheating = hot water in use."""
-        now = dt_util.utcnow()
+        now = self.clock.utcnow()
         changed, falling, fall_from = False, False, None
         before = {ent: v[0] for ent, v in self._prev.items()}     # readings before this update
         before_at = None                                          # previous reading of the sensor(s) that changed
@@ -243,15 +242,14 @@ class UseTracker:
         """Right after a restart a restored use is not closed while the tank readings are still missing."""
         return self._hold_until is not None and self.h.estimate is None and now < self._hold_until
 
-    @callback
     def tick(self, _now) -> None:
-        if self.showering and self._hold_until is not None and self.h.estimate is None and dt_util.utcnow() >= self._hold_until:
+        if self.showering and self._hold_until is not None and self.h.estimate is None and self.clock.utcnow() >= self._hold_until:
             self._drop_restored_use()
-        if self._resume is not None and _now_min() - self._resume_since > 30:
+        if self._resume is not None and self._now_min() - self._resume_since > 30:
             self._resume = None                     # the tank sensors never came back to judge it by
         if self.h.estimate is None:
             return
-        now = dt_util.utcnow()
+        now = self.clock.utcnow()
         if self.showering and (self._use_saved is None or now - self._use_saved >= timedelta(seconds=60)):
             self._use_saved = now
             self.h.save_later(5)                     # keeps the running use (and the time) current for a restart
@@ -266,7 +264,6 @@ class UseTracker:
             self.live_offset = min(self.LIVE_MAX_MINUTES, (now - self._sensor_at).total_seconds() / 60)
         self.h.notify()
 
-    @callback
     def _end_shower(self) -> None:
         """A hot water use ended: log it as a shower or as other hot water use (or ignore it: no water)."""
         self.showering = False
@@ -275,7 +272,7 @@ class UseTracker:
         self.use = self.h.ledger.session_start = None
         if use is None or not start or not end:
             return
-        if ws is not None and ws.last_flow_at is not None and end < _at(ws.last_flow_at) <= dt_util.utcnow():
+        if ws is not None and ws.last_flow_at is not None and end < _at(ws.last_flow_at) <= self.clock.utcnow():
             end = _at(ws.last_flow_at)                     # the meter saw the water running until later
         minutes = (end - start).total_seconds() / 60
         kind, rule = use.final(minutes, MAX_SHOWER_MINUTES), None
@@ -368,7 +365,7 @@ class UseTracker:
         ws, use, e = self.water_signal, self.use, self.h.estimate
         if ws is None or use is None or e is None:
             return False
-        litres = ws.litres_between(use.start - insights.WATER_LEAD_MINUTES, _now_min())
+        litres = ws.litres_between(use.start - insights.WATER_LEAD_MINUTES, self._now_min())
         return insights.water_explains(litres, use.drawn, self.h.volume, self.h.top_value, e.cold)
 
     def shower_stopped_at(self) -> datetime | None:
@@ -376,7 +373,7 @@ class UseTracker:
         minutes late, and a tap may follow). None while the water runs, or without a meter that saw the shower."""
         if not self.showering or self.use is None or self.use.kind != "shower":
             return None
-        now = _now_min()
+        now = self._now_min()
         runs = self._meter_runs(self.use, now)
         if not runs:
             return None
@@ -392,7 +389,6 @@ class UseTracker:
 
     GAP_SETTLE = timedelta(minutes=1)    # after a gap, the tank sensors come back one by one: wait for all
 
-    @callback
     def _gap_start(self, before: dict, before_at: datetime, now: datetime) -> bool:
         """A tank reading after a gap (the device sent nothing for a while, a sensor was unavailable, or the last
         reading was stale): hot water used meanwhile is not followed live but logged from the heat it took, once
@@ -410,11 +406,10 @@ class UseTracker:
         self._gap = {"top": top0, "bottom": bottom0, "since": before_at, "last": now, "estimate": e}
         return True
 
-    @callback
     def _gap_use(self) -> None:
         """Log the hot water used during a gap, from the readings before it to the settled ones after it."""
         g, self._gap = self._gap, None
-        e, now = g["estimate"] or self.h.estimate, dt_util.utcnow()
+        e, now = g["estimate"] or self.h.estimate, self.clock.utcnow()
         if e is None:
             return
         if self.h.top_value is None or (self.h.bottom and self.h.bottom_value is None):
@@ -452,14 +447,14 @@ class UseTracker:
         self.h.notify()
 
     def bath_active(self) -> bool:
-        return bool(self.bath_signal and self.bath_signal.active(_now_min()))
+        return bool(self.bath_signal and self.bath_signal.active(self._now_min()))
 
     def water_active(self) -> bool:
-        return bool(self.water_signal and self.water_signal.active(_now_min()) and not self.fast_flow())
+        return bool(self.water_signal and self.water_signal.active(self._now_min()) and not self.fast_flow())
 
     def fast_flow(self) -> bool:
         """The water meter shows far more than the shower head gives (a bath tap): not a shower."""
-        if self.water_signal is None or not self.water_signal.flowing(_now_min()):
+        if self.water_signal is None or not self.water_signal.flowing(self._now_min()):
             return False
         head = self.h.head_flow()[0]
         return bool(head) and self.water_signal.flow >= insights.FAST_FLOW_FACTOR * head
@@ -478,9 +473,9 @@ class UseTracker:
     def _shower_time_of_day(self, at: datetime) -> bool:
         """Is this the time of day this household usually showers (from the shower log and the other hot water)?"""
         def tod(iso: str) -> float:
-            t = dt_util.as_local(datetime.fromisoformat(iso))
+            t = self.clock.as_local(datetime.fromisoformat(iso))
             return t.hour * 60 + t.minute
-        local = dt_util.as_local(at)
+        local = self.clock.as_local(at)
         log = self.h.ledger.showers()                 # one showers after the other, not after a bath (#10)
         taps = [tod(e["start"]) for e in self.h.ledger.other if e.get("kind") == "tap"]
         since_last = (at - datetime.fromisoformat(log[-1]["start"])).total_seconds() / 60 if log else None
@@ -491,14 +486,13 @@ class UseTracker:
         self.use_stats[kind] = (self.use_stats[kind] + [round(drawn, 2)])[-50:]
         self.h.request_save()
 
-    @callback
     def track_run_out(self) -> None:
         """Note when the tank runs out while hot water runs: the top falls below the shower temperature + 2 (where
         the minutes reach 0) from a hot tank. Also while reheating: a long draw (a bath) starts the heat pump just
         as the tank runs out, so that is when most run-outs happen (#10); the water running and a top that was hot
         this hour keep a reheat on its own from counting. Keeps the last hour of readings and the minutes the card
         showed, so every run-out is a check of the estimate (``run_outs``, last 10, in diagnostics)."""
-        e, top, now = self.h.estimate, self.h.top_value, _now_min()
+        e, top, now = self.h.estimate, self.h.top_value, self._now_min()
         if e is None or top is None:
             return
         w = self.water_signal
@@ -522,7 +516,7 @@ class UseTracker:
         if len(hour) < 2 or hour[-2][1] < edge or max(r[1] for r in hour) < edge + 3:
             return                                  # it just crossed now, from a tank that was hot this hour
         self.run_outs = (self.run_outs + [{
-            "minute": now, "at": dt_util.now().isoformat(timespec="minutes"), "shower_temp": round(e.shower_temp, 2),
+            "minute": now, "at": self.clock.now().isoformat(timespec="minutes"), "shower_temp": round(e.shower_temp, 2),
             "kind": self.use_kind(), "top": row[1], "bottom": row[2], "reheating": self.h.reheating,
             "trace": [[r[0] - now] + r[1:] for r in hour]}])[-10:]
         self.h.request_save()
@@ -532,18 +526,17 @@ class UseTracker:
         coil (heat leaving without water)."""
         return self.use.kind if self.showering and self.use else None
 
-    @callback
     def classify(self) -> None:
         if not self.showering or self.use is None or self.h.estimate is None:
             return
         if self.water_active() and self.water_signal.rose_at is not None and self.h.ledger.session_start is not None:
             began = _at(self.water_signal.rose_at)
-            if began < self.h.ledger.session_start and dt_util.utcnow() - began <= timedelta(minutes=15):
+            if began < self.h.ledger.session_start and self.clock.utcnow() - began <= timedelta(minutes=15):
                 self.h.ledger.session_start = began           # the water was running before the tank showed it
                 self.use.start = self.water_signal.rose_at
         # with a bathroom signal only that one lowers the threshold: a kitchen tap can run as steadily as a shower
         lowers = self.bath_active() if self.bath_signal is not None else self.water_active()
-        now = _now_min()
+        now = self._now_min()
         kind_before = self.use.kind
         if self.use.update(now, self.h.estimate.average, lowers,
                            self.confirm_k(), top=self.h.top_value, bottom=self.h.bottom_value, cold=self.h.estimate.cold,
@@ -551,7 +544,7 @@ class UseTracker:
                            water_ran=self._water_ran(),
                            heat_confirms=(self._heat_alone_confirms(_longest(self._meter_runs(self.use, now)))
                                           or self._fresh_bathroom(self.use))):
-            self.h.fire("shower_started", {"started": dt_util.as_local(self.h.ledger.session_start).isoformat(timespec="seconds"),
+            self.h.fire("shower_started", {"started": self.clock.as_local(self.h.ledger.session_start).isoformat(timespec="seconds"),
                                           "confirmed_after_minutes": self.use.confirmed_after,
                                           "bathroom_signal": self.use.bath_seen,
                                           "water_meter": self.water_active()})

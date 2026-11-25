@@ -24,7 +24,7 @@ from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from . import insights, model
-from .clock import at as _at, now_min as _now_min
+from .clock import at as _at
 from .fill import FillLevel
 from .habits import Habits, Legionella
 from .health import Health
@@ -81,6 +81,20 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _now_min() -> float:
+    """Now, in minutes since the epoch."""
+    return dt_util.utcnow().timestamp() / 60
+
+
+class _HAClock:
+    """Home Assistant's clock for the pure parts (its time zone; the time the tests freeze)."""
+    # looked up at each call, so a test that patches dt_util reaches the parts too
+    utcnow = staticmethod(lambda: dt_util.utcnow())
+    now = staticmethod(lambda: dt_util.now())
+    as_local = staticmethod(lambda t: dt_util.as_local(t))
+    parse = staticmethod(lambda text: dt_util.parse_datetime(text))
 
 
 def _local(minute: float) -> datetime:
@@ -176,7 +190,7 @@ class ShowerTimeManager:
         cop = float(cfg.get(CONF_COP) or 0)
         self.cop_manual: float | None = cop if cop and cop != DEFAULT_COP else None
         self.ledger = ShowerLedger()
-        self.usage = UseTracker(self)              # the hot water use going on (usage.py)
+        self.usage = UseTracker(self, _HAClock())              # the hot water use going on (usage.py)
         self.fill = FillLevel(self)                 # 100 % and what went where since (fill.py)
         self.routine = Habits(self)                 # shower and reheat habits, today's forecast (habits.py)
         self.legionella = Legionella(self, float(cfg.get(CONF_LEGIONELLA_TEMP, DEFAULT_LEGIONELLA_TEMP)),
@@ -275,7 +289,7 @@ class ShowerTimeManager:
         self._unsubs.append(async_track_state_change_event(self.hass, watch, self._state_changed))
         self._unsubs.append(async_track_state_change_event(self.hass, self._device_temperatures(), self._temp_changed))
         self._unsubs.append(async_track_time_change(self.hass, self._nightly, hour=LEARN_HOUR, minute=LEARN_MINUTE, second=0))
-        self._unsubs.append(async_track_time_interval(self.hass, self.usage.tick, timedelta(seconds=15)))
+        self._unsubs.append(async_track_time_interval(self.hass, self._tick, timedelta(seconds=15)))
         self._unsubs.append(async_track_time_change(self.hass, self._midnight, hour=0, minute=0, second=5))
         self._unsubs.append(async_track_time_interval(self.hass, self.health.check, timedelta(minutes=10)))
         self.entry.async_create_background_task(self.hass, self._start_ledger(), f"{DOMAIN}_ledger")
@@ -581,6 +595,10 @@ class ShowerTimeManager:
                 _LOGGER.exception("Could not fill the shower log from the history")
         self.routine.update()
         self.update()
+
+    @callback
+    def _tick(self, now) -> None:
+        self.usage.tick(now)
 
     @property
     def current(self) -> model.Estimate | None:
