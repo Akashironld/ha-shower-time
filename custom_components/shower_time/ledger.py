@@ -10,17 +10,40 @@ from __future__ import annotations
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 import logging
-from typing import TYPE_CHECKING
+from typing import Protocol
 
 from homeassistant.components.recorder import get_instance, statistics
 from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
+from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
 from . import insights, model
 from .const import DEFAULT_COP, LOG_DAYS, MAX_SHOWER_MINUTES, MIN_SHOWER_MINUTES
 
-if TYPE_CHECKING:
-    from .manager import ShowerTimeManager
+
+
+class LedgerHost(Protocol):
+    """What the ledger reads from the rest of the integration (the manager) when it books a use or prices one.
+    Read live at each call: the estimate, whether someone showers and the save request are the ones of that moment."""
+    hass: HomeAssistant
+    volume: float
+    shower_temp: float
+    params: dict
+    estimate: model.Estimate | None
+    reheating: bool
+    showering: bool
+    full_ref_avg: float | None                  # fill.FillLevel: the tank average at the last reheat
+    price: str | None                           # price sensor
+    energy: str | None                          # heat delivered to the tank (kWh)
+    elec: str | None                            # electricity used for it (kWh)
+    cop_manual: float | None
+
+    def use_kind(self) -> str | None: ...
+    def shower_stopped_at(self) -> datetime | None: ...
+    def confirm_k(self) -> float: ...
+    def fill_rate(self) -> float: ...
+    def ema_on(self, day: str) -> float | None: ...
+    def request_save(self) -> None: ...
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -135,7 +158,7 @@ class ShowerLedger:
             self.covered_from = (first + timedelta(days=1)).isoformat()
 
     # ------------------------------------------------------------------ COP and price
-    def cop_heat_pump(self, m: ShowerTimeManager) -> tuple[float, str]:
+    def cop_heat_pump(self, m: LedgerHost) -> tuple[float, str]:
         """The heat pump's COP for hot water as its own meters (and app) see it, and where it comes from: filled
         in by the user, learned from the heat and electricity meters, or the default."""
         if m.cop_manual:
@@ -144,18 +167,18 @@ class ShowerLedger:
             return self.cop_learned, "learned"
         return DEFAULT_COP, "default"
 
-    def cop(self, m: ShowerTimeManager) -> float:
+    def cop(self, m: LedgerHost) -> float:
         """COP per kWh of heat that reaches the tank: many heat pumps' heat meters count more than arrives (pipes,
         coil); the model learned that ratio (veff_factor). This is what the cost of hot water is computed with."""
         veff = m.params["veff_factor"]["v"]
         return round(self.cop_heat_pump(m)[0] / (veff if veff > 0 else 1.0), 2)
 
-    def price_now(self, m: ShowerTimeManager) -> tuple[float | None, str]:
+    def price_now(self, m: LedgerHost) -> tuple[float | None, str]:
         if not m.price:
             return None, ""
         return parse_price(m.hass.states.get(m.price))
 
-    async def async_refresh_cop(self, m: ShowerTimeManager) -> None:
+    async def async_refresh_cop(self, m: LedgerHost) -> None:
         """The heat pump's COP for hot water from its heat and electricity meters over 30 days (as its app shows
         it; ``cop`` turns it into a COP per kWh in the tank)."""
         if not (m.elec and m.energy):
@@ -174,7 +197,7 @@ class ShowerLedger:
             _LOGGER.exception("Could not compute the hot water COP")
 
     # ------------------------------------------------------------------ live hooks
-    def on_estimate(self, m: ShowerTimeManager, est: model.Estimate) -> None:
+    def on_estimate(self, m: LedgerHost, est: model.Estimate) -> None:
         """Book heat added by a reheat at the current price; update the reheat forecast."""
         avg = est.average
         prev = self._avg_prev
@@ -194,7 +217,7 @@ class ShowerLedger:
                 m.request_save()
         self._forecast(m, est, heating)
 
-    def _forecast(self, m: ShowerTimeManager, est: model.Estimate, heating: bool) -> None:
+    def _forecast(self, m: LedgerHost, est: model.Estimate, heating: bool) -> None:
         """When the tank is full again, and when it holds one shower, while a reheat runs.
 
         The pace is the one this reheat shows, once it has run a while (a steady heat pump keeps its pace; the
@@ -224,7 +247,7 @@ class ShowerLedger:
         need = est.empty_at + m.params["duration"]["v"] * est.per_minute
         self.eta_one = now if est.average >= need else now + timedelta(minutes=(need - est.average) / pace)
 
-    def shower_ended(self, m: ShowerTimeManager, start: datetime, end: datetime,
+    def shower_ended(self, m: LedgerHost, start: datetime, end: datetime,
                      est: model.Estimate | None, min_minutes: float = MIN_SHOWER_MINUTES,
                      extra: dict | None = None) -> dict | None:
         """Log a finished shower; returns the log entry, or None when it was too short or too long. ``extra``:
@@ -234,7 +257,7 @@ class ShowerLedger:
             return None
         return self._add(m, start, minutes, est.per_minute, self.tank_price, "live", **(extra or {}))
 
-    def running(self, m: ShowerTimeManager, now: datetime) -> dict | None:
+    def running(self, m: LedgerHost, now: datetime) -> dict | None:
         """The shower going on right now (once recognised as one): minutes so far and what that hot water cost."""
         if not m.showering or self.session_start is None or m.estimate is None or m.use_kind() != "shower":
             return None
@@ -245,33 +268,33 @@ class ShowerLedger:
         return {"started": dt_util.as_local(self.session_start).isoformat(timespec="seconds"),
                 **{k: e[k] for k in ("minutes", "heat_kwh", "electricity_kwh", "cost")}}
 
-    def bath_ended(self, m: ShowerTimeManager, start: datetime, duration: float, minutes: float,
+    def bath_ended(self, m: LedgerHost, start: datetime, duration: float, minutes: float,
                    est: model.Estimate, **extra) -> dict:
         """Log a bath as a session: ``minutes`` is its heat in shower minutes, ``duration`` how long it ran."""
         return self._add(m, start, minutes, est.per_minute, self.tank_price, "live", kind="bath",
                          duration=round(duration, 1), **extra)
 
-    def estimated_ended(self, m: ShowerTimeManager, start: datetime, minutes: float, est: model.Estimate) -> dict:
+    def estimated_ended(self, m: LedgerHost, start: datetime, minutes: float, est: model.Estimate) -> dict:
         """Log a session hidden by a gap in the tank readings: its length follows from the heat it took."""
         return self._add(m, start, minutes, est.per_minute, self.tank_price, "live", estimated=True)
 
-    def heat_price(self, m: ShowerTimeManager) -> float | None:
+    def heat_price(self, m: LedgerHost) -> float | None:
         """What a kWh of heat in the tank costs: the price it was heated at, else the electricity price now."""
         return self.tank_price if self.tank_price is not None else self._price_now(m)
 
-    def _price_now(self, m: ShowerTimeManager) -> float | None:
+    def _price_now(self, m: LedgerHost) -> float | None:
         price, cur = self.price_now(m)
         self.note_currency(cur)
         return price / self.cop(m) if price is not None else None
 
-    def _entry(self, m: ShowerTimeManager, start: datetime, kind: str, minutes: float, heat_kwh: float,
+    def _entry(self, m: LedgerHost, start: datetime, kind: str, minutes: float, heat_kwh: float,
                price: float | None, **extra) -> dict:
         return {"start": dt_util.as_local(start).isoformat(timespec="minutes"), "kind": kind,
                 "minutes": round(minutes, 1), "heat_kwh": round(heat_kwh, 2),
                 "electricity_kwh": round(heat_kwh / self.cop(m), 2),
                 "cost": round(heat_kwh * price, 2) if price is not None else None, **extra}
 
-    def _add(self, m: ShowerTimeManager, start: datetime, minutes: float, per_minute: float,
+    def _add(self, m: LedgerHost, start: datetime, minutes: float, per_minute: float,
              heat_price: float | None, source: str, kind: str = "shower", **extra) -> dict:
         price = heat_price if heat_price is not None else self._price_now(m)
         entry = self._entry(m, start, kind, minutes, model.shower_heat_kwh(per_minute, minutes, m.volume), price,
@@ -286,7 +309,7 @@ class ShowerLedger:
         m.request_save()
         return entry
 
-    def other_ended(self, m: ShowerTimeManager, kind: str, start: datetime, minutes: float, heat_kwh: float,
+    def other_ended(self, m: LedgerHost, kind: str, start: datetime, minutes: float, heat_kwh: float,
                     **extra) -> dict:
         """Log hot water that was not a shower (washing up, a tap, a bucket), with what it cost."""
         entry = self._entry(m, start, kind, minutes, heat_kwh, self.heat_price(m), **extra)
@@ -323,7 +346,7 @@ class ShowerLedger:
             "last": showers[-1] if showers else None,
         }
 
-    def needs_reprice(self, m: ShowerTimeManager) -> bool:
+    def needs_reprice(self, m: LedgerHost) -> bool:
         """A price sensor was added after the log was filled from the history: price those entries again."""
         return bool(m.price) and any(e.get("cost") is None and e.get("source") == "history" for e in self.log)
 
@@ -332,14 +355,14 @@ class ShowerLedger:
         self.backfilled = False
 
     # ------------------------------------------------------------------ first run: fill from the history
-    async def async_backfill(self, m: ShowerTimeManager, rows: list[model.Row]) -> None:
+    async def async_backfill(self, m: LedgerHost, rows: list[model.Row]) -> None:
         """Showers of the past week from the recorder, priced at the last reheat before each shower."""
         if self.backfilled or not rows:
             return
         cycles = model.find_cycles(rows, None)
         def cold_at(minute: int) -> float:
             local = dt_util.as_local(datetime.fromtimestamp(minute * 60, timezone.utc))
-            return model.cold_for(m.params, local.month, local.timetuple().tm_yday, m._ema_on(local.date().isoformat()))
+            return model.cold_for(m.params, local.month, local.timetuple().tm_yday, m.ema_on(local.date().isoformat()))
         # showers only: not washing up, and not heat that left without water (a heat pump starting a reheat)
         draws = [d for d in model.find_draws(rows) if MIN_SHOWER_MINUTES <= d.minutes <= MAX_SHOWER_MINUTES
                  and insights.draw_kind(m.params, rows, d.start, d.minutes, cold_at(d.start), m.confirm_k(),
@@ -380,7 +403,7 @@ class ShowerLedger:
             local = dt_util.as_local(start)
             est = model.estimate(m.params, d.top_start, d.bottom_start, volume=m.volume, shower_temp=m.shower_temp,
                                  month=local.month, doy=local.timetuple().tm_yday,
-                                 ema=m._ema_on(local.date().isoformat()))
+                                 ema=m.ema_on(local.date().isoformat()))
             self._add(m, start, d.minutes, est.per_minute, heat_price, "history")
         self.note_currency(cur)
         self.backfilled = True
