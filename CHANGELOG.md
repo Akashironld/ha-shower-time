@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.15.2b8 — Beta: no jump in the minutes when the bottom sensor drops out
+
+**Beta, for testers of #10** — also has everything from v0.15.2b1 to b7.
+
+### Fixes
+- **No jump in the minutes when the tank's bottom sensor is briefly unavailable.** After a restart of Home Assistant (before the heat pump's sensors are back) or when the heat pump's cloud drops out for a moment, only the top reading was left. From the top alone the tank looked full: the minutes jumped up with the tank unchanged (seen: 14 to 20 minutes), and a tank that had stood part-used for hours was then counted as if its hot water were still a sharp layer, too optimistic for hours after. While the bottom sensor is away the minutes are now unknown; once it is back Shower Time carries on from where it was.
+- **No new 100 % without the bottom reading.** The minutes from the top alone could set a new 100 % for the fill level without the tank readings it needs.
+- Hot water used while the bottom sensor is away is booked from the heat it took once the sensor is back, as for any gap in the readings; it is no longer judged against the last estimate (which could log it as a tap that drew nothing).
+
+### Diagnostics
+- `live.bottom_away` shows when the bottom sensor had no reading.
+
+### After updating
+In HACS, open Shower Time, choose *Redownload* with *Show beta versions* on and pick v0.15.2b8, then restart Home Assistant.
+
 ## v0.15.2b7 — Beta: the diagnostics file shows what the card showed, over 48 hours
 
 **Beta, for testers of #10** — the minutes are the same as in b6; this beta only adds to the diagnostics file. Also has everything from v0.15.2b1 to b6.
