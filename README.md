@@ -3,7 +3,7 @@
 <h1 align="center">Hot Water Shower Time</h1>
 
 <p align="center">
-<a href="https://my.home-assistant.io/redirect/hacs_repository/?owner=Akashironld&repository=ha-shower-time&category=integration"><img src="https://my.home-assistant.io/badges/hacs_repository.svg" alt="Open in HACS" height="36"></a>
+<a href="https://my.home-assistant.io/redirect/hacs_repository/?owner=Akashironld&repository=ha-shower-time&category=integration"><img src="https://my.home-assistant.io/badges/hacs_repository.svg" alt="Open in Home Assistant" height="36"></a>
 <a href="https://ko-fi.com/akashironl/?hidefeed=true&widget=true&embed=true"><img src="https://storage.ko-fi.com/cdn/kofi2.png?v=3" alt="Buy me a coffee on Ko-fi" height="36"></a>
 </p>
 
@@ -251,11 +251,14 @@ been warmer than the top for six hours (sensors swapped), or when learning faile
 
 ## Installation
 
-[![Open in HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Akashironld&repository=ha-shower-time&category=integration)
+[![Open in Home Assistant](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Akashironld&repository=ha-shower-time&category=integration)
 
-1. Click the button above (or in HACS: ⋮ → **Custom repositories** → add
-   `https://github.com/Akashironld/ha-shower-time`, category *Integration*)
-2. **Download** Hot Water Shower Time and restart Home Assistant
+1. Click the button above. It opens the repository in the **Marketplace** (Home Assistant 2026.11 and newer) or in
+   **HACS** on older versions. Or add it by hand: ⋮ → **Custom repositories** →
+   `https://github.com/Akashironld/ha-shower-time`, category *Integration*
+2. **Download** Hot Water Shower Time. From Home Assistant 2026.11 no restart is needed; with HACS on an older
+   version, restart Home Assistant first. An **update** still needs a restart; Home Assistant asks for it in
+   *Settings → System → Repairs*.
 3. Add the integration — click the button below, or **Settings → Devices & services → Add integration → Hot Water
    Shower Time**
 
@@ -511,9 +514,12 @@ Nederlandstalig in Home Assistant.
 
 <p align="center"><img src="assets/card-nl.png" alt="De kaart Douchetijd" width="420"></p>
 
-**Installeren:** klik op de knop *Open in HACS* bovenaan (of HACS → ⋮ → **Aangepaste repositories** →
-`https://github.com/Akashironld/ha-shower-time`, categorie *Integratie*), download, herstart Home Assistant en
-voeg de integratie toe via **Instellingen → Apparaten en diensten → Integratie toevoegen → Hot Water Shower Time**.
+**Installeren:** klik op de knop bovenaan. Die opent de repository in de **Marketplace** (Home Assistant 2026.11 en
+nieuwer) of in **HACS** op oudere versies (of zelf: ⋮ → **Aangepaste repositories** →
+`https://github.com/Akashironld/ha-shower-time`, categorie *Integratie*). Download en voeg de integratie toe via
+**Instellingen → Apparaten en diensten → Integratie toevoegen → Hot Water Shower Time**. Vanaf 2026.11 hoef je na
+het installeren niet te herstarten; met HACS op een oudere versie wel. Na een **update** vraagt Home Assistant om een
+herstart via *Instellingen → Systeem → Reparaties*.
 
 **Instellen:** alleen de **temperatuursensor bovenin** en de **inhoud van de boiler** zijn verplicht. Een **sensor
 onderin** is sterk aanbevolen (zonder ziet het model geen douches). Al het andere is optioneel en wordt bij Weheat
