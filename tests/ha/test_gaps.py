@@ -161,3 +161,54 @@ async def test_a_use_after_a_quiet_tank_is_measured_whole(hass: HomeAssistant, d
     assert len(used) == 1
     drawn = used[0]["heat_kwh"] / (m.volume * model.CP)
     assert drawn > 0.85 * whole, (drawn, whole)                          # was about half before
+
+
+async def _standing_part_used_tank(hass: HomeAssistant, freezer):
+    """A Weheat tank (sensor heights, so the layer model and its blur) that has stood part-used for hours."""
+    entry = await setup_entry(hass, data={"profile": "weheat_200", "tank_type": "weheat_wbl200"}, top=49.2, bottom=26.1)
+    m = entry.runtime_data
+    assert m.params.get("geo")
+    for i in range(12):                         # 3 hours of readings that barely change, as in a quiet night
+        freezer.tick(timedelta(minutes=15))
+        tank(hass, 49.2 - 0.01 * i, 26.1 + (0.1 if i % 2 else 0.0))
+        await hass.async_block_till_done()
+    assert m.blur > 0.3
+    return entry, m
+
+
+async def test_a_bottom_sensor_that_drops_out_keeps_the_blur(hass: HomeAssistant, deps, freezer) -> None:
+    """A part-used tank's blur goes on over a moment the bottom sensor is unavailable (a heat pump cloud that
+    drops out); it was set back to sharp, and the minutes jumped up by 5 or more with the tank unchanged. Meanwhile
+    the minutes shown are unknown, instead of the top alone making the tank look full."""
+    _entry, m = await _standing_part_used_tank(hass, freezer)
+    blur, shown, share, at, ref = m.blur, m.estimate.minutes, m._blur_share, m._hot_at, m.fill.full_ref_state
+    hass.states.async_set("sensor.tank_bottom", "unavailable")
+    await hass.async_block_till_done()
+    freezer.tick(timedelta(minutes=1))
+    hass.states.async_set("sensor.tank_top", "49.0", TEMP_ATTRS)     # the top goes on reporting meanwhile
+    await hass.async_block_till_done()
+    # while it is away: unknown (as with the top away), no new 100 % without its readings, the layer state waits
+    assert m.current is None and m.estimate.minutes == shown and m.fill.full_ref_state == ref
+    assert (m.blur, m._blur_share, m._hot_at) == (blur, share, at)
+    freezer.tick(timedelta(minutes=1))
+    tank(hass, 49.0, 26.2)
+    await hass.async_block_till_done()
+    assert m.blur > blur and m.fill.full_ref_state == ref
+    assert m.estimate.minutes <= shown + 0.5, (shown, m.estimate.minutes)
+
+
+async def test_a_restart_before_the_bottom_sensor_is_back_keeps_the_blur(hass: HomeAssistant, deps, freezer) -> None:
+    """Home Assistant restarts and the heat pump integration's sensors come back after this one starts."""
+    entry, m = await _standing_part_used_tank(hass, freezer)
+    blur, shown = m.blur, m.estimate.minutes
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    freezer.tick(timedelta(minutes=2))
+    hass.states.async_set("sensor.tank_bottom", "unavailable")
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    freezer.tick(timedelta(minutes=1))
+    tank(hass, 49.0, 26.2)
+    await hass.async_block_till_done()
+    m = entry.runtime_data
+    assert m.blur > blur                        # the 3 minutes away counted as standing, from where it was
+    assert m.estimate.minutes <= shown + 0.5, (shown, m.estimate.minutes)

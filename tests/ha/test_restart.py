@@ -159,3 +159,44 @@ async def test_a_restored_use_whose_sensor_never_returns_is_dropped_and_booked_o
     tank(hass, 55.0, 30.0)                                              # the sensors come back, much lower
     await wait(hass, freezer, 4)
     assert len(LOG(m)) == 1 and LOG(m)[0]["estimated"] is True
+
+
+async def test_a_shower_whose_bottom_sensor_drops_out_is_logged_once(hass: HomeAssistant, entry, freezer) -> None:
+    """The bottom sensor goes away mid-shower and comes back after it: the shower is logged once, live; what left
+    while the sensor was away is the gap's, estimated from its heat (as for any gap, before this change too)."""
+    await _shower_running(hass, freezer, entry)
+    m = entry.runtime_data
+    hass.states.async_set(BOTTOM, "unavailable")
+    await hass.async_block_till_done()
+    assert m.current is None
+    for _ in range(3):
+        freezer.tick(timedelta(minutes=1))
+        hass.states.async_set(TOP, "54.9", TEMP_ATTRS)
+        await hass.async_block_till_done()
+    tank(hass, 54.9, 31.0)
+    await hass.async_block_till_done()
+    await wait(hass, freezer, 8)
+    assert state(hass, SHOWERING) == "off"
+    assert [e["kind"] for e in LOG(m)] == ["shower"] and not LOG(m)[0].get("estimated")
+    assert m.ledger.totals["showers"] == 1 and all(o.get("estimated") for o in m.ledger.other)
+
+
+async def test_a_shower_while_the_bottom_sensor_is_away_is_not_lost(hass: HomeAssistant, entry, freezer) -> None:
+    """A whole shower while the bottom sensor is away: once it is back the heat that left is booked (live or as
+    the gap's estimate), not dropped as a tap that drew nothing."""
+    m = entry.runtime_data
+    m.fill.set_ref(m.estimate.minutes)
+    await start_reading(hass, freezer)
+    hass.states.async_set(BOTTOM, "unavailable")
+    await hass.async_block_till_done()
+    for top in (54.9, 54.8, 54.7, 54.6, 54.5):
+        freezer.tick(timedelta(minutes=2))
+        hass.states.async_set(TOP, str(top), TEMP_ATTRS)
+        await hass.async_block_till_done()
+    assert m.current is None
+    tank(hass, 54.5, 32.0)
+    await hass.async_block_till_done()
+    await wait(hass, freezer, 10)
+    booked = LOG(m) + m.ledger.other
+    assert booked and sum(e["heat_kwh"] for e in booked) > 1.0, booked
+    assert not any(e.get("kind") == "tap" and not e.get("estimated") for e in booked), booked

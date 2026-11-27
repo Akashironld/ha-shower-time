@@ -451,32 +451,49 @@ class ShowerTimeManager:
         if self.top_value is None:
             self.estimate = None
         else:
-            head = self.head_flow()[0] if self.temp_mode == "auto" else None
-            now = dt_util.now()
-            self._follow_hot_layer()
-            kw = dict(volume=self.volume, shower_temp=self.shower_temp, month=now.month, head_flow=head,
-                      doy=now.timetuple().tm_yday, ema=self.ema_now, hot=self.hot_top, draw_flow=self.draw_flow())
-            free = model.estimate(self.params, self.top_value, self.bottom_value, blur=self.blur, **kw)
-            self.estimate = free
-            # a full tank loses at least the minutes its heat loss since the last reheat is worth; not while it heats
-            # (the state it is bounded by is the previous reheat's until this one ends)
-            if self.fill.full_ref_state and not self.reheating and not self.fill.was_heating:
-                self.estimate = model.estimate(self.params, self.top_value, self.bottom_value, blur=self.blur,
-                                               ref=self.fill.full_ref_state, **kw)
-            # minutes the blur took off: hot water turned lukewarm, its heat still in the tank (not lost to cooling)
-            self.blurred_minutes = 0.0
-            if self.blur > 0.0 and self.params.get("geo") and self.bottom_value is not None:
-                sharp = model.estimate(self.params, self.top_value, self.bottom_value, **kw)
-                self.blurred_minutes = max(0.0, sharp.minutes - free.minutes)
-            # bounded outside a reheat (unbounded, a full tank cooling evenly creeps up and would set a new 100 %);
-            # while heating and at its end unbounded, so a new 100 % is the layer model's own, as ref_minutes is
-            self.fill.track(self.estimate.minutes)
-            self.ledger.on_estimate(self, self.estimate)
-            self.usage.reading()
-            self.usage.apply_resume()
-            self.usage.classify()
-            self.usage.track_run_out()
+            if not self.bottom_away:
+                self._estimate_now()
+            # the bottom sensor away (a restart before the heat pump's sensors are back, its cloud dropping out):
+            # from the top alone the tank looked full, the minutes jumped up, could set a new 100 % without its
+            # readings, and the blur started again from sharp. The last estimate stays for the hot water use rules
+            # (a gap is judged from it once the bottom is back), the hot layer keeps its state and time so the gap
+            # is followed as one stretch, and what is shown is unknown (``current``)
+            if self.estimate is not None:
+                self.usage.reading()
+                self.usage.apply_resume()
+                if not self.bottom_away:        # not from the last estimate: a use would draw nothing, run out at it
+                    self.usage.classify()
+                    self.usage.track_run_out()
         self.notify()
+
+    @property
+    def bottom_away(self) -> bool:
+        """There is a bottom sensor and it has no reading now."""
+        return bool(self.bottom) and self.bottom_value is None
+
+    def _estimate_now(self) -> None:
+        """The estimate from both readings, and what follows it: the hot layer, the fill level, the ledger."""
+        head = self.head_flow()[0] if self.temp_mode == "auto" else None
+        now = dt_util.now()
+        self._follow_hot_layer()
+        kw = dict(volume=self.volume, shower_temp=self.shower_temp, month=now.month, head_flow=head,
+                  doy=now.timetuple().tm_yday, ema=self.ema_now, hot=self.hot_top, draw_flow=self.draw_flow())
+        free = model.estimate(self.params, self.top_value, self.bottom_value, blur=self.blur, **kw)
+        self.estimate = free
+        # a full tank loses at least the minutes its heat loss since the last reheat is worth; not while it heats
+        # (the state it is bounded by is the previous reheat's until this one ends)
+        if self.fill.full_ref_state and not self.reheating and not self.fill.was_heating:
+            self.estimate = model.estimate(self.params, self.top_value, self.bottom_value, blur=self.blur,
+                                           ref=self.fill.full_ref_state, **kw)
+        # minutes the blur took off: hot water turned lukewarm, its heat still in the tank (not lost to cooling)
+        self.blurred_minutes = 0.0
+        if self.blur > 0.0 and self.params.get("geo") and self.bottom_value is not None:
+            sharp = model.estimate(self.params, self.top_value, self.bottom_value, **kw)
+            self.blurred_minutes = max(0.0, sharp.minutes - free.minutes)
+        # bounded outside a reheat (unbounded, a full tank cooling evenly creeps up and would set a new 100 %);
+        # while heating and at its end unbounded, so a new 100 % is the layer model's own, as ref_minutes is
+        self.fill.track(self.estimate.minutes)
+        self.ledger.on_estimate(self, self.estimate)
 
     # ------------------------------------------------------------------ what kind of hot water use
     @callback
@@ -604,7 +621,9 @@ class ShowerTimeManager:
     def current(self) -> model.Estimate | None:
         """The estimate as shown: the last real one minus the live countdown while showering."""
         e = self.estimate
-        if e is None or self.usage.live_offset <= 0:
+        if e is None or self.bottom_away:
+            return None                         # a tank sensor away: unknown, not the last estimate going stale
+        if self.usage.live_offset <= 0:
             return e
         m = max(0.0, e.minutes - self.usage.live_offset)
         return replace(e, minutes=m, liters=m * e.flow, showers=int(m // self.params["duration"]["v"]))
