@@ -76,6 +76,7 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: ShowerT
             "hot_top": m.hot_top, "blur": round(m.blur, 3),
             "fill_percent": m.fill.fill_percent(), "full_reference_minutes": m.fill.ref_minutes(),
             "full_reference_avg": m.fill.full_ref_avg, "full_reference_at": m.fill.full_ref_at,
+            "fulls": m.fill.fulls, "typical_full_minutes": m.fill.typical_full(),
             "since_reheat": m.fill.since_reheat(), "standing_loss_per_day": m.fill.standing_loss_per_day(),
             "outdoor_average_3w": m.ema_now, "cold_source": m.cold_source(), "head_flow": m.head_flow(),
         },

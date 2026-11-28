@@ -803,7 +803,7 @@ class ShowerTimeManager:
             "last_cycle": asdict(self.learner.last_cycle) if self.learner.last_cycle else None, "last_learn": self.learner.last_learn,
             "last_samples": self.learner.last_samples, "full_ref": self.fill.full_ref, "full_ref_avg": self.fill.full_ref_avg,
             "full_ref_state": self.fill.full_ref_state,
-            "full_ref_at": self.fill.full_ref_at, "top_ups": self.fill.top_ups, "ledger": self.ledger.to_dict(),
+            "full_ref_at": self.fill.full_ref_at, "top_ups": self.fill.top_ups, "fulls": self.fill.fulls, "ledger": self.ledger.to_dict(),
             "habits": self.routine.habits, "loss_samples": self.heat.loss_samples, "drip_nights": self.heat.drip_nights,
             "use_stats": self.usage.use_stats, "loss_backfilled": self.heat.loss_backfilled,
             "reheat_log": self.routine.reheat_log, "reheat_since": self.routine.reheat_since,

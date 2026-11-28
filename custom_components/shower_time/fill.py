@@ -12,6 +12,9 @@ from homeassistant.util import dt as dt_util
 
 from . import insights, model
 
+FULLS_KEPT = 7                  # daily reheats kept in ``FillLevel.fulls``
+FULLS_MEDIAN = 5                # the last ones that make the usual full tank
+
 
 class FillHost(Protocol):
     """What the fill level reads from and does through the rest of the integration (the manager)."""
@@ -49,6 +52,8 @@ class FillLevel:
         self.full_ref_state: list[float] | None = None   # top and bottom right after the last reheat
         self.full_ref_at: str | None = None
         self.top_ups: list[dict] = []           # partial reheats since the last complete one
+        # the tank after recent daily reheats (``at``, ``state`` [top, bottom], ``avg``): what a full tank usually is
+        self.fulls: list[dict] = []
         self._heat_from: tuple[datetime, float] | None = None
         self._ref_low: float | None = None
         self._last_minutes: float | None = None
@@ -64,6 +69,7 @@ class FillLevel:
         self.full_ref_state = stored.get("full_ref_state")
         self.full_ref_at = stored.get("full_ref_at")
         self.top_ups = stored.get("top_ups") or []
+        self.fulls = [x for x in stored.get("fulls") or [] if isinstance(x, dict)][-FULLS_KEPT:]
         # a reference in minutes only (before 0.5.1) depends on the model it was computed with: rebuild it
         self.full_ref = stored.get("full_ref") if self.full_ref_avg is not None else None
 
@@ -103,17 +109,46 @@ class FillLevel:
         self.full_ref_at = dt_util.now().isoformat(timespec="seconds")
         self.top_ups = []
         self._ref_low = minutes
+        self._note_full()
         self.h.save_later(60)
+
+    def _note_full(self) -> None:
+        """Keep the tank as it is now in ``fulls``, one per day: the same day as the last one, or within two hours
+        of it (a reheat in two parts, the sensors still settling past midnight), it replaces that one."""
+        now = dt_util.now()
+        state = ([self.h.top_value, self.h.bottom_value]
+                 if self.h.top_value is not None and self.h.bottom_value is not None else None)
+        avg = self.h.estimate.average if self.h.estimate is not None else None
+        if state is None and avg is None:
+            return
+        rec = {"at": now.isoformat(timespec="seconds"), "state": state, "avg": avg}
+        last = dt_util.parse_datetime(self.fulls[-1].get("at") or "") if self.fulls else None
+        if last is not None and (dt_util.as_local(last).date() == now.date() or now - last < timedelta(hours=2)):
+            self.fulls[-1] = rec
+        else:
+            self.fulls = (self.fulls + [rec])[-FULLS_KEPT:]
+
+    def typical_full(self) -> float | None:
+        """The minutes a full tank usually holds: the median of the last few daily reheats, with the *current*
+        model. None until there are three."""
+        mins = sorted(v for v in (self._minutes_of(x.get("state"), x.get("avg"), None) for x in self.fulls[-FULLS_MEDIAN:])
+                      if v is not None)
+        if len(mins) < 3:
+            return None
+        n = len(mins)
+        return mins[n // 2] if n % 2 else (mins[n // 2 - 1] + mins[n // 2]) / 2
 
     @callback
     def track(self, m: float) -> None:
         """Keep 100 % at the end of the latest *complete* reheat.
 
         A reheat that leaves the tank evenly hot (top and bottom within 2.5 °C) and about as full as last time
-        (90 %) sets a new 100 %; so does one the day after, also when it heats to a lower temperature (smart
-        controllers vary the target). Anything less is a top-up: it is kept in ``top_ups`` (when, how much) and
-        "since reheat" goes on from the last complete reheat. A top-up never becomes the new 100 % unless it
-        beats the old one.
+        (90 %) sets a new 100 %; so does one the day after (20+ hours) that heats to a lower temperature, when it
+        is about as full (90 %) as the tank usually is after a daily reheat: the median of the last five (smart
+        controllers vary the target, and a legionella heat-up is not the usual full). A short reheat the day after
+        a normal full tank (#10: to 45 °C after 56 °C) is a top-up; a lasting lower target is the usual full after
+        three days. Anything less is a top-up: it is kept in ``top_ups`` (when, how much) and "since reheat" goes
+        on from the last complete reheat. A top-up never becomes the new 100 % unless it beats the old one.
         Reheating is taken from the reheat entity, or recognised from the minutes rising 3+ above the lowest
         point since the last reheat; it ends when the entity switches off or the rise stops for 20 minutes."""
         now = dt_util.utcnow()
@@ -140,7 +175,11 @@ class FillLevel:
             even = self.h.bottom_value is None or (self.h.top_value is not None and self.h.top_value - self.h.bottom_value <= 2.5)
             since = dt_util.parse_datetime(self.full_ref_at) if self.full_ref_at else None
             old = since is None or now - since > timedelta(hours=20)
-            if m > ref_now or (even and (m >= 0.9 * ref_now or old)):
+            typical = None
+            if even and old and m >= 0.5 * ref_now:
+                self._note_full()               # a daily reheat: part of what a full tank usually is
+                typical = self.typical_full()
+            if m > ref_now or (even and (m >= 0.9 * ref_now or (old and (typical is None or m >= 0.9 * typical)))):
                 self.set_ref(m)
             elif self._heat_from is not None:
                 start, before = self._heat_from
@@ -161,19 +200,23 @@ class FillLevel:
     def ref_minutes(self) -> float | None:
         """Minutes the tank held right after the last reheat, with the *current* model (so the fill level does
         not jump when the model learns or the cold water estimate changes)."""
+        return self._minutes_of(self.full_ref_state, self.full_ref_avg, self.full_ref)
+
+    def _minutes_of(self, state: list | None, avg: float | None, fallback: float | None) -> float | None:
+        """Minutes a tank with these readings (or this average) holds, with the current model."""
         e = self.h.estimate
         if e is None:
-            return self.full_ref
-        if self.full_ref_state and self.h.params.get("geo"):
+            return fallback
+        if state and None not in state and self.h.params.get("geo"):
             # layer model: the minutes in the tank as it was then (its empty point moves with the tank's state)
-            top, bottom = self.full_ref_state
+            top, bottom = state
             now = dt_util.now()
             return model.estimate(self.h.params, top, bottom, volume=self.h.volume, shower_temp=self.h.shower_temp,
                                   month=now.month, doy=now.timetuple().tm_yday, ema=self.h.ema_now, hot=top,
                                   draw_flow=self.h.draw_flow()).minutes
-        if self.full_ref_avg is not None:
-            return max(0.0, (self.full_ref_avg - e.empty_at) / e.per_minute)
-        return self.full_ref
+        if avg is not None and e.per_minute > 0:
+            return max(0.0, (avg - e.empty_at) / e.per_minute)
+        return fallback
 
     def since_reheat(self) -> dict | None:
         """Where the hot water went since the last complete reheat: left, showered, other hot water (a bath, the

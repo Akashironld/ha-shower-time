@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 
+import pytest
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import async_fire_time_changed
@@ -496,3 +497,87 @@ async def test_a_still_meter_after_a_shower_is_no_run_out(hass: HomeAssistant, d
         async_fire_time_changed(hass)
         await hass.async_block_till_done()
     assert not m.usage.showering and m.usage.run_outs == []
+
+
+async def _daily(hass: HomeAssistant, m, freezer, top: float, bottom: float) -> None:
+    """A day later the tank is used up and reheated to ``top``/``bottom`` (no reheat entity: the rise is seen)."""
+    freezer.tick(timedelta(hours=23))
+    for t, b in ((38.0, 20.0), (40.0, 26.0), (45.0, 34.0), (top, bottom)):
+        tank(hass, t, b)
+        m.update()
+        freezer.tick(timedelta(minutes=5))
+    freezer.tick(timedelta(minutes=21))                  # the rise stopped 20 minutes ago: the reheat is over
+    m.update()
+
+
+async def test_a_short_reheat_the_day_after_a_full_tank_is_a_top_up(hass: HomeAssistant, entry, freezer) -> None:
+    """#10: after daily reheats to 56 °C a reheat to 45 °C the next morning became the new 100 %. Against the
+    usual full tank (the last daily reheats) it is a top-up."""
+    m = entry.runtime_data
+    for _ in range(4):
+        await _daily(hass, m, freezer, 56.0, 55.0)
+    full, since = m.fill.ref_minutes(), m.fill.full_ref_at
+    assert len(m.fill.fulls) == 4 and m.fill.typical_full() == pytest.approx(full, abs=0.5)
+    await _daily(hass, m, freezer, 45.4, 43.7)
+    assert m.fill.full_ref_at == since and len(m.fill.top_ups) == 1
+    assert m.fill.fill_percent() < 90 and m.fill.ref_minutes() == pytest.approx(full, abs=0.5)
+
+
+async def test_after_a_legionella_heat_up_the_usual_reheat_is_full_again(hass: HomeAssistant, entry, freezer) -> None:
+    """A legionella heat-up beats 100 %; the usual daily reheat the day after is the new 100 % again, also though
+    it is well under the heat-up (78 % on Wouter's tank)."""
+    m = entry.runtime_data
+    for _ in range(3):
+        await _daily(hass, m, freezer, 52.0, 51.0)
+    usual = m.fill.ref_minutes()
+    await _daily(hass, m, freezer, 64.0, 63.0)
+    assert m.fill.ref_minutes() > usual * 1.1
+    await _daily(hass, m, freezer, 52.0, 51.0)
+    assert m.fill.top_ups == [] and m.fill.fill_percent() == 100
+    assert m.fill.ref_minutes() == pytest.approx(usual, abs=0.5)
+
+
+async def test_a_lasting_lower_target_is_full_after_three_days(hass: HomeAssistant, entry, freezer) -> None:
+    """The heat pump set lower for good (an eco mode): the first two lower reheats are top-ups, the third is the
+    usual full tank by then and the new 100 %."""
+    m = entry.runtime_data
+    for _ in range(4):
+        await _daily(hass, m, freezer, 56.0, 55.0)
+    since = m.fill.full_ref_at
+    for _ in range(2):
+        await _daily(hass, m, freezer, 45.4, 43.7)
+        assert m.fill.full_ref_at == since
+    await _daily(hass, m, freezer, 45.4, 43.7)
+    assert m.fill.full_ref_at != since and m.fill.fill_percent() == 100
+
+
+async def test_without_three_daily_reheats_a_lower_one_the_day_after_is_full(hass: HomeAssistant, entry, freezer) -> None:
+    """Until three daily reheats are known (a new install, an update) a lower one the day after is 100 % as before."""
+    m = entry.runtime_data
+    m.fill.fulls = []
+    await _daily(hass, m, freezer, 56.0, 55.0)
+    since = m.fill.full_ref_at
+    await _daily(hass, m, freezer, 45.4, 43.7)
+    assert m.fill.full_ref_at != since and m.fill.fill_percent() == 100
+
+
+async def test_fulls_keep_one_reheat_a_day_and_survive_a_restart(hass: HomeAssistant, entry, freezer) -> None:
+    """Two full reheats on one day are one entry; a small reheat the day after is not a full tank at all; the
+    list is saved, and a store from before it loads as empty."""
+    m = entry.runtime_data
+    m.fill.fulls = []
+    await _daily(hass, m, freezer, 56.0, 55.0)
+    freezer.tick(timedelta(hours=3))
+    m.fill.set_ref(m.estimate.minutes)                   # an evening boost the same day
+    assert len(m.fill.fulls) == 1
+    freezer.tick(timedelta(hours=23))
+    for t, b in ((38.0, 20.0), (39.0, 21.0), (40.5, 23.0)):     # a small rise only
+        tank(hass, t, b)
+        m.update()
+        freezer.tick(timedelta(minutes=5))
+    freezer.tick(timedelta(minutes=21))
+    m.update()
+    assert len(m.fill.fulls) == 1
+    assert m._data()["fulls"] == m.fill.fulls
+    m.fill.load({"full_ref": 20.0, "full_ref_avg": 52.0})
+    assert m.fill.fulls == []
