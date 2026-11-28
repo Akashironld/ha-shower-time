@@ -1,12 +1,17 @@
 # Changelog
 
-## Unreleased
+## v0.15.2b9 — Beta: a short reheat is no longer a full tank
+
+**Beta, for testers of #10** — also has everything from v0.15.2b1 to b8.
 
 ### Fixes
 - **A short reheat the day after a full tank is no longer the new 100 % (#10).** A reheat more than 20 hours after the last full one set a new 100 % at whatever temperature it reached, so a reheat to 45 °C the morning after a tank heated to 56 °C showed as a full tank. Such a reheat now has to bring the tank to about (90 %) what a full tank usually holds: the median of the last five daily reheats. A lower reheat counts as a top-up. The day after a legionella heat-up the usual reheat is still the new 100 %, and when the heat pump is set lower for good, that becomes 100 % after three days. Until three daily reheats are known (right after updating) it works as before.
 
 ### Diagnostics
 - `live.fulls` and `live.typical_full_minutes` show the recent daily reheats and what a full tank usually holds.
+
+### After updating
+In HACS, open Shower Time, choose *Redownload* with *Show beta versions* on and pick v0.15.2b9, then restart Home Assistant. The new rule needs three daily reheats after the update before it applies.
 
 ## v0.15.2b8 — Beta: no jump in the minutes when the bottom sensor drops out
 
